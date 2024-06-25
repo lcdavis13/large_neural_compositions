@@ -237,7 +237,7 @@ def train_epoch(x_train, y_train, minibatch_examples, accumulated_minibatches, f
 
 
 def run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid,
-               filepath_out_incremental, filepath_out_epoch, earlystop_patience=10, outputs_per_epoch=10):
+               filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=10, outputs_per_epoch=10):
     func = ODEFunc(N).to(device)
     optimizer = torch.optim.Adam(func.parameters(), lr=LR, weight_decay=weight_decay)
     best_loss = float('inf')
@@ -271,7 +271,7 @@ def run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_tr
         if l_val < best_loss:
             best_loss = l_val
             epochs_worsened = 0
-            torch.save(func.state_dict(), 'results/best_model.pth')
+            torch.save(func.state_dict(), filepath_out_model)
         else:
             epochs_worsened += 1
             print(f"VALIDATION DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{earlystop_patience}")
@@ -297,8 +297,9 @@ dataname = "dki"
 filepath_train = f'data/{dataname}_train.csv'
 filepath_test = f'data/{dataname}_test.csv'
 
-filepath_out_epoch = 'results/{dataname}_epochs.csv'
-filepath_out_incremental = 'results/{dataname}_incremental.csv'
+filepath_out_epoch = f'results/{dataname}_epochs.csv'
+filepath_out_incremental = f'results/{dataname}_incremental.csv'
+filepath_out_model = f'results/{dataname}_model.pth'
 
 data_valid_ratio = 0.2
 
@@ -336,6 +337,6 @@ if __name__ == "__main__":
     # time step "data"
     t = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, filepath_out_incremental, filepath_out_epoch, earlystop_patience=10, outputs_per_epoch=4)
+    run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=10, outputs_per_epoch=4)
     
     print("done")
