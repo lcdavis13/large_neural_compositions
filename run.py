@@ -46,6 +46,19 @@ def load_train_valid_data(filepath_train, valid_ratio=0.2):
     
     return x_train, y_train, x_valid, y_valid
 
+def get_batch(x, y, mb_size, current_index):
+    end_index = current_index + mb_size
+    if end_index > x.size(0):
+        end_index = x.size(0)
+    batch_indices = torch.arange(current_index, end_index, dtype=torch.long).to(device)
+    x_batch = x[batch_indices, :]
+    y_batch = y[batch_indices, :]
+    # print(f'x {x_batch.shape}')
+    # print(f'x {x_batch[0, :]}')
+    # print(f'y {y_batch.shape}')
+    # print(f'y {y_batch[0, :]}')
+    return x_batch, y_batch, end_index
+
 
 # class ODEFunc_cNODE2(torch.nn.Module):
 #     def __init__(self, N):
@@ -135,15 +148,6 @@ def stream_results(filename, print_console, *args, prefix="", suffix=""):
             # Write the values row
             writer.writerow(values)
 
-def get_batch(x, y, mb_size, current_index):
-    end_index = current_index + mb_size
-    if end_index > x.size(0):
-        end_index = x.size(0)
-    batch_indices = torch.arange(current_index, end_index, dtype=torch.long).to(device)
-    # print(f'x {x[batch_indices[0], :]}')
-    # print(f'y {y[batch_indices[0], :]}')
-    return x[batch_indices, :], y[batch_indices, :], end_index
-
 
 def validate_epoch(x_val, y_val, minibatch_examples, func, t):
     func.eval()
@@ -177,7 +181,7 @@ def train_epoch(x_train, y_train, minibatch_examples, accumulated_minibatches, f
     current_index = 0  # Initialize current index to start of dataset
     new_examples = 0
 
-    stream_interval = minibatches // outputs_per_epoch
+    stream_interval = max(1, minibatches // outputs_per_epoch)
 
     optimizer.zero_grad()
 
@@ -247,6 +251,11 @@ def run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_tr
     train_examples_seen = 0
     prev_time = time.time()
     
+    # print parameter count
+    num_params = sum(p.numel() for p in func.parameters() if p.requires_grad)
+    print(f"Number of parameters in model: {num_params}")
+    print("=============================================")
+    
     for e in range(max_epochs):
         l_trn, train_examples_seen = train_epoch(x_train, y_train, minibatch_examples, accumulated_minibatches,
                                                  func, optimizer, t, outputs_per_epoch, train_examples_seen, e,
@@ -257,6 +266,7 @@ def run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_tr
         end_time = time.time()
         elapsed_time = end_time - prev_time
         prev_time = end_time
+        gpu_memory_reserved = torch.cuda.memory_reserved(device)
         
         stream_results(filepath_out_epoch, True,
                        "epoch", e,
@@ -264,8 +274,9 @@ def run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_tr
                        "Training Loss", l_trn,
                        "Validation Loss", l_val,
                        "Elapsed Time", elapsed_time,
-                       prefix="====================EPOCH====================\n",
-                       suffix="\n=============================================")
+                       "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
+                       prefix="\n====================EPOCH====================\n",
+                       suffix="\n=============================================\n")
         
         # early stopping & model backups
         if l_val < best_loss:
@@ -291,8 +302,8 @@ def run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_tr
 
 # data paths
 
-# dataname = "waimea"
-dataname = "dki"
+dataname = "waimea"
+# dataname = "dki"
 
 filepath_train = f'data/{dataname}_train.csv'
 filepath_test = f'data/{dataname}_test.csv'
@@ -308,7 +319,7 @@ data_valid_ratio = 0.2
 # hyperparameters
 
 max_epochs = 1000
-minibatch_examples = 20
+minibatch_examples = 500
 accumulated_minibatches = 1
 
 ODEFunc = ODEFunc_cNODE2_batched
@@ -337,6 +348,6 @@ if __name__ == "__main__":
     # time step "data"
     t = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=10, outputs_per_epoch=4)
+    run_epochs(max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=10, outputs_per_epoch=5)
     
     print("done")
