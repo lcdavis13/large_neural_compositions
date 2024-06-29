@@ -258,49 +258,53 @@ def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlys
 
 
 def main():
-    # data paths
+    
+    # Experiment parameters
     
     # dataname = "waimea"
-    dataname = "waimea-condensed"
-    # dataname = "dki"
+    # dataname = "waimea-condensed"
+    # dataname = "dki-synth"
+    dataname = "dki-real"
     
-    filepath_train = f'data/{dataname}_train.csv'
-    
-    kfolds = 7
-    
-    # hyperparameters
-    
+    kfolds = 3
     max_epochs = 50000
+    earlystop_patience = 5
+    
+    
+    # Hyperparameters to tune
+    
     minibatch_examples = 500
     accumulated_minibatches = 1
-    earlystop_patience = 50
-    
-    loss_fn = loss_bc
-    
     LR_base = 0.002
+    WD_base = 0.0003
+
+
+    # adjusted learning rate and decay
     LR = LR_base * math.sqrt(minibatch_examples * accumulated_minibatches)
-    weight_decay = 0.0003
-    
+    WD = WD_base * math.sqrt(minibatch_examples * accumulated_minibatches)
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
     
     # load data
+    filepath_train = f'data/{dataname}_train.csv'
     x, y = data.load_data(filepath_train, device)
     data_folded = data.fold_data(x, y, kfolds)
-    
     print('dataset:', filepath_train)
     print(f'training data shape: {data_folded[0][0].shape}')
     print(f'validation data shape: {data_folded[0][1].shape}')
     
+    # get dimensions of data for model construction
     _, N = x.shape
     n_root = math.isqrt(N)
     
-    # load models
+    
+    # Specify model(s) for experiment
+    # Note that each must be a constructor function with no args, not a pre-constructed model. Lamda is recommended.
     models_to_test = {
-        'cNODE2': lambda: models.cNODE2(N),
-        'Embedded-cNODE2': lambda: models.Embedded_cNODE2(N, n_root),  # this model sucks
+        # 'cNODE2': lambda: models.cNODE2(N),
+        # 'Embedded-cNODE2': lambda: models.Embedded_cNODE2(N, n_root),  # this model sucks
         'cNODE-slim': lambda: models.cNODE_Gen(lambda: nn.Sequential(
             nn.Linear(N, n_root),
             nn.Linear(n_root, n_root),
@@ -309,6 +313,10 @@ def main():
         # 'cNODE2-Gen': lambda: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(N, N), nn.Linear(N, N))),  # sanity test, this is the same as cNODE2 but generated at runtime
         # "cNODE2-GenRun": lambda: models.cNODE2_GenRun(N), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
     }
+
+
+    # specify loss function
+    loss_fn = loss_bc
     
     # time step "data"
     ode_timesteps = 2  # must be at least 2
@@ -326,7 +334,7 @@ def main():
         
         model_score = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
                                           kfolds, max_epochs, minibatch_examples, model_constr,
-                                          model_name, dataname, timesteps, loss_fn, weight_decay, verbose=False)
+                                          model_name, dataname, timesteps, loss_fn, WD, verbose=True)
         
         print(f"Model score: {model_score}\n")
 
