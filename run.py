@@ -6,44 +6,57 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torchdiffeq import odeint
+from sklearn.model_selection import KFold
 # from torchdiffeq import odeint_adjoint as odeint  # tiny memory footprint but it is intractible for large models such as cNODE2 with Waimea data
 
 
 
-def loss_bc(x, y):  # Bray-Curtis Dissimilarity, but simplified by assuming every vector is a species composition that sums to 1
-    return torch.sum(torch.abs(x - y)) / (2.0 * x.shape[0])
-    # return torch.sum(torch.abs(x - y)) / torch.sum(torch.abs(x + y))
+def loss_bc(x, y):  # Bray-Curtis Dissimilarity
+    return torch.sum(torch.abs(x - y)) / torch.sum(torch.abs(x + y))   # DKI implementation
+    # return torch.sum(torch.abs(x - y)) / (2.0 * x.shape[0])   # simplified by assuming every vector is a species composition that sums to 1
 
 
 
-def process_data(P):
-    Z = P.copy()
-    Z[Z > 0] = 1
-    P = P / P.sum(axis=0)[np.newaxis, :]
-    Z = Z / Z.sum(axis=0)[np.newaxis, :]
-    P = P.astype(np.float32)
-    Z = Z.astype(np.float32)
-    P = torch.from_numpy(P.T)
-    Z = torch.from_numpy(Z.T)
-    return Z, P
+def process_data(y):
+    # produces X (assemblage) from Y (composition), normalizes the composition to sum to 1, and transposes the data
+    x = y.copy()
+    x[x > 0] = 1
+    y = y / y.sum(axis=0)[np.newaxis, :]
+    x = x / x.sum(axis=0)[np.newaxis, :]
+    y = y.astype(np.float32)
+    x = x.astype(np.float32)
+    y = torch.from_numpy(y.T)
+    x = torch.from_numpy(x.T)
+    return x, y
 
 
-def load_train_valid_data(filepath_train, valid_ratio=0.2):
-    # load data
-    P = np.loadtxt(filepath_train, delimiter=',')
-    number_of_cols = P.shape[1]
-    random_indices = np.random.choice(number_of_cols, size=int(valid_ratio * number_of_cols), replace=False)
-    P_val = P[:, random_indices]
-    P_train = P[:, np.setdiff1d(range(0, number_of_cols), random_indices)]
-    x_train, y_train = process_data(P_train)
-    x_valid, y_valid = process_data(P_val)
-    # Move data to device
-    x_train = x_train.to(device)
-    y_train = y_train.to(device)
-    x_valid = x_valid.to(device)
-    y_valid = y_valid.to(device)
+def load_data(filepath_train):
+    # Load data
+    y = np.loadtxt(filepath_train, delimiter=',')
+    x, y = process_data(y)  # Assuming process_data is defined somewhere
     
-    return x_train, y_train, x_valid, y_valid
+    # Move data to device if specified
+    if device:
+        x = x.to(device)
+        y = y.to(device)
+    
+    return x, y
+
+
+def fold_data(x, y, k=5):
+    # Split data into k folds
+    kf = KFold(n_splits=k, shuffle=True, random_state=42)
+    
+    fold_data = []
+    
+    for train_index, valid_index in kf.split(x):
+        x_train, x_valid = x[train_index], x[valid_index]
+        y_train, y_valid = y[train_index], y[valid_index]
+        
+        fold_data.append((x_train, y_train, x_valid, y_valid))
+    
+    return fold_data
+
 
 def get_batch(x, y, mb_size, current_index):
     end_index = current_index + mb_size
@@ -120,14 +133,6 @@ class cNODE2(nn.Module):
         x = odeint(self.func, x, t)[-1]
         return x
 
-
-def stable_softmax(logits, dim=-1): # from chatgpt, idk if this is valid
-    max_logits = torch.max(logits, dim=dim, keepdim=True)[0]
-    stable_logits = logits - max_logits  # Subtracting the maximum value for numerical stability
-    exp_logits = torch.exp(stable_logits)
-    softmax = exp_logits / torch.sum(exp_logits, dim=dim, keepdim=True)
-    return softmax
-
 class Embedded_cNODE2(nn.Module):
     def __init__(self, N, M):
         super(Embedded_cNODE2, self).__init__()
@@ -135,14 +140,14 @@ class Embedded_cNODE2(nn.Module):
         # self.softmax = nn.Softmax(dim=-1)
         self.func = ODEFunc_cNODE2(M)
         self.unembed = nn.Linear(M, N)
+        self.softmax = nn.Softmax(dim=-1)
         
     def forward(self, t, x):
         x = self.embed(x)
-        x = stable_softmax(x)  # the ODE expects a few-hot encoded species assemblage summing to 1. This just doesn't make much sense to connect to it. We should instead use two channels - embed IDs for each species, and a small dense list of their abundances.
+        x = self.softmax(x)  # the ODE expects a few-hot encoded species assemblage summing to 1. This just doesn't make much sense to connect to it. We should instead use two channels - embed IDs for each species, and a small dense list of their abundances.
         x = odeint(self.func, x, t)[-1]
         x = self.unembed(x)
-        x = stable_softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
-        # torch.exp(nn.LogSoftmax())
+        x = self.softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
         return x
 
 
@@ -208,7 +213,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t):
 
 
 
-def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch, prev_examples, epoch_num, filepath_out_incremental):
+def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch, prev_examples, fold, epoch_num, filepath_out_incremental):
     model.train()
     
     total_loss = 0
@@ -255,6 +260,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             end_time = time.time()
             examples_per_second = stream_examples / (end_time - prev_time)
             stream_results(filepath_out_incremental, True,
+               "fold", fold,
                 "epoch", epoch_num,
                 "minibatch", mb,
                 "total examples seen", prev_examples + new_examples,
@@ -277,14 +283,15 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
 
 
 def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, t,
-               filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=10, outputs_per_epoch=10):
+               filepath_out_incremental, filepath_out_epoch, filepath_out_model, fold, earlystop_patience=10, outputs_per_epoch=10):
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
     best_loss = float('inf')
+    best_epoch = -1
     epochs_worsened = 0
     early_stop = False
 
     train_examples_seen = 0
-    prev_time = time.time()
+    start_time = time.time()
     
     # print parameter count
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -293,41 +300,43 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     # initial validation benchmark
     l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t)
     stream_results(filepath_out_epoch, True,
-                   "epoch", -1,
-                   "training examples", 0,
-                   "Training Loss", -1.0,
-                   "Validation Loss", l_val,
-                   "Elapsed Time", -1.0,
-                   "GPU Footprint (MB)", -1.0,
-                   prefix="================PRE-VALIDATION===============\n",
-                   suffix="\n=============================================\n")
+        "fold", fold,
+        "epoch", -1,
+        "training examples", 0,
+        "Training Loss", -1.0,
+        "Validation Loss", l_val,
+        "Elapsed Time", -1.0,
+        "GPU Footprint (MB)", -1.0,
+        prefix="================PRE-VALIDATION===============\n",
+        suffix="\n=============================================\n")
     
     
     for e in range(max_epochs):
         l_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
-                                                 optimizer, t, outputs_per_epoch, train_examples_seen, e,
+                                                 optimizer, t, outputs_per_epoch, train_examples_seen, fold, e,
                                                  filepath_out_incremental)
         l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
-        end_time = time.time()
-        elapsed_time = end_time - prev_time
-        prev_time = end_time
+        current_time = time.time()
+        elapsed_time = current_time - start_time
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         
         stream_results(filepath_out_epoch, True,
-                       "epoch", e,
-                       "training examples", train_examples_seen,
-                       "Training Loss", l_trn,
-                       "Validation Loss", l_val,
-                       "Elapsed Time", elapsed_time,
-                       "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
-                       prefix="\n====================EPOCH====================\n",
-                       suffix="\n=============================================\n")
+            "fold", fold,
+            "epoch", e,
+            "training examples", train_examples_seen,
+            "Training Loss", l_trn,
+            "Validation Loss", l_val,
+            "Elapsed Time", elapsed_time,
+            "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
+            prefix="================PRE-VALIDATION===============\n",
+            suffix="\n=============================================\n")
         
         # early stopping & model backups
         if l_val < best_loss:
             best_loss = l_val
+            best_epoch = e
             epochs_worsened = 0
             torch.save(model.state_dict(), filepath_out_model)
         else:
@@ -344,7 +353,9 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     else:
         print(f"Training stopped early due to lack of improvement in validation loss. Optimal loss was {best_loss}")
     
-    # TODO: Check if this is the best model yet, and if so, save the weights and logs to a separate folder (and architecture, but how? copy the entire source code?)
+    # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
+    
+    return best_loss, best_epoch
 
 
 # data paths
@@ -356,11 +367,12 @@ dataname = "dki"
 filepath_train = f'data/{dataname}_train.csv'
 filepath_test = f'data/{dataname}_test.csv'
 
-filepath_out_epoch = f'results/{dataname}_epochs.csv'
 filepath_out_incremental = f'results/{dataname}_incremental.csv'
+filepath_out_epoch = f'results/{dataname}_epochs.csv'
+filepath_out_fold = f'results/{dataname}_folds.csv'
 filepath_out_model = f'results/{dataname}_model.pth'
 
-data_valid_ratio = 0.2
+kfolds = 5
 
 
 
@@ -369,7 +381,7 @@ data_valid_ratio = 0.2
 max_epochs = 50000
 minibatch_examples = 500
 accumulated_minibatches = 1
-earlystop_patience = 20
+earlystop_patience = 10
 
 loss_fn = loss_bc
 
@@ -377,7 +389,6 @@ LR_base = 0.002
 LR = LR_base*math.sqrt(minibatch_examples * accumulated_minibatches)
 weight_decay = 0.0003
 
-ode_timesteps = 2 # must be at least 2
 
 
 # main
@@ -387,19 +398,39 @@ if __name__ == "__main__":
     print(device)
     
     # load data
-    x_train, y_train, x_valid, y_valid = load_train_valid_data(filepath_train, data_valid_ratio)
-    _, N = x_train.shape
+    x,y = load_data(filepath_train)
+    data_folded = fold_data(x, y, kfolds)
+    
+    _, N = x.shape
     
     model = cNODE2(N).to(device)
     # model = Embedded_cNODE2(N, math.isqrt(N)).to(device)
     
     print('dataset:', filepath_train)
-    print(f'training data shape: {x_train.shape}')
-    print(f'validation data shape: {x_valid.shape}')
+    print(f'training data shape: {data_folded[0][0].shape}')
+    print(f'validation data shape: {data_folded[0][1].shape}')
     
     # time step "data"
+    ode_timesteps = 2 # must be at least 2
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, timesteps, filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=earlystop_patience, outputs_per_epoch=400)
+    fold_losses = []
     
-    print("done")
+    for fold_num, data_fold in enumerate(data_folded):
+        x_train, y_train, x_valid, y_valid = data_fold
+        print(f"Fold {fold_num + 1}/{kfolds}")
+    
+        val, e = run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, timesteps, filepath_out_incremental, filepath_out_epoch, filepath_out_model, fold_num, earlystop_patience=earlystop_patience, outputs_per_epoch=400)
+        fold_losses.append(val)
+        
+        stream_results(filepath_out_fold, True,
+            "fold", fold_num,
+            "Validation Loss", val,
+            "epochs", e,
+            prefix="\n========================================FOLD=========================================\n",
+            suffix="\n=====================================================================================\n")
+    
+    # min of mean and mode to avoid over-optimism from outliers
+    model_score = np.min([np.mean(fold_losses), np.median(fold_losses)])
+    print(f"Losses: {fold_losses}")
+    print(f"Model score: {model_score}")
