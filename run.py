@@ -77,8 +77,10 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, device):
 
 
 def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch,
-                prev_examples, fold, epoch_num, filepath_out_incremental, loss_fn, device, verbose=True):
+                prev_examples, fold, epoch_num, model_name, dataname, loss_fn, device, verbose=True):
     model.train()
+
+    filepath_out_incremental = f'results/{model_name}_{dataname}_incremental.csv'
     
     total_loss = 0
     total_samples = x_train.size(0)
@@ -147,13 +149,17 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
 
 
 def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, t,
-               filepath_out_incremental, filepath_out_epoch, filepath_out_model, fold, loss_fn, weight_decay, device,
+               model_name, dataname, fold, loss_fn, weight_decay, device,
                earlystop_patience=10, outputs_per_epoch=10, verbose=True):
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
     best_loss = float('inf')
     best_epoch = -1
     epochs_worsened = 0
     early_stop = False
+    
+    filepath_out_epoch = f'results/{model_name}_{dataname}_epochs.csv'
+    filepath_out_model = f'results/{model_name}_{dataname}_model.pth'
 
     train_examples_seen = 0
     start_time = time.time()
@@ -175,7 +181,7 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     for e in range(max_epochs):
         l_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
                                                  optimizer, t, outputs_per_epoch, train_examples_seen, fold, e,
-                                                 filepath_out_incremental, loss_fn, device, verbose)
+                                                 model_name, dataname, loss_fn, device, verbose)
         l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, device)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
@@ -222,9 +228,11 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     return best_loss, best_epoch
 
 
-def validate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, filepath_out_epoch,
-                   filepath_out_fold, filepath_out_incremental, filepath_out_model, kfolds, max_epochs,
-                   minibatch_examples, model_constr, model_name, timesteps, loss_fn, weight_decay, verbose=True):
+def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, kfolds, max_epochs,
+                        minibatch_examples, model_constr, model_name, dataname, timesteps, loss_fn, weight_decay, verbose=True):
+    
+    filepath_out_fold = f'results/{model_name}_{dataname}_folds.csv'
+    
     fold_losses = []
     for fold_num, data_fold in enumerate(data_folded):
         model = model_constr().to(device)
@@ -233,13 +241,11 @@ def validate_model(LR, accumulated_minibatches, data_folded, device, earlystop_p
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val, e = run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train,
-                            x_valid, y_valid, timesteps, filepath_out_incremental, filepath_out_epoch,
-                            filepath_out_model, fold_num, loss_fn, weight_decay, device, earlystop_patience=earlystop_patience,
-                            outputs_per_epoch=10, verbose=verbose)
+                            x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, weight_decay, device,
+                            earlystop_patience=earlystop_patience, outputs_per_epoch=10, verbose=verbose)
         fold_losses.append(val)
         
         stream_results(filepath_out_fold, verbose,
-                       "model", model_name,
                        "fold", fold_num,
                        "Validation Loss", val,
                        "epochs", e,
@@ -255,24 +261,19 @@ def main():
     # data paths
     
     # dataname = "waimea"
-    # dataname = "waimea_condensed"
-    dataname = "dki"
+    dataname = "waimea_condensed"
+    # dataname = "dki"
     
     filepath_train = f'data/{dataname}_train.csv'
     
-    filepath_out_incremental = f'results/{dataname}_incremental.csv'
-    filepath_out_epoch = f'results/{dataname}_epochs.csv'
-    filepath_out_fold = f'results/{dataname}_folds.csv'
-    filepath_out_model = f'results/{dataname}_model.pth'
-    
-    kfolds = 2
+    kfolds = 7
     
     # hyperparameters
     
     max_epochs = 50000
     minibatch_examples = 500
     accumulated_minibatches = 1
-    earlystop_patience = 10
+    earlystop_patience = 50
     
     loss_fn = loss_bc
     
@@ -299,10 +300,14 @@ def main():
     # load models
     models_to_test = {
         'cNODE2': lambda: models.cNODE2(N),
-        # 'Embedded-cNODE2': lambda: models.Embedded_cNODE2(N, n_root),
-        'cNODE-slim': lambda: models.cNODE2_Gen(lambda: nn.Sequential(nn.Linear(N, n_root), nn.Linear(n_root, n_root), nn.Linear(n_root, N))),
+        'Embedded-cNODE2': lambda: models.Embedded_cNODE2(N, n_root),  # this model sucks
+        'cNODE-slim': lambda: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(N, n_root),
+            nn.Linear(n_root, n_root),
+            nn.Linear(n_root, N))),
         # 'cNODE2_DKI': lambda: cNODE2_DKI(N), # sanity test, this is the same as cNODE2 but less optimized
-        # 'cNODE2-Gen': lambda: models.cNODE2_Gen(lambda: nn.Sequential(nn.Linear(N, N), nn.Linear(N, N))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        # 'cNODE2-Gen': lambda: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(N, N), nn.Linear(N, N))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        # "cNODE2_GenRun": lambda: models.cNODE2_GenRun(N), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
     }
     
     # time step "data"
@@ -319,10 +324,9 @@ def main():
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
-        model_score = validate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
-                                     filepath_out_epoch, filepath_out_fold, filepath_out_incremental,
-                                     filepath_out_model, kfolds, max_epochs, minibatch_examples, model_constr,
-                                     model_name, timesteps, loss_fn, weight_decay, verbose=False)
+        model_score = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
+                                          kfolds, max_epochs, minibatch_examples, model_constr,
+                                          model_name, dataname, timesteps, loss_fn, weight_decay, verbose=False)
         
         print(f"Model score: {model_score}\n")
 

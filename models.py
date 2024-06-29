@@ -50,9 +50,9 @@ class Embedded_cNODE2(nn.Module):
         return x
 
 
-class ODEFunc_cNODE2_Gen(nn.Module):  # cNODE2 with generalized f(x), specified at construction
+class ODEFunc_cNODE_Gen(nn.Module):  # cNODE2 with generalized f(x), specified at construction
     def __init__(self, f_constr):
-        super(ODEFunc_cNODE2_Gen, self).__init__()
+        super(ODEFunc_cNODE_Gen, self).__init__()
         self.f = f_constr()
     
     def forward(self, t, x):
@@ -64,14 +64,40 @@ class ODEFunc_cNODE2_Gen(nn.Module):  # cNODE2 with generalized f(x), specified 
         
         return dxdt  # B x N
     
-class cNODE2_Gen(nn.Module):
+class cNODE_Gen(nn.Module):
     def __init__(self, f_constr):
-        super(cNODE2_Gen, self).__init__()
-        self.func = ODEFunc_cNODE2_Gen(f_constr)
+        super(cNODE_Gen, self).__init__()
+        self.func = ODEFunc_cNODE_Gen(f_constr)
     
     def forward(self, t, x):
         x = odeint(self.func, x, t)[-1]
         return x
+
+
+class ODEFunc_cNODE_GenRun(nn.Module):  # cNODE2 with generalized f(x), computed by calling context at runtime
+    def __init__(self):
+        super(ODEFunc_cNODE_GenRun, self).__init__()
+    
+    def forward(self, t, x, fx):
+        xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fx - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt  # B x N
+
+
+class cNODE2_GenRun(nn.Module):
+    def __init__(self, N):
+        super(cNODE2_GenRun, self).__init__()
+        self.func = ODEFunc_cNODE_GenRun()
+        self.fcc1 = nn.Linear(N, N)
+        self.fcc2 = nn.Linear(N, N)
+    
+    def forward(self, t, x):
+        fx = self.fcc1(x)
+        fx = self.fcc2(fx)
+        dxdt = odeint(lambda x,t: self.func(x,t,fx), x, t)[-1]
+        return dxdt
 
 
 # class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
