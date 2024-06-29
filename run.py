@@ -1,9 +1,9 @@
 import math
 import csv
 import time
-
-import torch
 import numpy as np
+import torch
+import torch.nn as nn
 
 import data
 import models
@@ -76,7 +76,8 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, device):
     return avg_loss
 
 
-def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch, prev_examples, fold, epoch_num, filepath_out_incremental, loss_fn, device):
+def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch,
+                prev_examples, fold, epoch_num, filepath_out_incremental, loss_fn, device, verbose=True):
     model.train()
     
     total_loss = 0
@@ -122,7 +123,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         if (mb + 1) % stream_interval == 0:
             end_time = time.time()
             examples_per_second = stream_examples / (end_time - prev_time)
-            stream_results(filepath_out_incremental, False,  # Set this to True to print to console
+            stream_results(filepath_out_incremental, verbose,
                "fold", fold,
                 "epoch", epoch_num,
                 "minibatch", mb,
@@ -146,7 +147,8 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
 
 
 def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, t,
-               filepath_out_incremental, filepath_out_epoch, filepath_out_model, fold, loss_fn, weight_decay, device, earlystop_patience=10, outputs_per_epoch=10):
+               filepath_out_incremental, filepath_out_epoch, filepath_out_model, fold, loss_fn, weight_decay, device,
+               earlystop_patience=10, outputs_per_epoch=10, verbose=True):
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
     best_loss = float('inf')
     best_epoch = -1
@@ -156,13 +158,9 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     train_examples_seen = 0
     start_time = time.time()
     
-    # print parameter count
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of parameters in model: {num_params}")
-    
     # initial validation benchmark
     l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, device)
-    stream_results(filepath_out_epoch, True,
+    stream_results(filepath_out_epoch, verbose,
         "fold", fold,
         "epoch", -1,
         "training examples", 0,
@@ -177,7 +175,7 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     for e in range(max_epochs):
         l_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
                                                  optimizer, t, outputs_per_epoch, train_examples_seen, fold, e,
-                                                 filepath_out_incremental, loss_fn, device)
+                                                 filepath_out_incremental, loss_fn, device, verbose)
         l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, device)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
@@ -185,7 +183,7 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
         elapsed_time = current_time - start_time
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         
-        stream_results(filepath_out_epoch, True,
+        stream_results(filepath_out_epoch, verbose,
             "fold", fold,
             "epoch", e,
             "training examples", train_examples_seen,
@@ -204,17 +202,20 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
             torch.save(model.state_dict(), filepath_out_model)
         else:
             epochs_worsened += 1
-            print(f"VALIDATION DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{earlystop_patience}")
+            if verbose:
+                print(f"VALIDATION DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{earlystop_patience}")
             # early stop
             if epochs_worsened >= earlystop_patience:
-                print(f'Early stopping triggered after {e + 1} epochs.')
+                if verbose:
+                    print(f'Early stopping triggered after {e + 1} epochs.')
                 early_stop = True
                 break
     
-    if not early_stop:
-        print(f"Completed training. Optimal loss was {best_loss}")
-    else:
-        print(f"Training stopped early due to lack of improvement in validation loss. Optimal loss was {best_loss}")
+    if verbose:
+        if not early_stop:
+            print(f"Completed training. Optimal loss was {best_loss}")
+        else:
+            print(f"Training stopped early due to lack of improvement in validation loss. Optimal loss was {best_loss}")
     
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
     
@@ -223,7 +224,7 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
 
 def validate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, filepath_out_epoch,
                    filepath_out_fold, filepath_out_incremental, filepath_out_model, kfolds, max_epochs,
-                   minibatch_examples, model_constr, model_name, timesteps, loss_fn, weight_decay):
+                   minibatch_examples, model_constr, model_name, timesteps, loss_fn, weight_decay, verbose=True):
     fold_losses = []
     for fold_num, data_fold in enumerate(data_folded):
         model = model_constr().to(device)
@@ -234,10 +235,10 @@ def validate_model(LR, accumulated_minibatches, data_folded, device, earlystop_p
         val, e = run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train,
                             x_valid, y_valid, timesteps, filepath_out_incremental, filepath_out_epoch,
                             filepath_out_model, fold_num, loss_fn, weight_decay, device, earlystop_patience=earlystop_patience,
-                            outputs_per_epoch=10)
+                            outputs_per_epoch=10, verbose=verbose)
         fold_losses.append(val)
         
-        stream_results(filepath_out_fold, True,
+        stream_results(filepath_out_fold, verbose,
                        "model", model_name,
                        "fold", fold_num,
                        "Validation Loss", val,
@@ -293,12 +294,15 @@ def main():
     print(f'validation data shape: {data_folded[0][1].shape}')
     
     _, N = x.shape
+    n_root = math.isqrt(N)
     
     # load models
     models_to_test = {
         'cNODE2': lambda: models.cNODE2(N),
-        'Embedded_cNODE2': lambda: models.Embedded_cNODE2(N, math.isqrt(N)),
-        # 'cNODE2_DKI': lambda: cNODE2_DKI(N),
+        # 'Embedded-cNODE2': lambda: models.Embedded_cNODE2(N, n_root),
+        'cNODE-slim': lambda: models.cNODE2_Gen(lambda: nn.Sequential(nn.Linear(N, n_root), nn.Linear(n_root, n_root), nn.Linear(n_root, N))),
+        # 'cNODE2_DKI': lambda: cNODE2_DKI(N), # sanity test, this is the same as cNODE2 but less optimized
+        # 'cNODE2-Gen': lambda: models.cNODE2_Gen(lambda: nn.Sequential(nn.Linear(N, N), nn.Linear(N, N))),  # sanity test, this is the same as cNODE2 but generated at runtime
     }
     
     # time step "data"
@@ -307,12 +311,20 @@ def main():
     
     for model_name, model_constr in models_to_test.items():
         
+        
+        print(f"\nRunning model: {model_name}")
+    
+        # test construction and print parameter count
+        model = model_constr()
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters in model: {num_params}")
+        
         model_score = validate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
                                      filepath_out_epoch, filepath_out_fold, filepath_out_incremental,
                                      filepath_out_model, kfolds, max_epochs, minibatch_examples, model_constr,
-                                     model_name, timesteps, loss_fn, weight_decay)
+                                     model_name, timesteps, loss_fn, weight_decay, verbose=False)
         
-        print(f"Model score: {model_score}\n\n\n")
+        print(f"Model score: {model_score}\n")
 
 
 # main

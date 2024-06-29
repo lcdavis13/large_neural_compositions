@@ -50,6 +50,30 @@ class Embedded_cNODE2(nn.Module):
         return x
 
 
+class ODEFunc_cNODE2_Gen(nn.Module):  # cNODE2 with generalized f(x), specified at construction
+    def __init__(self, f_constr):
+        super(ODEFunc_cNODE2_Gen, self).__init__()
+        self.f = f_constr()
+    
+    def forward(self, t, x):
+        fx = self.f(x)  # B x N
+        
+        xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fx - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt  # B x N
+    
+class cNODE2_Gen(nn.Module):
+    def __init__(self, f_constr):
+        super(cNODE2_Gen, self).__init__()
+        self.func = ODEFunc_cNODE2_Gen(f_constr)
+    
+    def forward(self, t, x):
+        x = odeint(self.func, x, t)[-1]
+        return x
+
+
 # class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
 #     def __init__(self, N):
 #         super(ODEFunc_cNODE2_DKI_unbatched, self).__init__()
