@@ -3,8 +3,8 @@ import numpy as np
 
 # File paths
 filepath = '../data/waimea_condensed.csv'
-filepath_train = '../data/waimea_condensed_train.csv'
-filepath_test = '../data/waimea_condensed_test.csv'
+filepath_train = '../data/waimea-condensed_train.csv'
+filepath_test = '../data/waimea-condensed_test.csv'
 
 # Read data with pandas, assuming the first column is the index
 data = pd.read_csv(filepath, index_col=0)

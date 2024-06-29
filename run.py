@@ -261,7 +261,7 @@ def main():
     # data paths
     
     # dataname = "waimea"
-    dataname = "waimea_condensed"
+    dataname = "waimea-condensed"
     # dataname = "dki"
     
     filepath_train = f'data/{dataname}_train.csv'
@@ -307,7 +307,7 @@ def main():
             nn.Linear(n_root, N))),
         # 'cNODE2_DKI': lambda: cNODE2_DKI(N), # sanity test, this is the same as cNODE2 but less optimized
         # 'cNODE2-Gen': lambda: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(N, N), nn.Linear(N, N))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        # "cNODE2_GenRun": lambda: models.cNODE2_GenRun(N), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
+        # "cNODE2-GenRun": lambda: models.cNODE2_GenRun(N), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
     }
     
     # time step "data"
