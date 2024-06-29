@@ -20,6 +20,8 @@ class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
         dxdt = torch.mul(x, diff)  # B x N
         
         return dxdt # B x N
+    
+    
 class cNODE2(nn.Module):
     def __init__(self, N):
         super(cNODE2, self).__init__()
@@ -28,6 +30,7 @@ class cNODE2(nn.Module):
     def forward(self, t, x):
         x = odeint(self.func, x, t)[-1]
         return x
+
 
 class Embedded_cNODE2(nn.Module):
     def __init__(self, N, M):
@@ -45,7 +48,6 @@ class Embedded_cNODE2(nn.Module):
         x = self.unembed(x)
         # x = self.softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
         return x
-
 
 
 # class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
