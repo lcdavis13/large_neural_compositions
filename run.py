@@ -3,156 +3,16 @@ import csv
 import time
 
 import torch
-import torch.nn as nn
 import numpy as np
-from torchdiffeq import odeint
-from sklearn.model_selection import KFold
-# from torchdiffeq import odeint_adjoint as odeint  # tiny memory footprint but it is intractible for large models such as cNODE2 with Waimea data
 
+import data
+import models
 
 
 def loss_bc(x, y):  # Bray-Curtis Dissimilarity
     return torch.sum(torch.abs(x - y)) / torch.sum(torch.abs(x + y))   # DKI implementation
-    # return torch.sum(torch.abs(x - y)) / (2.0 * x.shape[0])   # simplified by assuming every vector is a species composition that sums to 1
+    # return torch.sum(torch.abs(x - y)) / (2.0 * x.shape[0])   # simplified by assuming every vector is a species composition that sums to 1 ... but some models may violate that constraint so maybe don't use this
 
-
-
-def process_data(y):
-    # produces X (assemblage) from Y (composition), normalizes the composition to sum to 1, and transposes the data
-    x = y.copy()
-    x[x > 0] = 1
-    y = y / y.sum(axis=0)[np.newaxis, :]
-    x = x / x.sum(axis=0)[np.newaxis, :]
-    y = y.astype(np.float32)
-    x = x.astype(np.float32)
-    y = torch.from_numpy(y.T)
-    x = torch.from_numpy(x.T)
-    return x, y
-
-
-def load_data(filepath_train):
-    # Load data
-    y = np.loadtxt(filepath_train, delimiter=',')
-    x, y = process_data(y)  # Assuming process_data is defined somewhere
-    
-    # Move data to device if specified
-    if device:
-        x = x.to(device)
-        y = y.to(device)
-    
-    return x, y
-
-
-def fold_data(x, y, k=5):
-    # Split data into k folds
-    kf = KFold(n_splits=k, shuffle=True, random_state=42)
-    
-    fold_data = []
-    
-    for train_index, valid_index in kf.split(x):
-        x_train, x_valid = x[train_index], x[valid_index]
-        y_train, y_valid = y[train_index], y[valid_index]
-        
-        fold_data.append((x_train, y_train, x_valid, y_valid))
-    
-    return fold_data
-
-
-def get_batch(x, y, mb_size, current_index):
-    end_index = current_index + mb_size
-    if end_index > x.size(0):
-        end_index = x.size(0)
-    batch_indices = torch.arange(current_index, end_index, dtype=torch.long).to(device)
-    x_batch = x[batch_indices, :]
-    y_batch = y[batch_indices, :]
-    # print(f'x {x_batch.shape}')
-    # print(f'x {x_batch[0, :]}')
-    # print(f'y {y_batch.shape}')
-    # print(f'y {y_batch[0, :]}')
-    return x_batch, y_batch, end_index
-
-
-# class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
-#     def __init__(self, N):
-#         super(ODEFunc_cNODE2_DKI_unbatched, self).__init__()
-#         self.fcc1 = nn.Linear(N, N)
-#         self.fcc2 = nn.Linear(N, N)
-#
-#     def forward(self, t, y):
-#         out = self.fcc1(y)
-#         out = self.fcc2(out)
-#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=1), 1).to(device), y), torch.transpose(out, 0, 1))
-#         return torch.mul(y, out - torch.transpose(f, 0, 1))
-#
-# class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
-#     def __init__(self, N):
-#         super(ODEFunc_cNODE2_DKI, self).__init__()
-#         self.fcc1 = nn.Linear(N, N)
-#         self.fcc2 = nn.Linear(N, N)
-#
-#     def forward(self, t, y):
-#         y = y.unsqueeze(1)  # B x 1 x N
-#         out = self.fcc1(y)
-#         out = self.fcc2(out)
-#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=-1), 1).to(device), y), torch.transpose(out, -2, -1))
-#         dydt = torch.mul(y, out - torch.transpose(f, -2, -1))
-#         return dydt.squeeze(1)  # B x N
-#
-# class cNODE2_DKI(nn.Module):
-#     def __init__(self, N):
-#         super(cNODE2_DKI, self).__init__()
-#         self.func = ODEFunc_cNODE2_DKI(N)
-#
-#     def forward(self, t, x):
-#         x = odeint(self.func, x, t)[-1]
-#         return x
-
-class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
-    def __init__(self, N):
-        super(ODEFunc_cNODE2, self).__init__()
-        self.fcc1 = nn.Linear(N, N)
-        # self.bn1 = nn.BatchNorm1d(N)
-        self.fcc2 = nn.Linear(N, N)
-
-    def forward(self, t, x):
-        fx = self.fcc1(x)  # B x N
-        # fx = self.bn1(fx)
-        fx = self.fcc2(fx)  # B x N
-
-        xT_fx = torch.sum(x*fx, dim=-1).unsqueeze(1) # B x 1 (batched dot product)
-        diff = fx - xT_fx # B x N
-        dxdt = torch.mul(x, diff)  # B x N
-        
-        return dxdt # B x N
-class cNODE2(nn.Module):
-    def __init__(self, N):
-        super(cNODE2, self).__init__()
-        self.func = ODEFunc_cNODE2(N)
-    
-    def forward(self, t, x):
-        x = odeint(self.func, x, t)[-1]
-        return x
-
-class Embedded_cNODE2(nn.Module):
-    def __init__(self, N, M):
-        super(Embedded_cNODE2, self).__init__()
-        self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
-        # self.softmax = nn.Softmax(dim=-1)
-        self.func = ODEFunc_cNODE2(M)
-        self.unembed = nn.Linear(M, N)
-        self.softmax = nn.Softmax(dim=-1)
-        
-    def forward(self, t, x):
-        x = self.embed(x)
-        x = self.softmax(x)  # the ODE expects a few-hot encoded species assemblage summing to 1. This just doesn't make much sense to connect to it. We should instead use two channels - embed IDs for each species, and a small dense list of their abundances.
-        x = odeint(self.func, x, t)[-1]
-        x = self.unembed(x)
-        x = self.softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
-        return x
-
-
-def ceildiv(a, b):
-    return -(a // -b)
 
 
 def stream_results(filename, print_console, *args, prefix="", suffix=""):
@@ -190,6 +50,10 @@ def stream_results(filename, print_console, *args, prefix="", suffix=""):
             writer.writerow(values)
 
 
+def ceildiv(a, b):
+    return -(a // -b)
+
+
 def validate_epoch(model, x_val, y_val, minibatch_examples, t):
     model.eval()
     
@@ -199,7 +63,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t):
     current_index = 0  # Initialize current index to start of dataset
 
     for mb in range(minibatches):
-        x, y, current_index = get_batch(x_val, y_val, minibatch_examples, current_index)
+        x, y, current_index = data.get_batch(x_val, y_val, minibatch_examples, current_index)
         mb_examples = x.size(0)
 
         with torch.no_grad():
@@ -210,7 +74,6 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t):
 
     avg_loss = total_loss / total_samples
     return avg_loss
-
 
 
 def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch, prev_examples, fold, epoch_num, filepath_out_incremental):
@@ -234,7 +97,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
 
-        x, y, current_index = get_batch(x_train, y_train, minibatch_examples, current_index) #
+        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index) #
         mb_examples = x.size(0)
         
         if current_index >= total_samples:
@@ -381,7 +244,7 @@ kfolds = 5
 max_epochs = 50000
 minibatch_examples = 500
 accumulated_minibatches = 1
-earlystop_patience = 10
+earlystop_patience = 100
 
 loss_fn = loss_bc
 
@@ -398,13 +261,13 @@ if __name__ == "__main__":
     print(device)
     
     # load data
-    x,y = load_data(filepath_train)
-    data_folded = fold_data(x, y, kfolds)
+    x,y = data.load_data(filepath_train, device)
+    data_folded = data.fold_data(x, y, kfolds)
     
     _, N = x.shape
     
-    model = cNODE2(N).to(device)
-    # model = Embedded_cNODE2(N, math.isqrt(N)).to(device)
+    model = models.cNODE2(N).to(device)
+    # model = models.Embedded_cNODE2(N, math.isqrt(N)).to(device)
     
     print('dataset:', filepath_train)
     print(f'training data shape: {data_folded[0][0].shape}')

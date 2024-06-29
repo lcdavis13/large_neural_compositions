@@ -1,0 +1,84 @@
+import torch
+import torch.nn as nn
+from torchdiffeq import odeint
+# from torchdiffeq import odeint_adjoint as odeint  # tiny memory footprint but it is intractible for large models such as cNODE2 with Waimea data
+
+class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
+    def __init__(self, N):
+        super(ODEFunc_cNODE2, self).__init__()
+        self.fcc1 = nn.Linear(N, N)
+        # self.bn1 = nn.BatchNorm1d(N)
+        self.fcc2 = nn.Linear(N, N)
+    
+    def forward(self, t, x):
+        fx = self.fcc1(x)  # B x N
+        # fx = self.bn1(fx)
+        fx = self.fcc2(fx)  # B x N
+        
+        xT_fx = torch.sum( x *fx, dim=-1).unsqueeze(1) # B x 1 (batched dot product)
+        diff = fx - xT_fx # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt # B x N
+class cNODE2(nn.Module):
+    def __init__(self, N):
+        super(cNODE2, self).__init__()
+        self.func = ODEFunc_cNODE2(N)
+    
+    def forward(self, t, x):
+        x = odeint(self.func, x, t)[-1]
+        return x
+
+class Embedded_cNODE2(nn.Module):
+    def __init__(self, N, M):
+        super(Embedded_cNODE2, self).__init__()
+        self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
+        # self.softmax = nn.Softmax(dim=-1)
+        self.func = ODEFunc_cNODE2(M)
+        self.unembed = nn.Linear(M, N)
+        self.softmax = nn.Softmax(dim=-1)
+    
+    def forward(self, t, x):
+        x = self.embed(x)
+        # x = self.softmax(x)  # the ODE expects a few-hot encoded species assemblage summing to 1. This just doesn't make much sense to connect to it. We should instead use two channels - embed IDs for each species, and a small dense list of their abundances.
+        x = odeint(self.func, x, t)[-1]
+        x = self.unembed(x)
+        # x = self.softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
+        return x
+
+
+
+# class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
+#     def __init__(self, N):
+#         super(ODEFunc_cNODE2_DKI_unbatched, self).__init__()
+#         self.fcc1 = nn.Linear(N, N)
+#         self.fcc2 = nn.Linear(N, N)
+#
+#     def forward(self, t, y):
+#         out = self.fcc1(y)
+#         out = self.fcc2(out)
+#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=1), 1).to(device), y), torch.transpose(out, 0, 1))
+#         return torch.mul(y, out - torch.transpose(f, 0, 1))
+#
+# class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
+#     def __init__(self, N):
+#         super(ODEFunc_cNODE2_DKI, self).__init__()
+#         self.fcc1 = nn.Linear(N, N)
+#         self.fcc2 = nn.Linear(N, N)
+#
+#     def forward(self, t, y):
+#         y = y.unsqueeze(1)  # B x 1 x N
+#         out = self.fcc1(y)
+#         out = self.fcc2(out)
+#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=-1), 1).to(device), y), torch.transpose(out, -2, -1))
+#         dydt = torch.mul(y, out - torch.transpose(f, -2, -1))
+#         return dydt.squeeze(1)  # B x N
+#
+# class cNODE2_DKI(nn.Module):
+#     def __init__(self, N):
+#         super(cNODE2_DKI, self).__init__()
+#         self.func = ODEFunc_cNODE2_DKI(N)
+#
+#     def forward(self, t, x):
+#         x = odeint(self.func, x, t)[-1]
+#         return x
