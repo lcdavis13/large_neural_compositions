@@ -3,6 +3,7 @@ import csv
 import time
 
 import torch
+import torch.nn as nn
 import numpy as np
 from torchdiffeq import odeint
 # from torchdiffeq import odeint_adjoint as odeint  # tiny memory footprint but it is intractible for large models such as cNODE2 with Waimea data
@@ -58,11 +59,11 @@ def get_batch(x, y, mb_size, current_index):
     return x_batch, y_batch, end_index
 
 
-# class ODEFunc_cNODE2(torch.nn.Module):
+# class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
 #     def __init__(self, N):
-#         super(ODEFunc_cNODE2, self).__init__()
-#         self.fcc1 = torch.nn.Linear(N, N)
-#         self.fcc2 = torch.nn.Linear(N, N)
+#         super(ODEFunc_cNODE2_DKI_unbatched, self).__init__()
+#         self.fcc1 = nn.Linear(N, N)
+#         self.fcc2 = nn.Linear(N, N)
 #
 #     def forward(self, t, y):
 #         out = self.fcc1(y)
@@ -70,65 +71,78 @@ def get_batch(x, y, mb_size, current_index):
 #         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=1), 1).to(device), y), torch.transpose(out, 0, 1))
 #         return torch.mul(y, out - torch.transpose(f, 0, 1))
 #
-#
-# class ODEFunc_cNODE2_optimized(torch.nn.Module):
+# class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
 #     def __init__(self, N):
-#         super(ODEFunc_cNODE2_optimized, self).__init__()
-#         self.fcc1 = torch.nn.Linear(N, N)
-#         self.fcc2 = torch.nn.Linear(N, N)
+#         super(ODEFunc_cNODE2_DKI, self).__init__()
+#         self.fcc1 = nn.Linear(N, N)
+#         self.fcc2 = nn.Linear(N, N)
 #
 #     def forward(self, t, y):
+#         y = y.unsqueeze(1)  # B x 1 x N
 #         out = self.fcc1(y)
 #         out = self.fcc2(out)
-#         f = torch.matmul(torch.ones(y.size(dim=1), 1).to(device), torch.matmul(y, torch.transpose(out, 0, 1)))
-#         return torch.mul(y, out - torch.transpose(f, 0, 1))
+#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=-1), 1).to(device), y), torch.transpose(out, -2, -1))
+#         dydt = torch.mul(y, out - torch.transpose(f, -2, -1))
+#         return dydt.squeeze(1)  # B x N
+#
+# class cNODE2_DKI(nn.Module):
+#     def __init__(self, N):
+#         super(cNODE2_DKI, self).__init__()
+#         self.func = ODEFunc_cNODE2_DKI(N)
+#
+#     def forward(self, t, x):
+#         x = odeint(self.func, x, t)[-1]
+#         return x
 
-
-class ODEFunc_cNODE2_batched(torch.nn.Module):
+class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
     def __init__(self, N):
-        super(ODEFunc_cNODE2_batched, self).__init__()
-        self.fcc1 = torch.nn.Linear(N, N)
-        self.fcc2 = torch.nn.Linear(N, N)
+        super(ODEFunc_cNODE2, self).__init__()
+        self.fcc1 = nn.Linear(N, N)
+        # self.bn1 = nn.BatchNorm1d(N)
+        self.fcc2 = nn.Linear(N, N)
 
     def forward(self, t, x):
-        # initially x is B x N
-        x = x.unsqueeze(1)  # B x 1 x N
+        fx = self.fcc1(x)  # B x N
+        # fx = self.bn1(fx)
+        fx = self.fcc2(fx)  # B x N
 
-        fx = self.fcc1(x)  # B x 1 x N
-        fx = self.fcc2(fx)  # B x 1 x N
-
-        xT_fx = torch.matmul(x, torch.transpose(fx, -2, -1))  # B x 1 x 1   (This is optimized vs DKI's implementation, which creates a NxN matrix instead of 1x1)
-        # print(xT_fx.shape)
-        ones = torch.ones(x.size(dim=-1), 1).to(device)  # N x 1
-        # print(ones.shape)
-        ones_xT_fx = torch.matmul(ones, xT_fx)  # B x N x 1
-        # print(ones_xT_fx.shape)
-        dxdt = torch.mul(x, fx - torch.transpose(ones_xT_fx, -2, -1))  # B x 1 x N
-        # print(dxdt.shape)
-        return dxdt.squeeze(1)  # B x N
-    
-    
-class cNODE2(torch.nn.Module):
+        xT_fx = torch.sum(x*fx, dim=-1).unsqueeze(1) # B x 1 (batched dot product)
+        diff = fx - xT_fx # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt # B x N
+class cNODE2(nn.Module):
     def __init__(self, N):
         super(cNODE2, self).__init__()
-        self.func = ODEFunc_cNODE2_batched(N)
+        self.func = ODEFunc_cNODE2(N)
     
     def forward(self, t, x):
         x = odeint(self.func, x, t)[-1]
         return x
 
 
-class Embedded_cNODE2(torch.nn.Module):
+def stable_softmax(logits, dim=-1): # from chatgpt, idk if this is valid
+    max_logits = torch.max(logits, dim=dim, keepdim=True)[0]
+    stable_logits = logits - max_logits  # Subtracting the maximum value for numerical stability
+    exp_logits = torch.exp(stable_logits)
+    softmax = exp_logits / torch.sum(exp_logits, dim=dim, keepdim=True)
+    return softmax
+
+class Embedded_cNODE2(nn.Module):
     def __init__(self, N, M):
         super(Embedded_cNODE2, self).__init__()
-        self.embed = torch.nn.Linear(N, M)
-        self.func = ODEFunc_cNODE2_batched(M)
-        self.unembed = torch.nn.Linear(M, N)
+        self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
+        # self.softmax = nn.Softmax(dim=-1)
+        self.func = ODEFunc_cNODE2(M)
+        self.unembed = nn.Linear(M, N)
         
     def forward(self, t, x):
         x = self.embed(x)
+        x = stable_softmax(x)  # the ODE expects a few-hot encoded species assemblage summing to 1. This just doesn't make much sense to connect to it. We should instead use two channels - embed IDs for each species, and a small dense list of their abundances.
         x = odeint(self.func, x, t)[-1]
         x = self.unembed(x)
+        x = stable_softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
+        # torch.exp(nn.LogSoftmax())
         return x
 
 
@@ -275,14 +289,26 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     # print parameter count
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters in model: {num_params}")
-    print("=============================================")
+    
+    # initial validation benchmark
+    l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t)
+    stream_results(filepath_out_epoch, True,
+                   "epoch", -1,
+                   "training examples", 0,
+                   "Training Loss", -1.0,
+                   "Validation Loss", l_val,
+                   "Elapsed Time", -1.0,
+                   "GPU Footprint (MB)", -1.0,
+                   prefix="================PRE-VALIDATION===============\n",
+                   suffix="\n=============================================\n")
+    
     
     for e in range(max_epochs):
         l_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
                                                  optimizer, t, outputs_per_epoch, train_examples_seen, e,
                                                  filepath_out_incremental)
         l_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t)
-        # l_trn = validate_epoch(x, y, minibatch_examples, func, t) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
+        # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
         end_time = time.time()
         elapsed_time = end_time - prev_time
@@ -323,8 +349,9 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
 
 # data paths
 
-dataname = "waimea"
-# dataname = "dki"
+# dataname = "waimea"
+# dataname = "waimea_condensed"
+dataname = "dki"
 
 filepath_train = f'data/{dataname}_train.csv'
 filepath_test = f'data/{dataname}_test.csv'
@@ -339,9 +366,10 @@ data_valid_ratio = 0.2
 
 # hyperparameters
 
-max_epochs = 1000
+max_epochs = 50000
 minibatch_examples = 500
 accumulated_minibatches = 1
+earlystop_patience = 20
 
 loss_fn = loss_bc
 
@@ -362,8 +390,8 @@ if __name__ == "__main__":
     x_train, y_train, x_valid, y_valid = load_train_valid_data(filepath_train, data_valid_ratio)
     _, N = x_train.shape
     
-    #model = cNODE2(N).to(device)
-    model = Embedded_cNODE2(N, math.isqrt(N)).to(device)
+    model = cNODE2(N).to(device)
+    # model = Embedded_cNODE2(N, math.isqrt(N)).to(device)
     
     print('dataset:', filepath_train)
     print(f'training data shape: {x_train.shape}')
@@ -372,6 +400,6 @@ if __name__ == "__main__":
     # time step "data"
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, timesteps, filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=10, outputs_per_epoch=5)
+    run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, timesteps, filepath_out_incremental, filepath_out_epoch, filepath_out_model, earlystop_patience=earlystop_patience, outputs_per_epoch=400)
     
     print("done")
