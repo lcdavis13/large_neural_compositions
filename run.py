@@ -254,13 +254,13 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
 
 
 def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, kfolds, max_epochs,
-                        minibatch_examples, model_constr, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbose=True):
+                        minibatch_examples, model_constr, args, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbose=True):
     
     filepath_out_fold = f'results/{model_name}_{dataname}_folds.csv'
     
     fold_losses = []
     for fold_num, data_fold in enumerate(data_folded):
-        model = model_constr().to(device)
+        model = model_constr(args).to(device)
         
         x_train, y_train, x_valid, y_valid = data_fold
         print(f"Fold {fold_num + 1}/{kfolds}")
@@ -276,8 +276,8 @@ def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlys
                        "epochs", e,
                        prefix="\n========================================FOLD=========================================\n",
                        suffix="\n=====================================================================================\n")
-    # min of mean and mode to avoid over-optimism from outliers
-    model_score = np.min([np.mean(fold_losses), np.median(fold_losses)])
+    # max of mean and mode to avoid over-optimism from outliers
+    model_score = np.max([np.mean(fold_losses), np.median(fold_losses)])
     print(f"Losses: {fold_losses}")
     return model_score
 
@@ -288,24 +288,12 @@ def main():
     
     # dataname = "waimea"
     # dataname = "waimea-condensed"
-    # dataname = "dki-synth"
-    dataname = "dki-real"
+    dataname = "dki-synth"
+    # dataname = "dki-real"
     
-    kfolds = 3
+    kfolds = 5
     max_epochs = 50000
-    earlystop_patience = 5
-    
-    
-    # Hyperparameters to tune
-    minibatch_examples = 500
-    accumulated_minibatches = 1
-    LR_base = 0.002
-    WD_base = 0.0003
-
-
-    # adjusted learning rate and decay
-    LR = LR_base * math.sqrt(minibatch_examples * accumulated_minibatches)
-    WD = WD_base * math.sqrt(minibatch_examples * accumulated_minibatches)
+    earlystop_patience = 10
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -320,24 +308,36 @@ def main():
     print(f'validation data shape: {data_folded[0][1].shape}')
     
     # get dimensions of data for model construction
-    _, N = x.shape
-    n_root = math.isqrt(N)
+    _, data_dim = x.shape
+    
+    
+    # Hyperparameters to tune
+    minibatch_examples = 30
+    accumulated_minibatches = 1
+    LR_base = 0.002
+    WD_base = 0.0003
+    hidden_dim = math.isqrt(data_dim)
     
     
     # Specify model(s) for experiment
-    # Note that each must be a constructor function with no args, not a pre-constructed model. Lamda is recommended.
+    # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'cNODE-slim': lambda: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(N, n_root),
-            nn.Linear(n_root, n_root),
-            nn.Linear(n_root, N))),
-        # 'cNODE2': lambda: models.cNODE2(N),
-        # 'Embedded-cNODE2': lambda: models.Embedded_cNODE2(N, n_root),  # this model is not good
-        # 'cNODE2_DKI': lambda: cNODE2_DKI(N), # sanity test, this is the same as cNODE2 but less optimized
-        # 'cNODE2-Gen': lambda: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(N, N), nn.Linear(N, N))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        # "cNODE2-GenRun": lambda: models.cNODE2_GenRun(N), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
+        'cNODE-slim': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE1': lambda args: models.cNODE1(data_dim),
+        'cNODE2': lambda args: models.cNODE2(data_dim),
+        # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
+        # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(data_dim), # sanity test, this is the same as cNODE2 but less optimized
+        # 'cNODE2-Gen': lambda args: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        # "cNODE2-GenRun": lambda args: models.cNODE2_GenRun(data_dim), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
     }
 
+
+    # adjusted learning rate and decay
+    LR = LR_base * math.sqrt(minibatch_examples * accumulated_minibatches)
+    WD = WD_base * math.sqrt(minibatch_examples * accumulated_minibatches)
 
     # specify loss function
     loss_fn = loss_bc
@@ -349,19 +349,19 @@ def main():
     ode_timesteps = 2  # must be at least 2
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
+    args = {"hidden_dim": hidden_dim}
+    
     for model_name, model_constr in models_to_test.items():
-        
-        
         print(f"\nRunning model: {model_name}")
     
         # test construction and print parameter count
-        model = model_constr()
+        model = model_constr(args)
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
         model_score = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
-                                          kfolds, max_epochs, minibatch_examples, model_constr,
-                                          model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbose=True)
+                                          kfolds, max_epochs, minibatch_examples, model_constr, args,
+                                          model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbose=False)
         
         print(f"Model score: {model_score}\n")
 

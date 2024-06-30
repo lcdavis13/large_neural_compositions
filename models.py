@@ -32,6 +32,31 @@ class cNODE2(nn.Module):
         return x
 
 
+class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
+    def __init__(self, N):
+        super(ODEFunc_cNODE1, self).__init__()
+        self.fcc1 = nn.Linear(N, N)
+    
+    def forward(self, t, x):
+        fx = self.fcc1(x)  # B x N
+        
+        xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fx - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt  # B x N
+
+
+class cNODE1(nn.Module):
+    def __init__(self, N):
+        super(cNODE1, self).__init__()
+        self.func = ODEFunc_cNODE2(N)
+    
+    def forward(self, t, x):
+        x = odeint(self.func, x, t)[-1]
+        return x
+
+
 class Embedded_cNODE2(nn.Module):
     # This model doesn't work.
     # With softmax layers, it has the same score at the start of training as at the end. It doesn't learn.
@@ -114,28 +139,28 @@ class cNODE2_GenRun(nn.Module):
 #     def forward(self, t, y):
 #         out = self.fcc1(y)
 #         out = self.fcc2(out)
-#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=1), 1).to(device), y), torch.transpose(out, 0, 1))
+#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=1), 1).to(y.device), y), torch.transpose(out, 0, 1))
 #         return torch.mul(y, out - torch.transpose(f, 0, 1))
-#
-# class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
-#     def __init__(self, N):
-#         super(ODEFunc_cNODE2_DKI, self).__init__()
-#         self.fcc1 = nn.Linear(N, N)
-#         self.fcc2 = nn.Linear(N, N)
-#
-#     def forward(self, t, y):
-#         y = y.unsqueeze(1)  # B x 1 x N
-#         out = self.fcc1(y)
-#         out = self.fcc2(out)
-#         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=-1), 1).to(device), y), torch.transpose(out, -2, -1))
-#         dydt = torch.mul(y, out - torch.transpose(f, -2, -1))
-#         return dydt.squeeze(1)  # B x N
-#
-# class cNODE2_DKI(nn.Module):
-#     def __init__(self, N):
-#         super(cNODE2_DKI, self).__init__()
-#         self.func = ODEFunc_cNODE2_DKI(N)
-#
-#     def forward(self, t, x):
-#         x = odeint(self.func, x, t)[-1]
-#         return x
+
+class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
+    def __init__(self, N):
+        super(ODEFunc_cNODE2_DKI, self).__init__()
+        self.fcc1 = nn.Linear(N, N)
+        self.fcc2 = nn.Linear(N, N)
+
+    def forward(self, t, y):
+        y = y.unsqueeze(1)  # B x 1 x N
+        out = self.fcc1(y)
+        out = self.fcc2(out)
+        f = torch.matmul(torch.matmul(torch.ones(y.size(dim=-1), 1).to(y.device), y), torch.transpose(out, -2, -1))
+        dydt = torch.mul(y, out - torch.transpose(f, -2, -1))
+        return dydt.squeeze(1)  # B x N
+
+class cNODE2_DKI(nn.Module):
+    def __init__(self, N):
+        super(cNODE2_DKI, self).__init__()
+        self.func = ODEFunc_cNODE2_DKI(N)
+
+    def forward(self, t, x):
+        x = odeint(self.func, x, t)[-1]
+        return x
