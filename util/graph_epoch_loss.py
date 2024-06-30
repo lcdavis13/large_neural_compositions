@@ -7,10 +7,10 @@ import matplotlib.pyplot as plt
 import itertools
 
 # Define the folder containing the CSV files
-folder_path = '../results/to-save'
+folder_path = '../results'
 
 # Get all CSV files in the folder that end with "_epochs.csv"
-csv_files = glob.glob(os.path.join(folder_path, '*_epochs.csv'))
+csv_files = glob.glob(os.path.join(folder_path, '*_waimea-condensed_epochs.csv'))
 
 # Initialize a dictionary to hold data from all files
 data = {}

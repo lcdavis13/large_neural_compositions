@@ -144,9 +144,9 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             end_time = time.time()
             examples_per_second = stream_examples / (end_time - prev_time)
             stream_results(filepath_out_incremental, verbose,
-               "fold", fold,
-                "epoch", epoch_num,
-                "minibatch", mb,
+               "fold", fold+1,
+                "epoch", epoch_num+1,
+                "minibatch", mb+1,
                 "total examples seen", prev_examples + new_examples,
                 "Avg Loss", stream_loss / stream_examples,
                 "Avg Distr Error", stream_penalty / stream_examples,
@@ -181,25 +181,25 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     
     filepath_out_epoch = f'results/{model_name}_{dataname}_epochs.csv'
     filepath_out_model = f'results/{model_name}_{dataname}_model.pth'
-
-    train_examples_seen = 0
-    start_time = time.time()
     
     # initial validation benchmark
     l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
     stream_results(filepath_out_epoch, verbose,
-        "fold", fold,
-        "epoch", -1,
+        "fold", fold+1,
+        "epoch", 0,
         "training examples", 0,
         "Avg Training Loss", -1.0,
         "Avg Training Distr Error", -1.0,
         "Avg Validation Loss", l_val,
         "Avg Validation Distr Error", p_val,
-        "Elapsed Time", -1.0,
+        "Elapsed Time", 0.0,
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
-    
+
+
+    train_examples_seen = 0
+    start_time = time.time()
     
     for e in range(max_epochs):
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
@@ -213,8 +213,8 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         
         stream_results(filepath_out_epoch, verbose,
-            "fold", fold,
-            "epoch", e,
+            "fold", fold+1,
+            "epoch", e+1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
             "Avg Training Distr Error", l_trn,
@@ -272,9 +272,9 @@ def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlys
         fold_losses.append(val)
         
         stream_results(filepath_out_fold, verbose,
-                       "fold", fold_num,
+                       "fold", fold_num+1,
                        "Validation Loss", val,
-                       "epochs", e,
+                       "epochs", e+1,
                        prefix="\n========================================FOLD=========================================\n",
                        suffix="\n=====================================================================================\n")
     # max of mean and mode to avoid over-optimism from outliers
@@ -288,8 +288,8 @@ def main():
     # Experiment parameters
     
     # dataname = "waimea"
-    # dataname = "waimea-condensed"
-    dataname = "cNODE-paper-ocean"
+    dataname = "waimea-condensed"
+    # dataname = "cNODE-paper-ocean"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -298,9 +298,9 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 3
+    kfolds = 5
     max_epochs = 50000
-    earlystop_patience = 10
+    earlystop_patience = 20
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
