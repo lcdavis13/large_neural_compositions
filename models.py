@@ -3,6 +3,7 @@ import torch.nn as nn
 from torchdiffeq import odeint
 # from torchdiffeq import odeint_adjoint as odeint  # tiny memory footprint but it is intractible for large models such as cNODE2 with Waimea data
 
+
 class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
     def __init__(self, N):
         super(ODEFunc_cNODE2, self).__init__()

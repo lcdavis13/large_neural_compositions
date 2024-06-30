@@ -4,12 +4,15 @@ from sklearn.model_selection import KFold
 
 def process_data(y):
     # produces X (assemblage) from Y (composition), normalizes the composition to sum to 1, and transposes the data
+    y0 = y.copy()
     x = y.copy()
     x[x > 0] = 1
     y = y / y.sum(axis=0)[np.newaxis, :]
     x = x / x.sum(axis=0)[np.newaxis, :]
     y = y.astype(np.float32)
     x = x.astype(np.float32)
+    if (np.sum(np.abs(y0 - y)) > y.shape[1]/25.0):
+        print('WARNING: input columns are not distributions. Is the data transposed?')
     y = torch.from_numpy(y.T)
     x = torch.from_numpy(x.T)
     return x, y
