@@ -50,7 +50,7 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
 class cNODE1(nn.Module):
     def __init__(self, N):
         super(cNODE1, self).__init__()
-        self.func = ODEFunc_cNODE2(N)
+        self.func = ODEFunc_cNODE1(N)
     
     def forward(self, t, x):
         x = odeint(self.func, x, t)[-1]

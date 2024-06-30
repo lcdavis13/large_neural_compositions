@@ -192,8 +192,9 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
         "epoch", -1,
         "training examples", 0,
         "Avg Training Loss", -1.0,
+        "Avg Training Distr Error", -1.0,
         "Avg Validation Loss", l_val,
-        "Avg Distribution Distr Error", p_val,
+        "Avg Validation Distr Error", p_val,
         "Elapsed Time", -1.0,
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
@@ -288,10 +289,16 @@ def main():
     
     # dataname = "waimea"
     # dataname = "waimea-condensed"
-    dataname = "dki-synth"
+    dataname = "cNODE-paper-ocean"
+    # dataname = "cNODE-paper-human-gut"
+    # dataname = "cNODE-paper-human-oral"
+    # dataname = "cNODE-paper-drosophila"
+    # dataname = "cNODE-paper-soil-vitro"
+    # dataname = "cNODE-paper-soil-vivo"
+    # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 5
+    kfolds = 3
     max_epochs = 50000
     earlystop_patience = 10
     
@@ -305,7 +312,7 @@ def main():
     data_folded = data.fold_data(x, y, kfolds)
     print('dataset:', filepath_train)
     print(f'training data shape: {data_folded[0][0].shape}')
-    print(f'validation data shape: {data_folded[0][1].shape}')
+    print(f'validation data shape: {data_folded[0][2].shape}')
     
     # get dimensions of data for model construction
     _, data_dim = x.shape
@@ -346,7 +353,7 @@ def main():
     distr_error_fn = distribution_error
     
     # time step "data"
-    ode_timesteps = 2  # must be at least 2
+    ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
     args = {"hidden_dim": hidden_dim}
@@ -369,3 +376,9 @@ def main():
 # main
 if __name__ == "__main__":
     main()
+
+# TODO: hyperparameter optimization
+# TODO: time limit and/or time based early stopping
+# TODO: hyperparameters optimization based on learning rate against clock time, somehow
+# TODO: properly print & log experiment results
+# TODO: realtime visualization
