@@ -33,20 +33,25 @@ class cNODE2(nn.Module):
 
 
 class Embedded_cNODE2(nn.Module):
+    # This model doesn't work.
+    # With softmax layers, it has the same score at the start of training as at the end. It doesn't learn.
+    # Without any softmax layers, it starts off producing non-distributions, with huge loss. The model eventually beats the performance of the softmax version, but doesn't learn to produce a distribution.
+    # Without softmax layers and WITH added penalties for non-distributions, it performs slightly better and becomes closer to producing a distribution, but it's only a partial success.
+    # From just theoretical perspective, the ODE expects a few-hot encoded species assemblage summing to 1. It doesn't make sense to discard the distribution information in the input before it ever reaches the ODE. We should instead use two channels - embedded IDs for each species, and a small dense list of their abundances.
     def __init__(self, N, M):
         super(Embedded_cNODE2, self).__init__()
         self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
         # self.softmax = nn.Softmax(dim=-1)
         self.func = ODEFunc_cNODE2(M)
         self.unembed = nn.Linear(M, N)
-        self.softmax = nn.Softmax(dim=-1)
+        # self.softmax = nn.Softmax(dim=-1)
     
     def forward(self, t, x):
         x = self.embed(x)
-        # x = self.softmax(x)  # the ODE expects a few-hot encoded species assemblage summing to 1. This just doesn't make much sense to connect to it. We should instead use two channels - embed IDs for each species, and a small dense list of their abundances.
+        # x = self.softmax(x)
         x = odeint(self.func, x, t)[-1]
         x = self.unembed(x)
-        # x = self.softmax(x)  # TODO: If I don't have softmax, the outputs aren't normalized resulting in absurdly high loss. If I do have softmax, I get underflow errors. And when I get lucky and have no underflow, the model doesn't learn at all.
+        # x = self.softmax(x)
         return x
 
 
