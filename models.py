@@ -29,8 +29,8 @@ class cNODE2(nn.Module):
         self.func = ODEFunc_cNODE2(N)
     
     def forward(self, t, x):
-        x = odeint(self.func, x, t)[-1]
-        return x
+        y = odeint(self.func, x, t)[-1]
+        return y
 
 
 class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
@@ -54,8 +54,8 @@ class cNODE1(nn.Module):
         self.func = ODEFunc_cNODE1(N)
     
     def forward(self, t, x):
-        x = odeint(self.func, x, t)[-1]
-        return x
+        y = odeint(self.func, x, t)[-1]
+        return y
 
 
 class Embedded_cNODE2(nn.Module):
@@ -75,10 +75,10 @@ class Embedded_cNODE2(nn.Module):
     def forward(self, t, x):
         x = self.embed(x)
         # x = self.softmax(x)
-        x = odeint(self.func, x, t)[-1]
-        x = self.unembed(x)
-        # x = self.softmax(x)
-        return x
+        y = odeint(self.func, x, t)[-1]
+        y = self.unembed(y)
+        # y = self.softmax(y)
+        return y
 
 
 class ODEFunc_cNODE_Gen(nn.Module):  # cNODE2 with generalized f(x), specified at construction
@@ -101,8 +101,8 @@ class cNODE_Gen(nn.Module):
         self.func = ODEFunc_cNODE_Gen(f_constr)
     
     def forward(self, t, x):
-        x = odeint(self.func, x, t)[-1]
-        return x
+        y = odeint(self.func, x, t)[-1]
+        return y
 
 
 class ODEFunc_cNODE_GenRun(nn.Module):  # cNODE2 with generalized f(x), computed by calling context at runtime
@@ -127,8 +127,8 @@ class cNODE2_GenRun(nn.Module):
     def forward(self, t, x):
         fx = self.fcc1(x)
         fx = self.fcc2(fx)
-        dxdt = odeint(lambda x,t: self.func(x,t,fx), x, t)[-1]
-        return dxdt
+        y = odeint(lambda x,t: self.func(x,t,fx), x, t)[-1]
+        return y
 
 
 # class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
@@ -163,5 +163,5 @@ class cNODE2_DKI(nn.Module):
         self.func = ODEFunc_cNODE2_DKI(N)
 
     def forward(self, t, x):
-        x = odeint(self.func, x, t)[-1]
-        return x
+        y = odeint(self.func, x, t)[-1]
+        return y

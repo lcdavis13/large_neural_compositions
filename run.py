@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+import condensed_models
 import data
 import models
 
@@ -288,8 +289,8 @@ def main():
     # Experiment parameters
     
     # dataname = "waimea"
-    dataname = "waimea-condensed"
-    # dataname = "cNODE-paper-ocean"
+    # dataname = "waime a-condensed"
+    dataname = "cNODE-paper-ocean"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -298,9 +299,9 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 5
+    kfolds = 2
     max_epochs = 50000
-    earlystop_patience = 20
+    earlystop_patience = 5
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -324,17 +325,30 @@ def main():
     LR_base = 0.002
     WD_base = 0.0003
     hidden_dim = math.isqrt(data_dim)
+    deep_dim = math.isqrt(hidden_dim)
     
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'cNODE-slim': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        'canODE-simple-small': lambda args: condensed_models.canODE_simple(data_dim, args["deep_dim"], args["deep_dim"]),
+        # 'canODE-simple-med': lambda args: condensed_models.canODE_simple(data_dim, args["hidden_dim"], args["deep_dim"]),
+        # 'canODE-simple': lambda args: condensed_models.canODE_simple(data_dim, args["hidden_dim"], args["hidden_dim"]),
+        # 'cNODE-slim': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-slim-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
             nn.Linear(data_dim, args["hidden_dim"]),
+            nn.ReLU(),
             nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.ReLU(),
             nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE1': lambda args: models.cNODE1(data_dim),
-        'cNODE2': lambda args: models.cNODE2(data_dim),
+        # 'cAttend-simple-small': lambda args: condensed_models.cAttend_simple(data_dim, args["deep_dim"], args["deep_dim"]),
+        # 'cAttend-simple-med': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["deep_dim"]),
+        # 'cAttend-simple': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["hidden_dim"]),
+        # 'cNODE1': lambda args: models.cNODE1(data_dim),
+        # 'cNODE2': lambda args: models.cNODE2(data_dim),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
         # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(data_dim), # sanity test, this is the same as cNODE2 but less optimized
         # 'cNODE2-Gen': lambda args: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
@@ -356,7 +370,7 @@ def main():
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    args = {"hidden_dim": hidden_dim}
+    args = {"hidden_dim": hidden_dim, "deep_dim": deep_dim}
     
     for model_name, model_constr in models_to_test.items():
         print(f"\nRunning model: {model_name}")

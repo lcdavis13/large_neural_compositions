@@ -1,16 +1,15 @@
 import os
 import glob
 import pandas as pd
-# import matplotlib
-# matplotlib.use("TkAgg")  # Configure the backend; do this before importing pyplot.
 import matplotlib.pyplot as plt
 import itertools
+import numpy as np
 
 # Define the folder containing the CSV files
-folder_path = '../results'
+folder_path = '../results/to-save'
 
 # Get all CSV files in the folder that end with "_epochs.csv"
-csv_files = glob.glob(os.path.join(folder_path, '*_waimea-condensed_epochs.csv'))
+csv_files = glob.glob(os.path.join(folder_path, '*ocean_epochs.csv'))
 
 # Initialize a dictionary to hold data from all files
 data = {}
@@ -37,6 +36,23 @@ for file in csv_files:
         elapsed_time = group['Elapsed Time']
         data[model_name].append((epochs, val_loss, elapsed_time, fold))
 
+# Optional variable to enable averaging of data
+average_data = True
+
+
+# Function to interpolate and average data
+def interpolate_and_average(data_list, x_key, y_key):
+    all_x = sorted(set(itertools.chain.from_iterable([data[x_key] for data in data_list])))
+    all_y_interpolated = []
+    
+    for data in data_list:
+        y_interpolated = np.interp(all_x, data[x_key], data[y_key])
+        all_y_interpolated.append(y_interpolated)
+    
+    avg_y = np.mean(all_y_interpolated, axis=0)
+    return all_x, avg_y
+
+
 # Plot Avg Validation Loss vs Epoch
 plt.figure(figsize=(12, 8))
 
@@ -44,9 +60,22 @@ plt.figure(figsize=(12, 8))
 colors = plt.cm.Set1(range(len(data)))
 
 for color, (model_name, folds_data) in zip(colors, data.items()):
-    for epochs, val_loss, elapsed_time, fold in folds_data:
-        line_style = next(itertools.cycle(line_styles))
-        plt.plot(epochs, val_loss, label=f'{model_name} Fold {fold}', color=color, linestyle=line_style)
+    if average_data:
+        # Interpolate and average validation loss across all folds
+        all_folds_data = [{'epoch': epochs, 'val_loss': val_loss} for epochs, val_loss, _, _ in folds_data]
+        avg_epochs, avg_val_loss = interpolate_and_average(all_folds_data, 'epoch', 'val_loss')
+        plt.plot(avg_epochs, avg_val_loss, label=f'{model_name} Average', color=color, linestyle='-')
+    else:
+        for epochs, val_loss, elapsed_time, fold in folds_data:
+            line_style = next(itertools.cycle(line_styles))
+            plt.plot(epochs, val_loss, label=f'{model_name} Fold {fold}', color=color, linestyle=line_style)
+
+# After calculating avg_epochs and avg_val_loss for epochs-based plot
+if average_data:
+    min_val_loss_epoch = avg_val_loss[0]  # Assuming the first value corresponds to the earliest epoch
+    y_max_epoch = min_val_loss_epoch * 1.2
+# Add y_max_epoch to the y-limit of the Avg Validation Loss vs Epoch plot
+plt.ylim(bottom=0, top=y_max_epoch)
 
 plt.xlabel('Epoch')
 plt.ylabel('Avg Validation Loss')
@@ -60,9 +89,23 @@ plt.show()
 plt.figure(figsize=(12, 8))
 
 for color, (model_name, folds_data) in zip(colors, data.items()):
-    for epochs, val_loss, elapsed_time, fold in folds_data:
-        line_style = next(itertools.cycle(line_styles))
-        plt.plot(elapsed_time, val_loss, label=f'{model_name} Fold {fold}', color=color, linestyle=line_style)
+    if average_data:
+        # Interpolate and average validation loss across all folds
+        all_folds_data = [{'elapsed_time': elapsed_time, 'val_loss': val_loss} for _, val_loss, elapsed_time, _ in
+                          folds_data]
+        avg_elapsed_time, avg_val_loss = interpolate_and_average(all_folds_data, 'elapsed_time', 'val_loss')
+        plt.plot(avg_elapsed_time, avg_val_loss, label=f'{model_name} Average', color=color, linestyle='-')
+    else:
+        for epochs, val_loss, elapsed_time, fold in folds_data:
+            line_style = next(itertools.cycle(line_styles))
+            plt.plot(elapsed_time, val_loss, label=f'{model_name} Fold {fold}', color=color, linestyle=line_style)
+
+# After calculating avg_elapsed_time and avg_val_loss for elapsed time-based plot
+if average_data:
+    min_val_loss_time = avg_val_loss[0]  # Assuming the first value corresponds to the earliest time
+    y_max_time = min_val_loss_time * 1.2
+# Add y_max_time to the y-limit of the Avg Validation Loss vs Elapsed Time plot
+plt.ylim(bottom=0, top=y_max_time)
 
 plt.xlabel('Elapsed Time')
 plt.ylabel('Avg Validation Loss')
