@@ -136,7 +136,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
-def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, t,
+def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, t,
                model_name, dataname, fold, loss_fn, distr_error_fn, weight_decay, device,
                earlystop_patience=10, outputs_per_epoch=10, verbosity=1):
     
@@ -205,16 +205,16 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
             torch.save(model.state_dict(), filepath_out_model)
         else:
             epochs_worsened += 1
-            if verbosity:
+            if verbosity > 0 and e+1 >= min_epochs:
                 print(f"VALIDATION DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{earlystop_patience}")
             # early stop
-            if epochs_worsened >= earlystop_patience:
-                if verbosity:
+            if epochs_worsened >= earlystop_patience and e+1 >= min_epochs:
+                if verbosity > 0:
                     print(f'Early stopping triggered after {e + 1} epochs.')
                 early_stop = True
                 break
     
-    if verbosity:
+    if verbosity > 0:
         if not early_stop:
             print(f"Completed training. Optimal loss was {best_epoch_loss}")
         else:
@@ -226,8 +226,8 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     return best_epoch_loss, best_epoch, best_epoch_time, best_epoch_trn_loss
 
 
-def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, kfolds, max_epochs,
-                        minibatch_examples, model_constr, args, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1):
+def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, kfolds, min_epochs, max_epochs,
+                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1):
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
@@ -236,12 +236,12 @@ def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlys
     fold_epochs = []
     fold_times = []
     for fold_num, data_fold in enumerate(data_folded):
-        model = model_constr(args).to(device)
+        model = model_constr(model_args).to(device)
         
         x_train, y_train, x_valid, y_valid = data_fold
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val, e, elapsed_time, trn_loss = run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train,
+        val, e, elapsed_time, trn_loss = run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train,
                             x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, distr_error_fn, weight_decay, device,
                             earlystop_patience=earlystop_patience, outputs_per_epoch=10, verbosity=verbosity-1)
         fold_losses.append(val)
@@ -281,9 +281,10 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 7
-    max_epochs = 50000
-    earlystop_patience = 20
+    kfolds = 3
+    min_epochs = 60
+    max_epochs = 300
+    earlystop_patience = 15
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -305,43 +306,53 @@ def main():
     minibatch_examples = 30
     accumulated_minibatches = 1
     LR_base = 0.002
-    WD_base = 0.0003
+    WD_base = 0.00003
     hidden_dim = math.isqrt(data_dim)
     attend_dim = 32 # math.isqrt(hidden_dim)
-    num_heads = 8
+    num_heads = 4
     depth = 6
     ffn_dim_multiplier = 1
     assert attend_dim % num_heads == 0, "attend_dim must be divisible by num_heads"
-    
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
         # 'canODE-noVal': lambda args: condensed_models.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
-        'canODE': lambda args: condensed_models.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
-        'canODE-multihead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
-        'canODE-singlehead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
-        'canODE-transformer': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        # 'canODE': lambda args: condensed_models.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE-multihead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
+        # 'canODE-singlehead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
+        # 'canODE-transformer': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         
-        # 'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-deep4-flat': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-deep4-flat-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], data_dim))),
         # 'cAttend-simple': lambda args: condensed_models.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'cNODE1': lambda args: models.cNODE1(data_dim),
         # 'cNODE2': lambda args: models.cNODE2(data_dim),
@@ -366,52 +377,82 @@ def main():
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
-
-    filepath_out_expt = f'results/{dataname}_experiments.csv'
-    for model_name, model_constr in models_to_test.items():
-        print(f"\nRunning model: {model_name}")
+    for hidden_dim in [2, 4, 8, 16, 32, 64, 128, 256]:
     
-        # test construction and print parameter count
-        model = model_constr(args)
-        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Number of parameters in model: {num_params}")
+        model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
+    
+        filepath_out_expt = f'results/{dataname}_experiments.csv'
+        for model_name, model_constr in models_to_test.items():
+            
+            # # TODO remove this: it's just to resume from where we were previously
+            # if (attend_dim == 32 and (model_name == 'canODE' or model_name == "canODE-multihead" or model_name == "canODE-noVal")):
+            #     continue
+            
+            try:
+                print(f"\nRunning model: {model_name}")
+            
+                # test construction and print parameter count
+                model = model_constr(model_args)
+                num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                print(f"Number of parameters in model: {num_params}")
+                
+                fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
+                                                  kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
+                                                  model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0)
+                
         
-        fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
-                                          kfolds, max_epochs, minibatch_examples, model_constr, args,
-                                          model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=2)
-        
-
-        print(f"Val Losses: {fold_losses}")
-        print(f"Epochs: {fold_epochs}")
-        print(f"Durations: {fold_times}")
-        print(f"Trn Losses: {fold_trn_losses}")
-        
-        # max of mean and mode to avoid over-optimism from outliers
-        model_score = pessimistic_summary(fold_losses)
-        model_epoch = pessimistic_summary(fold_epochs)
-        model_time = pessimistic_summary(fold_times)
-        model_trn_loss = pessimistic_summary(fold_trn_losses)
-        
-        stream.stream_scores(filepath_out_expt, True,
-            "model", model_name,
-            "model parameters", num_params,
-            "Avg Validation Score", model_score,
-            "@ Avg Epoch", model_epoch,
-            "@ Avg Elapsed Time", model_time,
-            "@ Avg Training Loss", model_trn_loss,
-            "k-folds", kfolds,
-            "early stop patience", earlystop_patience,
-            "minibatch_examples", minibatch_examples,
-            "accumulated_minibatches", accumulated_minibatches,
-            "learning rate", LR,
-            "weight decay", WD,
-            "LR_base", LR_base,
-            "WD_base", WD_base,
-            "timesteps", ode_timesteps,
-             *list(itertools.chain(*args.items())), # unroll the model args dictionary
-            prefix="\n=======================================================EXPERIMENT========================================================\n",
-            suffix="\n=========================================================================================================================\n")
+                print(f"Val Losses: {fold_losses}")
+                print(f"Epochs: {fold_epochs}")
+                print(f"Durations: {fold_times}")
+                print(f"Trn Losses: {fold_trn_losses}")
+                
+                # max of mean and mode to avoid over-optimism from outliers
+                model_score = pessimistic_summary(fold_losses)
+                model_epoch = pessimistic_summary(fold_epochs)
+                model_time = pessimistic_summary(fold_times)
+                model_trn_loss = pessimistic_summary(fold_trn_losses)
+                
+                stream.stream_scores(filepath_out_expt, True,
+                    "model", model_name,
+                    "model parameters", num_params,
+                    "Avg Validation Score", model_score,
+                    "@ Avg Epoch", model_epoch,
+                    "@ Avg Elapsed Time", model_time,
+                    "@ Avg Training Loss", model_trn_loss,
+                    "k-folds", kfolds,
+                    "early stop patience", earlystop_patience,
+                    "minibatch_examples", minibatch_examples,
+                    "accumulated_minibatches", accumulated_minibatches,
+                    "learning rate", LR,
+                    "weight decay", WD,
+                    "LR_base", LR_base,
+                    "WD_base", WD_base,
+                    "timesteps", ode_timesteps,
+                     *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                    prefix="\n=======================================================EXPERIMENT========================================================\n",
+                    suffix="\n=========================================================================================================================\n")
+                
+            except Exception as e:
+                stream.stream_scores(filepath_out_expt, True,
+                    "model", model_name,
+                    "model parameters", -1,
+                    "Avg Validation Score", -1,
+                    "@ Avg Epoch", -1,
+                    "@ Avg Elapsed Time", -1,
+                    "@ Avg Training Loss", -1,
+                    "k-folds", kfolds,
+                    "early stop patience", earlystop_patience,
+                    "minibatch_examples", minibatch_examples,
+                    "accumulated_minibatches", accumulated_minibatches,
+                    "learning rate", LR,
+                    "weight decay", WD,
+                    "LR_base", LR_base,
+                    "WD_base", WD_base,
+                    "timesteps", ode_timesteps,
+                     *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                    prefix="\n=======================================================EXPERIMENT========================================================\n",
+                    suffix="\n=========================================================================================================================\n")
+                print(f"Model {model_name} failed with error:\n{e}")
 
 
 # main
@@ -423,3 +464,6 @@ if __name__ == "__main__":
 # TODO: hyperparameters optimization based on learning rate against clock time, somehow
 # TODO: properly print & log experiment results
 # TODO: realtime visualization
+
+# TODO: Why are we getting seemingly premature early stopping compared to last night's runs? I am consistently getting one or two folds that don't learn AT ALL and greatly bring down the average for that model
+# TODO: Record each fold as a separate row instead of saving the summary statistic. I can summarize during graphing.
