@@ -299,9 +299,9 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 2
+    kfolds = 3
     max_epochs = 50000
-    earlystop_patience = 5
+    earlystop_patience = 10
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -325,15 +325,21 @@ def main():
     LR_base = 0.002
     WD_base = 0.0003
     hidden_dim = math.isqrt(data_dim)
-    deep_dim = math.isqrt(hidden_dim)
+    attend_dim = 32 # math.isqrt(hidden_dim)
+    num_heads = 8
+    depth = 6
+    ffn_dim_multiplier = 4
+    assert attend_dim % num_heads == 0, "attend_dim must be divisible by num_heads"
     
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'canODE-simple-small': lambda args: condensed_models.canODE_simple(data_dim, args["deep_dim"], args["deep_dim"]),
-        # 'canODE-simple-med': lambda args: condensed_models.canODE_simple(data_dim, args["hidden_dim"], args["deep_dim"]),
-        # 'canODE-simple': lambda args: condensed_models.canODE_simple(data_dim, args["hidden_dim"], args["hidden_dim"]),
+        'canODE-noVal': lambda args: condensed_models.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
+        'canODE': lambda args: condensed_models.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
+        'canODE-multihead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
+        'canODE-transformer': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        
         # 'cNODE-slim': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
@@ -344,8 +350,8 @@ def main():
             nn.Linear(args["hidden_dim"], args["hidden_dim"]),
             nn.ReLU(),
             nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cAttend-simple-small': lambda args: condensed_models.cAttend_simple(data_dim, args["deep_dim"], args["deep_dim"]),
-        # 'cAttend-simple-med': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["deep_dim"]),
+        # 'cAttend-simple-small': lambda args: condensed_models.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'cAttend-simple-med': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["attend_dim"]),
         # 'cAttend-simple': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["hidden_dim"]),
         # 'cNODE1': lambda args: models.cNODE1(data_dim),
         # 'cNODE2': lambda args: models.cNODE2(data_dim),
@@ -370,7 +376,7 @@ def main():
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    args = {"hidden_dim": hidden_dim, "deep_dim": deep_dim}
+    args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
     
     for model_name, model_constr in models_to_test.items():
         print(f"\nRunning model: {model_name}")
