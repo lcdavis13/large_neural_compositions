@@ -1,5 +1,5 @@
+import itertools
 import math
-import csv
 import time
 import numpy as np
 import torch
@@ -8,6 +8,7 @@ import torch.nn as nn
 import condensed_models
 import data
 import models
+import stream
 
 
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
@@ -21,41 +22,6 @@ def distribution_error(x):  # penalties for invalid distributions
     feature_penalty = torch.sum(torch.clamp(torch.abs(x - 0.5) - 0.5, min=0.0)) / x.shape[0]  # each feature penalized for distance from range [0,1]
     sum_penalty = torch.sum(torch.abs(torch.sum(x, dim=1) - 1.0)) / x.shape[0]  # sum penalized for distance from 1.0
     return a*feature_penalty + b*sum_penalty
-
-
-def stream_results(filename, print_console, *args, prefix="", suffix=""):
-    if len(args) % 2 != 0:
-        raise ValueError("Arguments should be in pairs of names and values.")
-    
-    names = args[0::2]
-    values = args[1::2]
-    
-    if print_console:
-        print(prefix + (", ".join([f"{name}: {value}" for name, value in zip(names, values)])) + suffix)
-    
-    # Check if file exists
-    if filename:
-        # Initialize the set of filenames if it doesn't exist
-        if not hasattr(stream_results, 'filenames'):
-            stream_results.filenames = set()
-        
-        # Check if it's the first time the function is called for this filename
-        if filename not in stream_results.filenames:
-            stream_results.filenames.add(filename)
-            file_started = False
-        else:
-            file_started = True
-        
-        mode = 'a' if file_started else 'w'
-        with open(filename, mode, newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            
-            # If the file is new, write the header row
-            if not file_started:
-                writer.writerow(names)
-            
-            # Write the values row
-            writer.writerow(values)
 
 
 def ceildiv(a, b):
@@ -89,10 +55,10 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, distr_er
 
 
 def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, t, outputs_per_epoch,
-                prev_examples, fold, epoch_num, model_name, dataname, loss_fn, distr_error_fn, device, verbose=True):
+                prev_examples, fold, epoch_num, model_name, dataname, loss_fn, distr_error_fn, device, verbosity=1):
     model.train()
 
-    filepath_out_incremental = f'results/{model_name}_{dataname}_incremental.csv'
+    filepath_out_incremental = f'results/logs/{model_name}_{dataname}_incremental.csv'
     
     total_loss = 0
     total_penalty = 0
@@ -144,7 +110,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         if (mb + 1) % stream_interval == 0:
             end_time = time.time()
             examples_per_second = stream_examples / (end_time - prev_time)
-            stream_results(filepath_out_incremental, verbose,
+            stream.stream_results(filepath_out_incremental, verbosity > 0,
                "fold", fold+1,
                 "epoch", epoch_num+1,
                 "minibatch", mb+1,
@@ -172,20 +138,23 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
 
 def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train, x_valid, y_valid, t,
                model_name, dataname, fold, loss_fn, distr_error_fn, weight_decay, device,
-               earlystop_patience=10, outputs_per_epoch=10, verbose=True):
+               earlystop_patience=10, outputs_per_epoch=10, verbosity=1):
     
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
-    best_loss = float('inf')
+    
+    best_epoch_loss = float('inf')
+    best_epoch_trn_loss = float('inf')
     best_epoch = -1
+    best_epoch_time = -1
     epochs_worsened = 0
     early_stop = False
     
-    filepath_out_epoch = f'results/{model_name}_{dataname}_epochs.csv'
-    filepath_out_model = f'results/{model_name}_{dataname}_model.pth'
+    filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
+    filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
     
     # initial validation benchmark
     l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
-    stream_results(filepath_out_epoch, verbose,
+    stream.stream_results(filepath_out_epoch, verbosity > 0,
         "fold", fold+1,
         "epoch", 0,
         "training examples", 0,
@@ -205,7 +174,7 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
     for e in range(max_epochs):
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
                                                  optimizer, t, outputs_per_epoch, train_examples_seen, fold, e,
-                                                 model_name, dataname, loss_fn, distr_error_fn, device, verbose)
+                                                 model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
@@ -213,7 +182,7 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
         elapsed_time = current_time - start_time
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         
-        stream_results(filepath_out_epoch, verbose,
+        stream.stream_results(filepath_out_epoch, verbosity > 0,
             "fold", fold+1,
             "epoch", e+1,
             "training examples", train_examples_seen,
@@ -227,60 +196,73 @@ def run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, L
             suffix="\n=============================================\n")
         
         # early stopping & model backups
-        if l_val < best_loss:
-            best_loss = l_val
+        if l_val < best_epoch_loss:
             best_epoch = e
+            best_epoch_loss = l_val
+            best_epoch_trn_loss = l_trn
+            best_epoch_time = elapsed_time
             epochs_worsened = 0
             torch.save(model.state_dict(), filepath_out_model)
         else:
             epochs_worsened += 1
-            if verbose:
+            if verbosity:
                 print(f"VALIDATION DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{earlystop_patience}")
             # early stop
             if epochs_worsened >= earlystop_patience:
-                if verbose:
+                if verbosity:
                     print(f'Early stopping triggered after {e + 1} epochs.')
                 early_stop = True
                 break
     
-    if verbose:
+    if verbosity:
         if not early_stop:
-            print(f"Completed training. Optimal loss was {best_loss}")
+            print(f"Completed training. Optimal loss was {best_epoch_loss}")
         else:
-            print(f"Training stopped early due to lack of improvement in validation loss. Optimal loss was {best_loss}")
+            print(f"Training stopped early due to lack of improvement in validation loss. Optimal loss was {best_epoch_loss}")
     
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
     # TODO: could also try to save the source code, but would need to copy it at time of execution and then rename it if it gets the best score.
     
-    return best_loss, best_epoch
+    return best_epoch_loss, best_epoch, best_epoch_time, best_epoch_trn_loss
 
 
 def crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience, kfolds, max_epochs,
-                        minibatch_examples, model_constr, args, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbose=True):
+                        minibatch_examples, model_constr, args, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1):
     
-    filepath_out_fold = f'results/{model_name}_{dataname}_folds.csv'
+    filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
     fold_losses = []
+    fold_trn_losses = []
+    fold_epochs = []
+    fold_times = []
     for fold_num, data_fold in enumerate(data_folded):
         model = model_constr(args).to(device)
         
         x_train, y_train, x_valid, y_valid = data_fold
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val, e = run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train,
+        val, e, elapsed_time, trn_loss = run_epochs(model, max_epochs, minibatch_examples, accumulated_minibatches, LR, x_train, y_train,
                             x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, distr_error_fn, weight_decay, device,
-                            earlystop_patience=earlystop_patience, outputs_per_epoch=10, verbose=verbose)
+                            earlystop_patience=earlystop_patience, outputs_per_epoch=10, verbosity=verbosity-1)
         fold_losses.append(val)
+        fold_epochs.append(e)
+        fold_trn_losses.append(trn_loss)
+        fold_times.append(elapsed_time)
         
-        stream_results(filepath_out_fold, verbose,
-                       "fold", fold_num+1,
-                       "Validation Loss", val,
-                       "epochs", e+1,
-                       prefix="\n========================================FOLD=========================================\n",
-                       suffix="\n=====================================================================================\n")
-    # max of mean and mode to avoid over-optimism from outliers
+        stream.stream_results(filepath_out_fold, verbosity > 0,
+            "fold", fold_num+1,
+            "Validation Loss", val,
+            "epochs", e+1,
+            "time", elapsed_time,
+            "training loss", trn_loss,
+            prefix="\n========================================FOLD=========================================\n",
+            suffix="\n=====================================================================================\n")
+        
+    return fold_losses, fold_epochs, fold_times, fold_trn_losses
+
+
+def pessimistic_summary(fold_losses):
     model_score = np.max([np.mean(fold_losses), np.median(fold_losses)])
-    print(f"Losses: {fold_losses}")
     return model_score
 
 
@@ -340,11 +322,20 @@ def main():
         'canODE-multihead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
         'canODE-transformer': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         
-        # 'cNODE-slim': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-slim-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+            nn.ReLU(),
+            nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
             nn.Linear(data_dim, args["hidden_dim"]),
             nn.ReLU(),
             nn.Linear(args["hidden_dim"], args["hidden_dim"]),
@@ -377,7 +368,8 @@ def main():
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
     args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
-    
+
+    filepath_out_expt = f'results/{dataname}_experiments.csv'
     for model_name, model_constr in models_to_test.items():
         print(f"\nRunning model: {model_name}")
     
@@ -386,11 +378,41 @@ def main():
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
-        model_score = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
+        fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
                                           kfolds, max_epochs, minibatch_examples, model_constr, args,
-                                          model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbose=False)
+                                          model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=2)
         
-        print(f"Model score: {model_score}\n")
+
+        print(f"Val Losses: {fold_losses}")
+        print(f"Epochs: {fold_epochs}")
+        print(f"Durations: {fold_times}")
+        print(f"Trn Losses: {fold_trn_losses}")
+        
+        # max of mean and mode to avoid over-optimism from outliers
+        model_score = pessimistic_summary(fold_losses)
+        model_epoch = pessimistic_summary(fold_epochs)
+        model_time = pessimistic_summary(fold_times)
+        model_trn_loss = pessimistic_summary(fold_trn_losses)
+        
+        stream.stream_scores(filepath_out_expt, True,
+            "model", model_name,
+            "model parameters", num_params,
+            "Avg Validation Score", model_score,
+            "@ Avg Epoch", model_epoch,
+            "@ Avg Elapsed Time", model_time,
+            "@ Avg Training Loss", model_trn_loss,
+            "k-folds", kfolds,
+            "early stop patience", earlystop_patience,
+            "minibatch_examples", minibatch_examples,
+            "accumulated_minibatches", accumulated_minibatches,
+            "learning rate", LR,
+            "weight decay", WD,
+            "LR_base", LR_base,
+            "WD_base", WD_base,
+            "timesteps", ode_timesteps,
+             *list(itertools.chain(*args.items())), # unroll the model args dictionary
+            prefix="\n=======================================================EXPERIMENT========================================================\n",
+            suffix="\n=========================================================================================================================\n")
 
 
 # main
