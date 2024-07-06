@@ -281,9 +281,9 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 3
+    kfolds = 7
     max_epochs = 50000
-    earlystop_patience = 10
+    earlystop_patience = 20
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -310,40 +310,39 @@ def main():
     attend_dim = 32 # math.isqrt(hidden_dim)
     num_heads = 8
     depth = 6
-    ffn_dim_multiplier = 4
+    ffn_dim_multiplier = 1
     assert attend_dim % num_heads == 0, "attend_dim must be divisible by num_heads"
     
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'canODE-noVal': lambda args: condensed_models.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE-noVal': lambda args: condensed_models.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
         'canODE': lambda args: condensed_models.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
         'canODE-multihead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
+        'canODE-singlehead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
         'canODE-transformer': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         
-        'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cAttend-simple-small': lambda args: condensed_models.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'cAttend-simple-med': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["attend_dim"]),
-        # 'cAttend-simple': lambda args: condensed_models.cAttend_simple(data_dim, args["hidden_dim"], args["hidden_dim"]),
+        # 'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cAttend-simple': lambda args: condensed_models.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'cNODE1': lambda args: models.cNODE1(data_dim),
         # 'cNODE2': lambda args: models.cNODE2(data_dim),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
