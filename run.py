@@ -317,42 +317,49 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
+        # 'baseline-cNODE0': lambda args: models.cNODE0(data_dim),
+        # 'baseline-cNODE2-width1': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, 1),
+        #     nn.Linear(1, data_dim))),
+        
         # 'canODE-noVal': lambda args: condensed_models.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE': lambda args: condensed_models.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE-multihead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
         # 'canODE-singlehead': lambda args: condensed_models.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
         # 'canODE-transformer': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        'canODE-transformer-d2': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
+        'canODE-transformer-d6': lambda args: condensed_models.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         
-        'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-deep4-flat': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], data_dim))),
-        'cNODE-deep4-flat-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-            nn.ReLU(),
-            nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep4-flat': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep4-flat-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
         # 'cAttend-simple': lambda args: condensed_models.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'cNODE1': lambda args: models.cNODE1(data_dim),
         # 'cNODE2': lambda args: models.cNODE2(data_dim),
@@ -377,16 +384,21 @@ def main():
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
     
-    for hidden_dim in [2, 4, 8, 16, 32, 64, 128, 256]:
+    # START of hacky hyperparam search - remove
+    for hidden_dim in [1, 2, 4, 8, 16, 32, 64]:
+        attend_dim = hidden_dim
+        # num_heads = attend_dim
+        num_heads = {1:1, 2:2, 4:2, 8:4, 16:4, 32:8, 64:8}[attend_dim]
+        # END of hacky hyperparam search - remove
     
         model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
     
         filepath_out_expt = f'results/{dataname}_experiments.csv'
         for model_name, model_constr in models_to_test.items():
             
-            # # TODO remove this: it's just to resume from where we were previously
-            # if (attend_dim == 32 and (model_name == 'canODE' or model_name == "canODE-multihead" or model_name == "canODE-noVal")):
-            #     continue
+            # TODO remove this: it's just to resume from where we were previously
+            if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
+                continue
             
             try:
                 print(f"\nRunning model: {model_name}")
@@ -467,3 +479,11 @@ if __name__ == "__main__":
 
 # TODO: Why are we getting seemingly premature early stopping compared to last night's runs? I am consistently getting one or two folds that don't learn AT ALL and greatly bring down the average for that model
 # TODO: Record each fold as a separate row instead of saving the summary statistic. I can summarize during graphing.
+# TODO: Try transfer learning with shared ODE but separate embed/unembed - espcially x-shaped conjoined networks for "simultaneous transfer learning" (lockstep learning?)
+# TODO: Create a parameterized generalized version of the canODE models so I can explore the model architectures as hyperparameters
+# TODO: Attention layers in a DEQ (deep equilibrium model) similar to the nODE to produce F(x) for the ODE
+# TODO: As an alternative to attention, try condensing into a high enough space that we can still use channels as IDs (minimum size would be the largest summed assemblage in the dataset) and then use a vanilla (but smaller) cNODE. The difficulty here is that the embed mapping needs to be dynamic because many input channels will map to the same embedded channels and some of those could occur at the same time. There effectively needs to be the ability to decide on the fly that "A should go in M but that's already occupied by B, so A will go in N instead, which has the same properties as M" ... which means the embedding needs to have redundancies. I guess I could hardcode there being a few redundant copies of each channel somehow (shared weights?) but I don't like that idea. In general this seems much weaker than using attention to divorce the species representations from the preferred basis, allowing them to share dynamics to exactly the extent that is helpful via independent subspaces.
+# TODO: Add param count to filename of logs
+# TODO: Confirm that changes of t shape do not alter performance, then remove t argument to model forward for non-ODEfuncs. The t can be generated in forward to pass to odeint.
+# TODO: Test non-ODE baseline model that is just a linear layer. Also linear layer with the replicator equation applied once.
+# TODO: Test multi-layer attention-based models that are not fed into ODEs.
