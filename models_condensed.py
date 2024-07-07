@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from torchdiffeq import odeint
@@ -152,7 +154,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
         super(canODE_transformer, self).__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
-        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads, dim_feedforward=id_embed_dim*ffn_dim_multiplier,
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads, dim_feedforward=math.ceil(id_embed_dim*ffn_dim_multiplier),
             activation="gelu", batch_first=True, dropout=0.0)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         self.attend = nn.MultiheadAttention(id_embed_dim, num_heads, batch_first=True, dropout=0.0)
@@ -172,13 +174,6 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
         
         y = decondense(y, pos, self.data_dim)
         return y
-    
-    
-class ctnODE(nn.Module):
-    def __init__(self, data_dim, id_embed_dim, qk_dim):
-        encoder_layer = nn.TransformerEncoderLayer(d_model=qk_dim, nhead=8, dim_feedforward=id_embed_dim,
-            activation="gelu", batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
     
     
 if __name__ == '__main__':

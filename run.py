@@ -319,11 +319,11 @@ def main():
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
         # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
-        'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
-        'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
-        'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
-        'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(data_dim),
-        'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
+        # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
+        # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
+        # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
+        # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(data_dim),
+        # 'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
         # 'baseline-cNODE2-width1': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
         #     nn.Linear(data_dim, 1),
         #     nn.Linear(1, data_dim))),
@@ -332,7 +332,7 @@ def main():
         # 'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
         # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
-        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
@@ -398,80 +398,88 @@ def main():
     #     num_heads = {1:1, 2:2, 4:2, 8:4, 16:4, 32:8, 64:8}[attend_dim]
     #     # END of hacky hyperparam search - remove
     
-    model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
-
-    filepath_out_expt = f'results/{dataname}_experiments.csv'
-    for model_name, model_constr in models_to_test.items():
-        
-        # # TODO remove this: it's just to resume from where we were previously
-        # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
-        #     continue
-        
-        try:
-            print(f"\nRunning model: {model_name}")
-        
-            # test construction and print parameter count
-            model = model_constr(model_args)
-            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            print(f"Number of parameters in model: {num_params}")
-            
-            fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
-                                              kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0)
-            
+    for num_heads in [2, 4, 8, 16]:
+        for head_dim in [4, 8, 16, 32]:
+            attend_dim = num_heads * head_dim
+            if attend_dim > data_dim:
+                continue
+            for ffn_dim_multiplier in [0.5, 1.0, 2.0]:
+                for depth in [2, 3]:
     
-            print(f"Val Losses: {fold_losses}")
-            print(f"Epochs: {fold_epochs}")
-            print(f"Durations: {fold_times}")
-            print(f"Trn Losses: {fold_trn_losses}")
-            
-            # max of mean and mode to avoid over-optimism from outliers
-            model_score = pessimistic_summary(fold_losses)
-            model_epoch = pessimistic_summary(fold_epochs)
-            model_time = pessimistic_summary(fold_times)
-            model_trn_loss = pessimistic_summary(fold_trn_losses)
-            
-            stream.stream_scores(filepath_out_expt, True,
-                "model", model_name,
-                "model parameters", num_params,
-                "Avg Validation Score", model_score,
-                "@ Avg Epoch", model_epoch,
-                "@ Avg Elapsed Time", model_time,
-                "@ Avg Training Loss", model_trn_loss,
-                "k-folds", kfolds,
-                "early stop patience", earlystop_patience,
-                "minibatch_examples", minibatch_examples,
-                "accumulated_minibatches", accumulated_minibatches,
-                "learning rate", LR,
-                "weight decay", WD,
-                "LR_base", LR_base,
-                "WD_base", WD_base,
-                "timesteps", ode_timesteps,
-                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                suffix="\n=========================================================================================================================\n")
-            
-        except Exception as e:
-            stream.stream_scores(filepath_out_expt, True,
-                "model", model_name,
-                "model parameters", -1,
-                "Avg Validation Score", -1,
-                "@ Avg Epoch", -1,
-                "@ Avg Elapsed Time", -1,
-                "@ Avg Training Loss", -1,
-                "k-folds", kfolds,
-                "early stop patience", earlystop_patience,
-                "minibatch_examples", minibatch_examples,
-                "accumulated_minibatches", accumulated_minibatches,
-                "learning rate", LR,
-                "weight decay", WD,
-                "LR_base", LR_base,
-                "WD_base", WD_base,
-                "timesteps", ode_timesteps,
-                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                suffix="\n=========================================================================================================================\n")
-            print(f"Model {model_name} failed with error:\n{e}")
+                    model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
+                
+                    filepath_out_expt = f'results/{dataname}_experiments.csv'
+                    for model_name, model_constr in models_to_test.items():
+                        
+                        # # TODO remove this: it's just to resume from where we were previously
+                        # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
+                        #     continue
+                        
+                        try:
+                            print(f"\nRunning model: {model_name}")
+                        
+                            # test construction and print parameter count
+                            model = model_constr(model_args)
+                            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                            print(f"Number of parameters in model: {num_params}")
+                            
+                            fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
+                                                              kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
+                                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0)
+                            
+                    
+                            print(f"Val Losses: {fold_losses}")
+                            print(f"Epochs: {fold_epochs}")
+                            print(f"Durations: {fold_times}")
+                            print(f"Trn Losses: {fold_trn_losses}")
+                            
+                            # max of mean and mode to avoid over-optimism from outliers
+                            model_score = pessimistic_summary(fold_losses)
+                            model_epoch = pessimistic_summary(fold_epochs)
+                            model_time = pessimistic_summary(fold_times)
+                            model_trn_loss = pessimistic_summary(fold_trn_losses)
+                            
+                            stream.stream_scores(filepath_out_expt, True,
+                                "model", model_name,
+                                "model parameters", num_params,
+                                "Avg Validation Score", model_score,
+                                "@ Avg Epoch", model_epoch,
+                                "@ Avg Elapsed Time", model_time,
+                                "@ Avg Training Loss", model_trn_loss,
+                                "k-folds", kfolds,
+                                "early stop patience", earlystop_patience,
+                                "minibatch_examples", minibatch_examples,
+                                "accumulated_minibatches", accumulated_minibatches,
+                                "learning rate", LR,
+                                "weight decay", WD,
+                                "LR_base", LR_base,
+                                "WD_base", WD_base,
+                                "timesteps", ode_timesteps,
+                                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                suffix="\n=========================================================================================================================\n")
+                            
+                        except Exception as e:
+                            stream.stream_scores(filepath_out_expt, True,
+                                "model", model_name,
+                                "model parameters", -1,
+                                "Avg Validation Score", -1,
+                                "@ Avg Epoch", -1,
+                                "@ Avg Elapsed Time", -1,
+                                "@ Avg Training Loss", -1,
+                                "k-folds", kfolds,
+                                "early stop patience", earlystop_patience,
+                                "minibatch_examples", minibatch_examples,
+                                "accumulated_minibatches", accumulated_minibatches,
+                                "learning rate", LR,
+                                "weight decay", WD,
+                                "LR_base", LR_base,
+                                "WD_base", WD_base,
+                                "timesteps", ode_timesteps,
+                                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                suffix="\n=========================================================================================================================\n")
+                            print(f"Model {model_name} failed with error:\n{e}")
 
 
 # main
