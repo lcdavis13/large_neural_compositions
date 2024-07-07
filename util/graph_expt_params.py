@@ -7,6 +7,8 @@ df = pd.read_csv(file_path)
 
 # Filter for the same experiment hyperparameters
 df = df[(df['k-folds'] == 3) & (df['early stop patience'] == 15)]
+# df = df[(~df['model'].str.contains("canODE"))]
+df = df[(~df['model'].str.startswith("cNODE"))]
 
 # Filter out invalid rows from exceptions
 df = df[df['model parameters'] > 0]
@@ -28,7 +30,8 @@ for model in models:
 plt.xscale('log')
 
 # plt.ylim(bottom=0)
-plt.ylim(top=0.14)
+# plt.ylim(top=0.14)
+# plt.ylim(top=0.3)
 
 # Add labels and title
 plt.xlabel('Model Parameters (Log Scale)')
