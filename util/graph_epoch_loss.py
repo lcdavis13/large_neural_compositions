@@ -6,10 +6,13 @@ import itertools
 import numpy as np
 
 # Define the folder containing the CSV files
-folder_path = '../results/to-save'
+folder_path = '../results/logs/'
 
 # Get all CSV files in the folder that end with "_epochs.csv"
-csv_files = glob.glob(os.path.join(folder_path, '*ocean_epochs.csv'))
+csv_files1 = glob.glob(os.path.join(folder_path, 'canODE-transformer-d3-a8-h2-f0.5*_epochs.csv'))
+csv_files2 = glob.glob(os.path.join(folder_path, 'baseline*_epochs.csv'))
+csv_files = csv_files1 + csv_files2
+
 
 # Initialize a dictionary to hold data from all files
 data = {}

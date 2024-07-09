@@ -332,10 +332,11 @@ def main():
         # 'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
         # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
-        'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
+        'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(data_dim, 8, 2, 3, 0.5),
         
         # 'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
@@ -397,89 +398,91 @@ def main():
     #     # num_heads = attend_dim
     #     num_heads = {1:1, 2:2, 4:2, 8:4, 16:4, 32:8, 64:8}[attend_dim]
     #     # END of hacky hyperparam search - remove
-    
-    for num_heads in [2, 4, 8, 16]:
-        for head_dim in [4, 8, 16, 32]:
-            attend_dim = num_heads * head_dim
-            if attend_dim > data_dim:
-                continue
-            for ffn_dim_multiplier in [0.5, 1.0, 2.0]:
-                for depth in [2, 3]:
-    
-                    model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
-                
-                    filepath_out_expt = f'results/{dataname}_experiments.csv'
-                    for model_name, model_constr in models_to_test.items():
-                        
-                        # # TODO remove this: it's just to resume from where we were previously
-                        # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
-                        #     continue
-                        
-                        try:
-                            print(f"\nRunning model: {model_name}")
-                        
-                            # test construction and print parameter count
-                            model = model_constr(model_args)
-                            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                            print(f"Number of parameters in model: {num_params}")
-                            
-                            fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
-                                                              kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0)
-                            
+
+    # START of hacky hyperparam search - remove
+    # for num_heads in [2, 4, 8, 16]:
+    #     for head_dim in [4, 8, 16, 32]:
+    #         attend_dim = num_heads * head_dim
+    #         if attend_dim > data_dim:
+    #             continue
+    #         for ffn_dim_multiplier in [0.5, 1.0, 2.0]:
+    #             for depth in [2, 3]:
+    #     # END of hacky hyperparam search - remove
                     
-                            print(f"Val Losses: {fold_losses}")
-                            print(f"Epochs: {fold_epochs}")
-                            print(f"Durations: {fold_times}")
-                            print(f"Trn Losses: {fold_trn_losses}")
-                            
-                            # max of mean and mode to avoid over-optimism from outliers
-                            model_score = pessimistic_summary(fold_losses)
-                            model_epoch = pessimistic_summary(fold_epochs)
-                            model_time = pessimistic_summary(fold_times)
-                            model_trn_loss = pessimistic_summary(fold_trn_losses)
-                            
-                            stream.stream_scores(filepath_out_expt, True,
-                                "model", model_name,
-                                "model parameters", num_params,
-                                "Avg Validation Score", model_score,
-                                "@ Avg Epoch", model_epoch,
-                                "@ Avg Elapsed Time", model_time,
-                                "@ Avg Training Loss", model_trn_loss,
-                                "k-folds", kfolds,
-                                "early stop patience", earlystop_patience,
-                                "minibatch_examples", minibatch_examples,
-                                "accumulated_minibatches", accumulated_minibatches,
-                                "learning rate", LR,
-                                "weight decay", WD,
-                                "LR_base", LR_base,
-                                "WD_base", WD_base,
-                                "timesteps", ode_timesteps,
-                                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                                suffix="\n=========================================================================================================================\n")
-                            
-                        except Exception as e:
-                            stream.stream_scores(filepath_out_expt, True,
-                                "model", model_name,
-                                "model parameters", -1,
-                                "Avg Validation Score", -1,
-                                "@ Avg Epoch", -1,
-                                "@ Avg Elapsed Time", -1,
-                                "@ Avg Training Loss", -1,
-                                "k-folds", kfolds,
-                                "early stop patience", earlystop_patience,
-                                "minibatch_examples", minibatch_examples,
-                                "accumulated_minibatches", accumulated_minibatches,
-                                "learning rate", LR,
-                                "weight decay", WD,
-                                "LR_base", LR_base,
-                                "WD_base", WD_base,
-                                "timesteps", ode_timesteps,
-                                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                                suffix="\n=========================================================================================================================\n")
-                            print(f"Model {model_name} failed with error:\n{e}")
+    model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
+    
+    filepath_out_expt = f'results/{dataname}_experiments.csv'
+    for model_name, model_constr in models_to_test.items():
+        
+        # # TODO remove this: it's just to resume from where we were previously
+        # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
+        #     continue
+        
+        try:
+            print(f"\nRunning model: {model_name}")
+        
+            # test construction and print parameter count
+            model = model_constr(model_args)
+            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"Number of parameters in model: {num_params}")
+            
+            fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
+                                              kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
+                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0)
+            
+    
+            print(f"Val Losses: {fold_losses}")
+            print(f"Epochs: {fold_epochs}")
+            print(f"Durations: {fold_times}")
+            print(f"Trn Losses: {fold_trn_losses}")
+            
+            # max of mean and mode to avoid over-optimism from outliers
+            model_score = pessimistic_summary(fold_losses)
+            model_epoch = pessimistic_summary(fold_epochs)
+            model_time = pessimistic_summary(fold_times)
+            model_trn_loss = pessimistic_summary(fold_trn_losses)
+            
+            stream.stream_scores(filepath_out_expt, True,
+                "model", model_name,
+                "model parameters", num_params,
+                "Avg Validation Score", model_score,
+                "@ Avg Epoch", model_epoch,
+                "@ Avg Elapsed Time", model_time,
+                "@ Avg Training Loss", model_trn_loss,
+                "k-folds", kfolds,
+                "early stop patience", earlystop_patience,
+                "minibatch_examples", minibatch_examples,
+                "accumulated_minibatches", accumulated_minibatches,
+                "learning rate", LR,
+                "weight decay", WD,
+                "LR_base", LR_base,
+                "WD_base", WD_base,
+                "timesteps", ode_timesteps,
+                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                suffix="\n=========================================================================================================================\n")
+            
+        except Exception as e:
+            stream.stream_scores(filepath_out_expt, True,
+                "model", model_name,
+                "model parameters", -1,
+                "Avg Validation Score", -1,
+                "@ Avg Epoch", -1,
+                "@ Avg Elapsed Time", -1,
+                "@ Avg Training Loss", -1,
+                "k-folds", kfolds,
+                "early stop patience", earlystop_patience,
+                "minibatch_examples", minibatch_examples,
+                "accumulated_minibatches", accumulated_minibatches,
+                "learning rate", LR,
+                "weight decay", WD,
+                "LR_base", LR_base,
+                "WD_base", WD_base,
+                "timesteps", ode_timesteps,
+                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                suffix="\n=========================================================================================================================\n")
+            print(f"Model {model_name} failed with error:\n{e}")
 
 
 # main
@@ -494,7 +497,7 @@ if __name__ == "__main__":
 # TODO: Add param count to filename of logs
 # TODO: Record each fold as a separate row instead of saving the summary statistic. I can summarize during graphing.
 
-# TODO: Try transfer learning with shared ODE but separate embed/unembed - espcially x-shaped conjoined networks for "simultaneous transfer learning" (lockstep learning?)
+# TODO: Try transfer learning with shared ODE but separate embed/unembed - espcially x-shaped conjoined networks for joint learning. Or Reptile for similar metalearning.
 # TODO: Create a parameterized generalized version of the canODE models so I can explore the model architectures as hyperparameters
 # TODO: Attention layers in a DEQ (deep equilibrium model) similar to the nODE to produce F(x) for the ODE
 # TODO: (Probably not a good idea) As an alternative to attention, try condensing into a high enough space that we can still use channels as IDs (minimum size would be the largest summed assemblage in the dataset) and then use a vanilla (but smaller) cNODE. The difficulty here is that the embed mapping needs to be dynamic because many input channels will map to the same embedded channels and some of those could occur at the same time. There effectively needs to be the ability to decide on the fly that "A should go in M but that's already occupied by B, so A will go in N instead, which has the same properties as M" ... which means the embedding needs to have redundancies. I guess I could hardcode there being a few redundant copies of each channel somehow (shared weights?) but I don't like that idea. In general this seems much weaker than using attention to divorce the species representations from the preferred basis, allowing them to share dynamics to exactly the extent that is helpful via independent subspaces.
