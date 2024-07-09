@@ -74,7 +74,7 @@ class canODE_attentionNoValue(nn.Module): # compositional attention nODE
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
-        self.func = models.ODEFunc_cNODE_GenRun()
+        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
         self.scale_factor = qk_dim ** -0.5
     
     def forward(self, t, x):
@@ -105,7 +105,7 @@ class canODE_attention(nn.Module): # compositional attention nODE
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
         self.w_v = nn.Linear(id_embed_dim, 1)
-        self.func = models.ODEFunc_cNODE_GenRun()
+        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
     
     def forward(self, t, x):
         val, pos = condense(x)
@@ -130,7 +130,7 @@ class canODE_attentionMultihead(nn.Module): # compositional attention nODE
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
         self.attend = nn.MultiheadAttention(id_embed_dim, num_heads, batch_first=True, dropout=0.0)
         self.decode = nn.Linear(id_embed_dim, 1) # because pytorch's implementation doesn't support using a different embedding dim for V+Output than for Q+K
-        self.func = models.ODEFunc_cNODE_GenRun()
+        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
     
     def forward(self, t, x):
         val, pos = condense(x)
@@ -159,7 +159,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         self.attend = nn.MultiheadAttention(id_embed_dim, num_heads, batch_first=True, dropout=0.0)
         self.decode = nn.Linear(id_embed_dim,1)
-        self.func = models.ODEFunc_cNODE_GenRun()
+        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
     
     def forward(self, t, x):
         val, pos = condense(x)

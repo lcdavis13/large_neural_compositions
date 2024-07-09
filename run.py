@@ -324,7 +324,7 @@ def main():
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(data_dim),
         # 'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
-        # 'baseline-cNODE2-width1': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, 1),
         #     nn.Linear(1, data_dim))),
         
@@ -336,31 +336,31 @@ def main():
         # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
-        'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(data_dim, 8, 2, 3, 0.5),
+        # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(data_dim, 8, 2, 3, 0.5),
         
-        # 'cNODE2-custom': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        # 'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE2-custom-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE-deep3': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE-deep3-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        # 'cNODE2-custom-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep3': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE-deep3-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE-deep4-flat': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        # 'cNODE-deep4-flat': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE-deep4-flat-nl': lambda args: models.cNODE_Gen(lambda: nn.Sequential(
+        # 'cNODE-deep4-flat-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
@@ -373,8 +373,9 @@ def main():
         # 'cNODE2': lambda args: models.cNODE2(data_dim),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
         # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(data_dim), # sanity test, this is the same as cNODE2 but less optimized
-        # 'cNODE2-Gen': lambda args: models.cNODE_Gen(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        # "cNODE2-GenRun": lambda args: models.cNODE2_GenRun(data_dim), # sanity test, this is the same as cNODE2 but with f(x) computed outside the ODE
+        # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        # "cNODE2-ExternalFitness": lambda args: models.cNODE2_ExternalFitness(data_dim),
+        "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
 
 

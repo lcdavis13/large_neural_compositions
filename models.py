@@ -81,9 +81,9 @@ class Embedded_cNODE2(nn.Module):
         return y
 
 
-class ODEFunc_cNODE_Gen(nn.Module):  # cNODE2 with generalized f(x), specified at construction
+class ODEFunc_cNODEGen_ConstructedFitness(nn.Module):  # cNODE2 with generalized f(x), specified via a constructor for the f(x) object passed during construction
     def __init__(self, f_constr):
-        super(ODEFunc_cNODE_Gen, self).__init__()
+        super(ODEFunc_cNODEGen_ConstructedFitness, self).__init__()
         self.f = f_constr()
     
     def forward(self, t, x):
@@ -95,32 +95,72 @@ class ODEFunc_cNODE_Gen(nn.Module):  # cNODE2 with generalized f(x), specified a
         
         return dxdt  # B x N
     
-class cNODE_Gen(nn.Module):
+    
+class cNODEGen_ConstructedFitness(nn.Module):
     def __init__(self, f_constr):
-        super(cNODE_Gen, self).__init__()
-        self.func = ODEFunc_cNODE_Gen(f_constr)
+        super(cNODEGen_ConstructedFitness, self).__init__()
+        self.func = ODEFunc_cNODEGen_ConstructedFitness(f_constr)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)[-1]
         return y
 
 
-class ODEFunc_cNODE_GenRun(nn.Module):  # cNODE2 with generalized f(x), computed by calling context at runtime
-    def __init__(self):
-        super(ODEFunc_cNODE_GenRun, self).__init__()
+class ODEFunc_cNODEGen_FnFitness(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
+    def __init__(self, f):
+        super(ODEFunc_cNODEGen_FnFitness, self).__init__()
+        self.f = f
     
-    def forward(self, t, x, fx):
+    def forward(self, t, x):
+        fx = self.f(x)  # B x N
+        
         xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
         return dxdt  # B x N
-
-
-class cNODE2_GenRun(nn.Module):
+    
+class cNODEGen_FnFitness(nn.Module):
+    def __init__(self, f):
+        super(cNODEGen_FnFitness, self).__init__()
+        self.func = ODEFunc_cNODEGen_FnFitness(f)
+    
+    def forward(self, t, x):
+        y = odeint(self.func, x, t)[-1]
+        return y
+    
+class cNODE2_FnFitness(nn.Module):
     def __init__(self, N):
-        super(cNODE2_GenRun, self).__init__()
-        self.func = ODEFunc_cNODE_GenRun()
+        super(cNODE2_FnFitness, self).__init__()
+        f = nn.Sequential(
+            nn.Linear(N, N),
+            nn.Linear(N, N)
+        )
+        self.func = ODEFunc_cNODEGen_FnFitness(f)
+    
+    def forward(self, t, x):
+        y = odeint(self.func, x, t)[-1]
+        return y
+
+
+class ODEFunc_cNODEGen_ExternalFitness(nn.Module):  # cNODE2 with generalized f(x0), computed by calling context at runtime
+    # Note that, while f(x0) can be a function of the initial vector x0, it cannot be a function of the evolving value x
+    # as the ODE is evaluated, unlike normal implementations of cNODE.
+    def __init__(self):
+        super(ODEFunc_cNODEGen_ExternalFitness, self).__init__()
+    
+    def forward(self, t, x, fx0):
+        xT_fx = torch.sum(x * fx0, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fx0 - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt  # B x N
+
+
+class cNODE2_ExternalFitness(nn.Module):
+    def __init__(self, N):
+        super(cNODE2_ExternalFitness, self).__init__()
+        self.func = ODEFunc_cNODEGen_ExternalFitness()
         self.fcc1 = nn.Linear(N, N)
         self.fcc2 = nn.Linear(N, N)
     
