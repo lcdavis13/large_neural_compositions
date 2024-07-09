@@ -282,10 +282,10 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
-    kfolds = 3
-    min_epochs = 60
-    max_epochs = 300
-    earlystop_patience = 15
+    kfolds = 2
+    min_epochs = 20
+    max_epochs = 500
+    earlystop_patience = 5
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -304,10 +304,11 @@ def main():
     
     
     # Hyperparameters to tune
-    minibatch_examples = 30
+    minibatch_examples = 1
     accumulated_minibatches = 1
     LR_base = 0.002
     WD_base = 0.00003
+    
     hidden_dim = math.isqrt(data_dim)
     attend_dim = 16 # math.isqrt(hidden_dim)
     num_heads = 4
@@ -330,10 +331,10 @@ def main():
         
         'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
-        # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
-        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
+        'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
+        'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
+        'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
@@ -430,7 +431,7 @@ def main():
             
             fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
                                               kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0)
+                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=3)
             
     
             print(f"Val Losses: {fold_losses}")
@@ -438,31 +439,37 @@ def main():
             print(f"Durations: {fold_times}")
             print(f"Trn Losses: {fold_trn_losses}")
             
-            # max of mean and mode to avoid over-optimism from outliers
+            for i in len(fold_losses):
+                stream.stream_scores(filepath_out_expt, True,
+                    "model", model_name,
+                    "model parameters", num_params,
+                    "Validation Score", fold_losses,
+                    "@ Epoch", fold_epochs,
+                    "@ Elapsed Time", fold_times,
+                    "@ Training Loss", fold_trn_losses,
+                    "k-folds", kfolds,
+                    "early stop patience", earlystop_patience,
+                    "minibatch_examples", minibatch_examples,
+                    "accumulated_minibatches", accumulated_minibatches,
+                    "learning rate", LR,
+                    "weight decay", WD,
+                    "LR_base", LR_base,
+                    "WD_base", WD_base,
+                    "timesteps", ode_timesteps,
+                     *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                    prefix="\n=======================================================EXPERIMENT========================================================\n",
+                    suffix="\n=========================================================================================================================\n")
+            
+            # summary score for each result vector
             model_score = pessimistic_summary(fold_losses)
             model_epoch = pessimistic_summary(fold_epochs)
             model_time = pessimistic_summary(fold_times)
             model_trn_loss = pessimistic_summary(fold_trn_losses)
             
-            stream.stream_scores(filepath_out_expt, True,
-                "model", model_name,
-                "model parameters", num_params,
-                "Avg Validation Score", model_score,
-                "@ Avg Epoch", model_epoch,
-                "@ Avg Elapsed Time", model_time,
-                "@ Avg Training Loss", model_trn_loss,
-                "k-folds", kfolds,
-                "early stop patience", earlystop_patience,
-                "minibatch_examples", minibatch_examples,
-                "accumulated_minibatches", accumulated_minibatches,
-                "learning rate", LR,
-                "weight decay", WD,
-                "LR_base", LR_base,
-                "WD_base", WD_base,
-                "timesteps", ode_timesteps,
-                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                suffix="\n=========================================================================================================================\n")
+            print(f"Avg Val Losses: {model_score}")
+            print(f"Avg Epochs: {model_epoch}")
+            print(f"Avg Durations: {model_time}")
+            print(f"Avg Trn Losses: {model_trn_loss}")
             
         except Exception as e:
             stream.stream_scores(filepath_out_expt, True,

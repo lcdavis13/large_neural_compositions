@@ -32,6 +32,9 @@ def load_data(filepath_train, device):
 
 
 def fold_data(x, y, k=5):
+    if k < 0:  # Hold out 1 sample for negative values
+        k = x.size(0)
+    
     # Split data into k folds
     kf = KFold(n_splits=k, shuffle=True, random_state=42)
     
