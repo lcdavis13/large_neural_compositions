@@ -128,6 +128,22 @@ class cNODEGen_FnFitness(nn.Module):
     def forward(self, t, x):
         y = odeint(self.func, x, t)[-1]
         return y
+
+
+class ODEFunc_cNODEGen_FnFitness_Args(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
+    def __init__(self, f):
+        super(ODEFunc_cNODEGen_FnFitness_Args, self).__init__()
+        self.f = f
+    
+    def forward(self, t, x, args):
+        fx = self.f(x, args)  # B x N
+        
+        xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fx - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt  # B x N
+
     
 class cNODE2_FnFitness(nn.Module):
     def __init__(self, N):

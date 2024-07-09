@@ -65,11 +65,50 @@ class cAttend_simple(nn.Module):
         
         y = decondense(val, pos, self.data_dim)
         return y
+    
+    
+class AttentionNoValue(nn.Module):
+    def __init__(self, id_embed_dim, qk_dim):
+        super(AttentionNoValue, self).__init__()
+        self.w_q = nn.Linear(id_embed_dim, qk_dim)
+        self.w_k = nn.Linear(id_embed_dim, qk_dim)
+        self.scale_factor = qk_dim ** -0.5
+
+    def forward(self, val, id_embed):
+        # torch.concat(val, id_embed, -1) # TODO: concat val onto id_embed. Adjust w_q and w_k to be +1 input dim.
+        q = self.w_q(id_embed)
+        k = self.w_k(id_embed)
+        soft_weights = torch.einsum('...id , ...jd -> ...ij', q, k) * self.scale_factor
+        fx = torch.einsum('...ij, ...j -> ...i', soft_weights, val)
+        # intentionally not computing v from attention mechanism, since with a single head it could not produce both benefits and harms to fitness.
+        # Without softmax and without v, the dot product of Q+K can be either positive or negative, increasing or decreasing fitness.
+        # But multihead attention could solve that in a more flexible way.
+        return fx
 
 
 class canODE_attentionNoValue(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
         super(canODE_attentionNoValue, self).__init__()
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
+        attend = AttentionNoValue(id_embed_dim, qk_dim)
+        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
+    
+    def forward(self, t, x):
+        val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        
+        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)[-1]
+        
+        y = decondense(y, pos, self.data_dim)
+        return y
+
+
+class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
+    def __init__(self, data_dim, id_embed_dim, qk_dim):
+        super(canODE_attentionNoValue_static, self).__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
@@ -176,7 +215,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
         return y
     
     
-if __name__ == '__main__':
+if __name__ == '__main__': # test
     B = 5
     
     # random test data
@@ -201,9 +240,11 @@ if __name__ == '__main__':
     E_dim = 5
     QK_dim = 4
     num_heads = 2
+    # model = canODE_attentionNoValue(N, E_dim, QK_dim)
+    model = canODE_attentionNoValue_static(N, E_dim, QK_dim)
     # model = canODE_attention(N, E_dim, QK_dim)
     # model = canODE_attentionMultihead(N, QK_dim, num_heads)
-    model = canODE_transformer(N, QK_dim, num_heads, depth=6, ffn_dim_multiplier=4)
+    # model = canODE_transformer(N, QK_dim, num_heads, depth=6, ffn_dim_multiplier=4)
     y_pred = model(t, x)
     print(y_pred)
     
