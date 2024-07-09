@@ -37,6 +37,9 @@ for file in csv_files:
     # Initialize an empty list for storing data for each fold
     if model_name not in data:
         data[model_name] = []
+    #
+    # # Filter for fold=0 and epoch <= 60
+    # df = df[(df['fold'] == 1) & (df['epoch'] <= 50)]
     
     # Group by fold and extract epoch, Avg Validation Loss, and Elapsed Time
     for fold, group in df.groupby('fold'):
@@ -90,7 +93,6 @@ plt.xlabel('Epoch')
 plt.ylabel('Avg Validation Loss')
 plt.title('Avg Validation Loss vs Epoch')
 plt.legend()
-plt.ylim(bottom=0)
 plt.grid(True)
 plt.show()
 
@@ -120,6 +122,5 @@ plt.xlabel('Elapsed Time')
 plt.ylabel('Avg Validation Loss')
 plt.title('Avg Validation Loss vs Elapsed Time')
 plt.legend()
-plt.ylim(bottom=0)
 plt.grid(True)
 plt.show()
