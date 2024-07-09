@@ -188,7 +188,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
             "epoch", e+1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
-            "Avg Training Distr Error", l_trn,
+            "Avg Training Distr Error", p_trn,
             "Avg Validation Loss", l_val,
             "Avg Validation Distr Error", p_val,
             "Elapsed Time", elapsed_time,
@@ -283,9 +283,10 @@ def main():
     # dataname = "dki-real"
     
     kfolds = 2
-    min_epochs = 20
-    max_epochs = 500
-    earlystop_patience = 5
+    min_epochs = 50
+    max_epochs = 60
+    earlystop_patience = 1
+    DEBUG_SINGLE_FOLD = True
     
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -295,6 +296,9 @@ def main():
     filepath_train = f'data/{dataname}_train.csv'
     x, y = data.load_data(filepath_train, device)
     data_folded = data.fold_data(x, y, kfolds)
+    if DEBUG_SINGLE_FOLD:
+        data_folded = [data_folded[0]]
+    
     print('dataset:', filepath_train)
     print(f'training data shape: {data_folded[0][0].shape}')
     print(f'validation data shape: {data_folded[0][2].shape}')
@@ -329,12 +333,12 @@ def main():
         #     nn.Linear(data_dim, 1),
         #     nn.Linear(1, data_dim))),
         
-        'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(data_dim, args["attend_dim"], args["attend_dim"]),
-        'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
-        'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
-        'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
-        'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
+        # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
+        # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
+        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
@@ -372,7 +376,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], data_dim))),
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'cNODE1': lambda args: models.cNODE1(data_dim),
-        # 'cNODE2': lambda args: models.cNODE2(data_dim),
+        'cNODE2': lambda args: models.cNODE2(data_dim),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
         # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(data_dim), # sanity test, this is the same as cNODE2 but less optimized
         # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
@@ -431,7 +435,7 @@ def main():
             
             fold_losses, fold_epochs, fold_times, fold_trn_losses = crossvalidate_model(LR, accumulated_minibatches, data_folded, device, earlystop_patience,
                                               kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=3)
+                                              model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=2)
             
     
             print(f"Val Losses: {fold_losses}")
@@ -439,14 +443,14 @@ def main():
             print(f"Durations: {fold_times}")
             print(f"Trn Losses: {fold_trn_losses}")
             
-            for i in len(fold_losses):
+            for i in range(len(fold_losses)):
                 stream.stream_scores(filepath_out_expt, True,
                     "model", model_name,
                     "model parameters", num_params,
-                    "Validation Score", fold_losses,
-                    "@ Epoch", fold_epochs,
-                    "@ Elapsed Time", fold_times,
-                    "@ Training Loss", fold_trn_losses,
+                    "Validation Score", fold_losses[i],
+                    "@ Epoch", fold_epochs[i],
+                    "@ Elapsed Time", fold_times[i],
+                    "@ Training Loss", fold_trn_losses[i],
                     "k-folds", kfolds,
                     "early stop patience", earlystop_patience,
                     "minibatch_examples", minibatch_examples,

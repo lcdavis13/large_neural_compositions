@@ -9,9 +9,15 @@ import numpy as np
 folder_path = '../results/logs/'
 
 # Get all CSV files in the folder that end with "_epochs.csv"
-csv_files1 = glob.glob(os.path.join(folder_path, 'canODE-transformer-d3-a8-h2-f0.5*_epochs.csv'))
-csv_files2 = glob.glob(os.path.join(folder_path, 'baseline*_epochs.csv'))
-csv_files = csv_files1 + csv_files2
+csv_files = glob.glob(os.path.join(folder_path, 'canODE_*ocean*_epochs.csv'))
+csv_files2 = glob.glob(os.path.join(folder_path, 'canODE-noValue_*ocean*_epochs.csv'))
+csv_files3 = glob.glob(os.path.join(folder_path, 'canODE-multihead_*ocean*_epochs.csv'))
+csv_files4 = glob.glob(os.path.join(folder_path, 'canODE-singlehead_*ocean*_epochs.csv'))
+csv_files5 = glob.glob(os.path.join(folder_path, 'canODE-transformer_*ocean*_epochs.csv'))
+csv_files6 = glob.glob(os.path.join(folder_path, 'baseline-cNODE0_*ocean*_epochs.csv'))
+csv_files7 = glob.glob(os.path.join(folder_path, 'cNODE1_*ocean*_epochs.csv'))
+csv_files8 = glob.glob(os.path.join(folder_path, 'cNODE2_*ocean*_epochs.csv'))
+csv_files = csv_files + csv_files2 + csv_files3 + csv_files4 + csv_files5 + csv_files6 + csv_files7 + csv_files8
 
 
 # Initialize a dictionary to hold data from all files
