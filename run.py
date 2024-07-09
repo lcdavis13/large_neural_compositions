@@ -309,10 +309,10 @@ def main():
     LR_base = 0.002
     WD_base = 0.00003
     hidden_dim = math.isqrt(data_dim)
-    attend_dim = 32 # math.isqrt(hidden_dim)
+    attend_dim = 16 # math.isqrt(hidden_dim)
     num_heads = 4
-    depth = 6
-    ffn_dim_multiplier = 1
+    depth = 2
+    ffn_dim_multiplier = 0.5
     assert attend_dim % num_heads == 0, "attend_dim must be divisible by num_heads"
     
     # Specify model(s) for experiment
@@ -328,7 +328,8 @@ def main():
         #     nn.Linear(data_dim, 1),
         #     nn.Linear(1, data_dim))),
         
-        # 'canODE-noVal': lambda args: models_condensed.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
+        'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
         # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
         # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
@@ -374,8 +375,8 @@ def main():
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
         # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(data_dim), # sanity test, this is the same as cNODE2 but less optimized
         # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        # "cNODE2-ExternalFitness": lambda args: models.cNODE2_ExternalFitness(data_dim),
-        "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
+        # "cNODE2-static": lambda args: models.cNODE2_ExternalFitness(data_dim),
+        # "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
 
 

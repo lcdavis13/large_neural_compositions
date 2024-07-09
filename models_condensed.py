@@ -70,19 +70,21 @@ class cAttend_simple(nn.Module):
 class AttentionNoValue(nn.Module):
     def __init__(self, id_embed_dim, qk_dim):
         super(AttentionNoValue, self).__init__()
-        self.w_q = nn.Linear(id_embed_dim, qk_dim)
-        self.w_k = nn.Linear(id_embed_dim, qk_dim)
+        self.w_q = nn.Linear(id_embed_dim + 1, qk_dim)
+        self.w_k = nn.Linear(id_embed_dim + 1, qk_dim)
         self.scale_factor = qk_dim ** -0.5
 
     def forward(self, val, id_embed):
-        # torch.concat(val, id_embed, -1) # TODO: concat val onto id_embed. Adjust w_q and w_k to be +1 input dim.
-        q = self.w_q(id_embed)
-        k = self.w_k(id_embed)
-        soft_weights = torch.einsum('...id , ...jd -> ...ij', q, k) * self.scale_factor
-        fx = torch.einsum('...ij, ...j -> ...i', soft_weights, val)
+        h0 = torch.concat((val.unsqueeze(-1), id_embed), -1) # TODO: concat val onto id_embed. Adjust w_q and w_k to be +1 input dim.
+        
+        q = self.w_q(h0)
+        k = self.w_k(h0)
+        f_matrix = torch.einsum('...id , ...jd -> ...ij', q, k) * self.scale_factor
         # intentionally not computing v from attention mechanism, since with a single head it could not produce both benefits and harms to fitness.
         # Without softmax and without v, the dot product of Q+K can be either positive or negative, increasing or decreasing fitness.
         # But multihead attention could solve that in a more flexible way.
+        
+        fx = torch.einsum('...ij, ...j -> ...i', f_matrix, val)
         return fx
 
 
@@ -216,7 +218,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
     
     
 if __name__ == '__main__': # test
-    B = 5
+    B = 6
     
     # random test data
     # N = 10
@@ -240,8 +242,8 @@ if __name__ == '__main__': # test
     E_dim = 5
     QK_dim = 4
     num_heads = 2
-    # model = canODE_attentionNoValue(N, E_dim, QK_dim)
-    model = canODE_attentionNoValue_static(N, E_dim, QK_dim)
+    model = canODE_attentionNoValue(N, E_dim, QK_dim)
+    # model = canODE_attentionNoValue_static(N, E_dim, QK_dim)
     # model = canODE_attention(N, E_dim, QK_dim)
     # model = canODE_attentionMultihead(N, QK_dim, num_heads)
     # model = canODE_transformer(N, QK_dim, num_heads, depth=6, ffn_dim_multiplier=4)
