@@ -102,7 +102,7 @@ class cNODEGen_ConstructedFitness(nn.Module):
         self.func = ODEFunc_cNODEGen_ConstructedFitness(f_constr)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)[-1] #, rtol=1e-10, atol=1e-12)[-1] # can increase tolerance when model is too stiff (underflows)
         return y
 
 

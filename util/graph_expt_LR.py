@@ -10,6 +10,7 @@ df = pd.read_csv(file_path)
 # df = df[(df['k-folds'] == 3) & (df['early stop patience'] == 15)]
 # df = df[(~df['model'].str.contains("canODE"))]
 # df = df[(~df['model'].str.startswith("cNODE"))]
+df = df[(df['WD_base'] == 0)]
 
 # Filter out invalid rows from exceptions
 df = df[df['model parameters'] > 0]
@@ -24,8 +25,8 @@ plt.figure(figsize=(10, 6))
 for model in models:
     model_data = df[df['model'] == model]
     # Sort data by 'model parameters'
-    model_data = model_data.sort_values(by='model parameters')
-    plt.plot(model_data['model parameters'], model_data['Validation Score'], linestyle=':', marker='o', label=model)
+    model_data = model_data.sort_values(by='LR_base')
+    plt.plot(model_data['LR_base'], model_data['Validation Score'], linestyle=':', marker='o', label=model)
 
 # Set x-axis to logarithmic scale
 plt.xscale('log')
@@ -35,21 +36,21 @@ plt.xscale('log')
 # plt.ylim(top=0.3)
 
 # Add labels and title
-plt.xlabel('Model Parameters (Log Scale)')
+plt.xlabel('LR_base (Log Scale)')
 plt.ylabel('Avg Validation Score')
-plt.title('Avg Validation Score vs. Model Parameters for Different Models')
+plt.title('Avg Validation Score vs. LR_base for Different Models')
 plt.legend(title='Model')
 plt.grid(True)
 plt.show()
 
-# Create the second plot for Avg Elapsed Time vs Model Parameters
+# Create the second plot for Train Score vs Model Parameters
 plt.figure(figsize=(10, 6))
 
 for model in models:
     model_data = df[df['model'] == model]
     # Sort data by 'model parameters'
-    model_data = model_data.sort_values(by='model parameters')
-    plt.plot(model_data['model parameters'], model_data['Val @ Time'], linestyle=':', marker='o', label=model)
+    model_data = model_data.sort_values(by='LR_base')
+    plt.plot(model_data['LR_base'], model_data['Train Score'], linestyle=':', marker='o', label=model)
 
 
 # Set x-axis to logarithmic scale
@@ -58,9 +59,9 @@ plt.xscale('log')
 # plt.xlim(left=1)
 
 # Add labels and title
-plt.xlabel('Model Parameters (Log Scale)')
-plt.ylabel('Avg Elapsed Time')
-plt.title('Avg Elapsed Time vs. Model Parameters for Different Models')
+plt.xlabel('LR_base (Log Scale)')
+plt.ylabel('Train Score')
+plt.title('Train Score vs. LR_base for Different Models')
 plt.legend(title='Model')
 plt.grid(True)
 plt.show()

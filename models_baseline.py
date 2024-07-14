@@ -13,12 +13,12 @@ class SingleLayerPerceptron(nn.Module):
         return self.f(x)
 
 
-class SingleLayerMultiplied(nn.Module):  # cNODE where "F(x)" does not depend on x
+class SingleLayerMultiplied(nn.Module):
     def __init__(self, N):
         super(SingleLayerMultiplied, self).__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x):
+    def forward(self, t, x): # x' = x*f(x)
         fx = self.f(x)  # B x N
         
         y = torch.mul(x, fx)  # B x N
@@ -26,12 +26,12 @@ class SingleLayerMultiplied(nn.Module):  # cNODE where "F(x)" does not depend on
         return y  # B x N
 
 
-class SingleLayerSummed(nn.Module):  # cNODE where "F(x)" does not depend on x
+class SingleLayerSummed(nn.Module):
     def __init__(self, N):
         super(SingleLayerSummed, self).__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x):
+    def forward(self, t, x): # x' = x + f(x)
         fx = self.f(x)  # B x N
         
         y = x + fx  # B x N
@@ -39,12 +39,12 @@ class SingleLayerSummed(nn.Module):  # cNODE where "F(x)" does not depend on x
         return y  # B x N
 
 
-class SingleLayerMultipliedSummed(nn.Module):  # cNODE where "F(x)" does not depend on x
+class SingleLayerMultipliedSummed(nn.Module):
     def __init__(self, N):
         super(SingleLayerMultipliedSummed, self).__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x):
+    def forward(self, t, x): # x' = x + x*f(x)
         fx = self.f(x)  # B x N
         
         y = torch.mul(x, fx)  # B x N
@@ -52,12 +52,12 @@ class SingleLayerMultipliedSummed(nn.Module):  # cNODE where "F(x)" does not dep
         return x + y  # B x N
 
 
-class SingleLayerReplicator(nn.Module):  # cNODE where "F(x)" does not depend on x
+class SingleLayerReplicator(nn.Module):
     def __init__(self, N):
         super(SingleLayerReplicator, self).__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x):
+    def forward(self, t, x): # x' = x + x*(f(x) - mean(f(x)))
         fx = self.f(x)  # B x N
         
         xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
