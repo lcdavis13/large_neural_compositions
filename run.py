@@ -327,7 +327,7 @@ def main():
     kfolds = 5
     min_epochs = 50
     max_epochs = 30000
-    patience = 5
+    patience = 50
     early_stop = False
     DEBUG_SINGLE_FOLD = True
     
@@ -439,7 +439,7 @@ def main():
     #                 #     # END of hacky hyperparam search - remove
 
     # START of hacky hyperparam search - remove
-    LR_base_list = [0.00004, 0.0001, 0.0004] # [0.001, 0.004, 0.01, 0.04] #, 0.1, 0.4, 1.0]
+    LR_base_list = [0.00004, 0.0001, 0.0004, 0.001, 0.004] #, 0.01, 0.04] #, 0.1, 0.4, 1.0]
     WD_base_list = [0.0] #, 0.000001, 0.00001, 0.0001]
     for LR_base in LR_base_list:
         for WD_base in WD_base_list:
@@ -488,37 +488,73 @@ def main():
                 # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
                 #     continue
                 
-                # try:
-                print(f"\nRunning model: {model_name}")
+                try:
+                    print(f"\nRunning model: {model_name}")
+                
+                    # test construction and print parameter count
+                    model = model_constr(model_args)
+                    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                    print(f"Number of parameters in model: {num_params}")
+                    
+                    val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = (
+                        crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience,
+                            kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
+                            model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0))
+                    
             
-                # test construction and print parameter count
-                model = model_constr(model_args)
-                num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                print(f"Number of parameters in model: {num_params}")
-                
-                val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = (
-                    crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience,
-                        kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                        model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0))
-                
-        
-                print(f"Val Losses: {val_losses}")
-                print(f"Epochs: {val_epochs}")
-                print(f"Durations: {val_times}")
-                print(f"Trn Losses: {val_trn_losses}")
-                
-                for i in range(len(val_losses)):
+                    print(f"Val Losses: {val_losses}")
+                    print(f"Epochs: {val_epochs}")
+                    print(f"Durations: {val_times}")
+                    print(f"Trn Losses: {val_trn_losses}")
+                    
+                    for i in range(len(val_losses)):
+                        stream.stream_scores(filepath_out_expt, True,
+                            "model", model_name,
+                            "model parameters", num_params,
+                            "Validation Score", val_losses[i],
+                            "Val @ Epoch", val_epochs[i],
+                            "Val @ Time", val_times[i],
+                            "Val @ Trn Loss", val_trn_losses[i],
+                            "Train Score", trn_losses[i],
+                            "Trn @ Epoch", trn_epochs[i],
+                            "Trn @ Time", trn_times[i],
+                            "Trn @ Val Loss", trn_val_losses[i],
+                            "k-folds", kfolds,
+                            "early stop patience", patience,
+                            "minibatch_examples", minibatch_examples,
+                            "accumulated_minibatches", accumulated_minibatches,
+                            "learning rate", LR,
+                            "weight decay", WD,
+                            "LR_base", LR_base,
+                            "WD_base", WD_base,
+                            "timesteps", ode_timesteps,
+                             *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                            prefix="\n=======================================================EXPERIMENT========================================================\n",
+                            suffix="\n=========================================================================================================================\n")
+                    
+                    # summary score for each result vector
+                    model_score = pessimistic_summary(val_losses)
+                    model_epoch = pessimistic_summary(val_epochs)
+                    model_time = pessimistic_summary(val_times)
+                    model_trn_loss = pessimistic_summary(val_trn_losses)
+                    
+                    print(f"Avg Val Losses: {model_score}")
+                    print(f"Avg Epochs: {model_epoch}")
+                    print(f"Avg Durations: {model_time}")
+                    print(f"Avg Trn Losses: {model_trn_loss}")
+                    
+                except Exception as e:
                     stream.stream_scores(filepath_out_expt, True,
                         "model", model_name,
-                        "model parameters", num_params,
-                        "Validation Score", val_losses[i],
-                        "Val @ Epoch", val_epochs[i],
-                        "Val @ Time", val_times[i],
-                        "Val @ Trn Loss", val_trn_losses[i],
-                        "Train Score", trn_losses[i],
-                        "Trn @ Epoch", trn_epochs[i],
-                        "Trn @ Time", trn_times[i],
-                        "Trn @ Val Loss", trn_val_losses[i],
+                        "model parameters", -1,
+                        "Validation Score", -1,
+                        "Val @ Epoch", -1,
+                        "Val @ Time", -1,
+                        "Val @ Trn Loss", -1,
+                        "Train Score", -1,
+                        "Trn @ Epoch", -1,
+                        "Trn @ Time", -1,
+                        "Trn @ Val Loss", -1,
                         "k-folds", kfolds,
                         "early stop patience", patience,
                         "minibatch_examples", minibatch_examples,
@@ -531,43 +567,7 @@ def main():
                          *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
                         prefix="\n=======================================================EXPERIMENT========================================================\n",
                         suffix="\n=========================================================================================================================\n")
-                
-                # summary score for each result vector
-                model_score = pessimistic_summary(val_losses)
-                model_epoch = pessimistic_summary(val_epochs)
-                model_time = pessimistic_summary(val_times)
-                model_trn_loss = pessimistic_summary(val_trn_losses)
-                
-                print(f"Avg Val Losses: {model_score}")
-                print(f"Avg Epochs: {model_epoch}")
-                print(f"Avg Durations: {model_time}")
-                print(f"Avg Trn Losses: {model_trn_loss}")
-                    
-                # except Exception as e:
-                #     stream.stream_scores(filepath_out_expt, True,
-                #         "model", model_name,
-                #         "model parameters", -1,
-                #         "Validation Score", -1,
-                #         "Val @ Epoch", -1,
-                #         "Val @ Time", -1,
-                #         "Val @ Trn Loss", -1,
-                #         "Train Score", -1,
-                #         "Trn @ Epoch", -1,
-                #         "Trn @ Time", -1,
-                #         "Trn @ Val Loss", -1,
-                #         "k-folds", kfolds,
-                #         "early stop patience", patience,
-                #         "minibatch_examples", minibatch_examples,
-                #         "accumulated_minibatches", accumulated_minibatches,
-                #         "learning rate", LR,
-                #         "weight decay", WD,
-                #         "LR_base", LR_base,
-                #         "WD_base", WD_base,
-                #         "timesteps", ode_timesteps,
-                #          *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                #         prefix="\n=======================================================EXPERIMENT========================================================\n",
-                #         suffix="\n=========================================================================================================================\n")
-                #     print(f"Model {model_name} failed with error:\n{e}")
+                    print(f"Model {model_name} failed with error:\n{e}")
     
 
 # main
