@@ -366,8 +366,8 @@ def main():
     # Hyperparameters to tune
     minibatch_examples = 32
     accumulated_minibatches = 1
-    LR_base = 0.1
-    WD_base = 0.0
+    LR_base = 0.0316
+    WD_base = 0.01
     
     hidden_dim = math.isqrt(data_dim)
     attend_dim = 16 # math.isqrt(hidden_dim)
@@ -379,7 +379,7 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
+        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
@@ -400,9 +400,9 @@ def main():
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(data_dim, 8, 2, 3, 0.5),
         
-        # 'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
+        'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+            nn.Linear(data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], data_dim))),
         # 'cNODE2-custom-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
@@ -460,8 +460,8 @@ def main():
     
     
     # adjusted learning rate and decay
-    LR = LR_base * math.sqrt(minibatch_examples * accumulated_minibatches)
-    WD = WD_base * math.sqrt(minibatch_examples * accumulated_minibatches)
+    LR = LR_base # * math.sqrt(minibatch_examples * accumulated_minibatches)
+    WD = WD_base # * math.sqrt(minibatch_examples * accumulated_minibatches)
     
     # specify loss function
     loss_fn = loss_bc
