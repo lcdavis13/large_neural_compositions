@@ -142,7 +142,8 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                model_name, dataname, fold, loss_fn, distr_error_fn, weight_decay, device,
                early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience = patience // 2, cooldown = patience // 2)
     
     bestval_loss = float('inf')
     bestval_trn_loss = float('inf')
@@ -156,6 +157,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     
     epochs_worsened = 0
     time_to_stop = False
+    lr_changed = False
     
     filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
     filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
@@ -174,6 +176,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
+    stream.plot(dataname, model_name, 0, l_val, None, add_point=False)
 
 
     train_examples_seen = 0
@@ -202,6 +205,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
+        stream.plot(dataname, model_name, e+1, l_val, l_trn, add_point=lr_changed)
         
         # early stopping & model backups
         if l_val < bestval_loss:
@@ -243,6 +247,15 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                         print(f'Early stopping triggered after {e + 1} epochs.')
                     time_to_stop = True
                     break
+        
+        # Update learning rate based on validation loss
+        scheduler.step(l_val)
+        new_lr = scheduler.get_lr()
+        if new_lr != old_lr:
+            old_lr = new_lr
+            lr_changed = True
+        else
+            lr_changed = False
     
     if verbosity > 0:
         if not time_to_stop:
@@ -327,7 +340,7 @@ def main():
     kfolds = 5
     min_epochs = 50
     max_epochs = 30000
-    patience = 50
+    patience = 5
     early_stop = False
     DEBUG_SINGLE_FOLD = True
     
@@ -366,7 +379,7 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
@@ -387,9 +400,9 @@ def main():
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(data_dim, 8, 2, 3, 0.5),
         
-        'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], data_dim))),
+        # 'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], data_dim))),
         # 'cNODE2-custom-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
@@ -438,137 +451,137 @@ def main():
     #             for WD_base in WD_base_list:
     #                 #     # END of hacky hyperparam search - remove
 
-    # START of hacky hyperparam search - remove
-    LR_base_list = [0.00004, 0.0001, 0.0004, 0.001, 0.004] #, 0.01, 0.04] #, 0.1, 0.4, 1.0]
-    WD_base_list = [0.0] #, 0.000001, 0.00001, 0.0001]
-    for LR_base in LR_base_list:
-        for WD_base in WD_base_list:
-            # END of hacky hyperparam search - remove
-        
-            
-            # adjusted learning rate and decay
-            LR = LR_base * math.sqrt(minibatch_examples * accumulated_minibatches)
-            WD = WD_base * math.sqrt(minibatch_examples * accumulated_minibatches)
-        
-            # specify loss function
-            loss_fn = loss_bc
-            # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
-            
-            distr_error_fn = distribution_error
-            
-            # time step "data"
-            ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
-            timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
-            
-            # START of hacky hyperparam search - remove
-            # for hidden_dim in [1, 2, 4, 8, 16, 32, 64]:
-            #     attend_dim = hidden_dim
-            #     # num_heads = attend_dim
-            #     num_heads = {1:1, 2:2, 4:2, 8:4, 16:4, 32:8, 64:8}[attend_dim]
-            #     # END of hacky hyperparam search - remove
-        
-            # START of hacky hyperparam search - remove
-            # for num_heads in [2, 4, 8, 16]:
-            #     for head_dim in [4, 8, 16, 32]:
-            #         attend_dim = num_heads * head_dim
-            #         if attend_dim > data_dim:
-            #             continue
-            #         for ffn_dim_multiplier in [0.5, 1.0, 2.0]:
-            #             for depth in [2, 3]:
-            #     # END of hacky hyperparam search - remove
-            
-            model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
-            
-            scaler = torch.cuda.amp.GradScaler()
-            
-            filepath_out_expt = f'results/{dataname}_experiments.csv'
-            for model_name, model_constr in models_to_test.items():
-                
-                # # TODO remove this: it's just to resume from where we were previously
-                # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
-                #     continue
-                
-                try:
-                    print(f"\nRunning model: {model_name}")
-                
-                    # test construction and print parameter count
-                    model = model_constr(model_args)
-                    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                    print(f"Number of parameters in model: {num_params}")
-                    
-                    val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = (
-                        crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience,
-                            kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                            model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0))
-                    
-            
-                    print(f"Val Losses: {val_losses}")
-                    print(f"Epochs: {val_epochs}")
-                    print(f"Durations: {val_times}")
-                    print(f"Trn Losses: {val_trn_losses}")
-                    
-                    for i in range(len(val_losses)):
-                        stream.stream_scores(filepath_out_expt, True,
-                            "model", model_name,
-                            "model parameters", num_params,
-                            "Validation Score", val_losses[i],
-                            "Val @ Epoch", val_epochs[i],
-                            "Val @ Time", val_times[i],
-                            "Val @ Trn Loss", val_trn_losses[i],
-                            "Train Score", trn_losses[i],
-                            "Trn @ Epoch", trn_epochs[i],
-                            "Trn @ Time", trn_times[i],
-                            "Trn @ Val Loss", trn_val_losses[i],
-                            "k-folds", kfolds,
-                            "early stop patience", patience,
-                            "minibatch_examples", minibatch_examples,
-                            "accumulated_minibatches", accumulated_minibatches,
-                            "learning rate", LR,
-                            "weight decay", WD,
-                            "LR_base", LR_base,
-                            "WD_base", WD_base,
-                            "timesteps", ode_timesteps,
-                             *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                            prefix="\n=======================================================EXPERIMENT========================================================\n",
-                            suffix="\n=========================================================================================================================\n")
-                    
-                    # summary score for each result vector
-                    model_score = pessimistic_summary(val_losses)
-                    model_epoch = pessimistic_summary(val_epochs)
-                    model_time = pessimistic_summary(val_times)
-                    model_trn_loss = pessimistic_summary(val_trn_losses)
-                    
-                    print(f"Avg Val Losses: {model_score}")
-                    print(f"Avg Epochs: {model_epoch}")
-                    print(f"Avg Durations: {model_time}")
-                    print(f"Avg Trn Losses: {model_trn_loss}")
-                    
-                except Exception as e:
-                    stream.stream_scores(filepath_out_expt, True,
-                        "model", model_name,
-                        "model parameters", -1,
-                        "Validation Score", -1,
-                        "Val @ Epoch", -1,
-                        "Val @ Time", -1,
-                        "Val @ Trn Loss", -1,
-                        "Train Score", -1,
-                        "Trn @ Epoch", -1,
-                        "Trn @ Time", -1,
-                        "Trn @ Val Loss", -1,
-                        "k-folds", kfolds,
-                        "early stop patience", patience,
-                        "minibatch_examples", minibatch_examples,
-                        "accumulated_minibatches", accumulated_minibatches,
-                        "learning rate", LR,
-                        "weight decay", WD,
-                        "LR_base", LR_base,
-                        "WD_base", WD_base,
-                        "timesteps", ode_timesteps,
-                         *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
-                        prefix="\n=======================================================EXPERIMENT========================================================\n",
-                        suffix="\n=========================================================================================================================\n")
-                    print(f"Model {model_name} failed with error:\n{e}")
+    # # START of hacky hyperparam search - remove
+    # LR_base_list = [0.00004, 0.0001, 0.0004, 0.001, 0.004] #, 0.01, 0.04] #, 0.1, 0.4, 1.0]
+    # WD_base_list = [0.0] #, 0.000001, 0.00001, 0.0001]
+    # for LR_base in LR_base_list:
+    #     for WD_base in WD_base_list:
+    #         # END of hacky hyperparam search - remove
     
+    
+    # adjusted learning rate and decay
+    LR = LR_base * math.sqrt(minibatch_examples * accumulated_minibatches)
+    WD = WD_base * math.sqrt(minibatch_examples * accumulated_minibatches)
+    
+    # specify loss function
+    loss_fn = loss_bc
+    # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
+    
+    distr_error_fn = distribution_error
+    
+    # time step "data"
+    ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
+    timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
+    
+    # START of hacky hyperparam search - remove
+    # for hidden_dim in [1, 2, 4, 8, 16, 32, 64]:
+    #     attend_dim = hidden_dim
+    #     # num_heads = attend_dim
+    #     num_heads = {1:1, 2:2, 4:2, 8:4, 16:4, 32:8, 64:8}[attend_dim]
+    #     # END of hacky hyperparam search - remove
+    
+    # START of hacky hyperparam search - remove
+    # for num_heads in [2, 4, 8, 16]:
+    #     for head_dim in [4, 8, 16, 32]:
+    #         attend_dim = num_heads * head_dim
+    #         if attend_dim > data_dim:
+    #             continue
+    #         for ffn_dim_multiplier in [0.5, 1.0, 2.0]:
+    #             for depth in [2, 3]:
+    #     # END of hacky hyperparam search - remove
+    
+    model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
+    
+    scaler = torch.cuda.amp.GradScaler()
+    
+    filepath_out_expt = f'results/{dataname}_experiments.csv'
+    for model_name, model_constr in models_to_test.items():
+        
+        # # TODO remove this: it's just to resume from where we were previously
+        # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
+        #     continue
+        
+        # try:
+        print(f"\nRunning model: {model_name}")
+    
+        # test construction and print parameter count
+        model = model_constr(model_args)
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters in model: {num_params}")
+        
+        val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = (
+            crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience,
+                kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
+                model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0))
+        
+
+        print(f"Val Losses: {val_losses}")
+        print(f"Epochs: {val_epochs}")
+        print(f"Durations: {val_times}")
+        print(f"Trn Losses: {val_trn_losses}")
+        
+        for i in range(len(val_losses)):
+            stream.stream_scores(filepath_out_expt, True,
+                "model", model_name,
+                "model parameters", num_params,
+                "Validation Score", val_losses[i],
+                "Val @ Epoch", val_epochs[i],
+                "Val @ Time", val_times[i],
+                "Val @ Trn Loss", val_trn_losses[i],
+                "Train Score", trn_losses[i],
+                "Trn @ Epoch", trn_epochs[i],
+                "Trn @ Time", trn_times[i],
+                "Trn @ Val Loss", trn_val_losses[i],
+                "k-folds", kfolds,
+                "early stop patience", patience,
+                "minibatch_examples", minibatch_examples,
+                "accumulated_minibatches", accumulated_minibatches,
+                "learning rate", LR,
+                "weight decay", WD,
+                "LR_base", LR_base,
+                "WD_base", WD_base,
+                "timesteps", ode_timesteps,
+                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                suffix="\n=========================================================================================================================\n")
+        
+        # summary score for each result vector
+        model_score = pessimistic_summary(val_losses)
+        model_epoch = pessimistic_summary(val_epochs)
+        model_time = pessimistic_summary(val_times)
+        model_trn_loss = pessimistic_summary(val_trn_losses)
+        
+        print(f"Avg Val Losses: {model_score}")
+        print(f"Avg Epochs: {model_epoch}")
+        print(f"Avg Durations: {model_time}")
+        print(f"Avg Trn Losses: {model_trn_loss}")
+        
+        # except Exception as e:
+        #     stream.stream_scores(filepath_out_expt, True,
+        #         "model", model_name,
+        #         "model parameters", -1,
+        #         "Validation Score", -1,
+        #         "Val @ Epoch", -1,
+        #         "Val @ Time", -1,
+        #         "Val @ Trn Loss", -1,
+        #         "Train Score", -1,
+        #         "Trn @ Epoch", -1,
+        #         "Trn @ Time", -1,
+        #         "Trn @ Val Loss", -1,
+        #         "k-folds", kfolds,
+        #         "early stop patience", patience,
+        #         "minibatch_examples", minibatch_examples,
+        #         "accumulated_minibatches", accumulated_minibatches,
+        #         "learning rate", LR,
+        #         "weight decay", WD,
+        #         "LR_base", LR_base,
+        #         "WD_base", WD_base,
+        #         "timesteps", ode_timesteps,
+        #          *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+        #         prefix="\n=======================================================EXPERIMENT========================================================\n",
+        #         suffix="\n=========================================================================================================================\n")
+        #     print(f"Model {model_name} failed with error:\n{e}")
+
 
 # main
 if __name__ == "__main__":
@@ -580,11 +593,13 @@ if __name__ == "__main__":
 # TODO: Confirm that changes of t shape do not alter performance, then remove t argument to model forward for non-ODEfuncs. The t can be generated in forward to pass to odeint.
 # TODO: realtime visualization
 # TODO: Add param count to filename of logs
-# TODO: Record each fold as a separate row instead of saving the summary statistic. I can summarize during graphing.
+# TODO: Modify the stopping algorithm to use a linear fit of the last x% of scores instead of waiting until there's not a single trial that does better. Random fluctuations make that really unreliable.
+# TODO: Add support for LR scheduler in run_epochs.
+# TODO: Add a LR range finder function as an alternative to the crossvalidate_model. Run this before each experiment (or fold?) to set LR.
 
 # TODO: Try transfer learning with shared ODE but separate embed/unembed - espcially x-shaped conjoined networks for joint learning. Or Reptile for similar metalearning.
 # TODO: Create a parameterized generalized version of the canODE models so I can explore the model architectures as hyperparameters
 # TODO: Attention layers in a DEQ (deep equilibrium model) similar to the nODE to produce F(x) for the ODE
 # TODO: (Probably not a good idea) As an alternative to attention, try condensing into a high enough space that we can still use channels as IDs (minimum size would be the largest summed assemblage in the dataset) and then use a vanilla (but smaller) cNODE. The difficulty here is that the embed mapping needs to be dynamic because many input channels will map to the same embedded channels and some of those could occur at the same time. There effectively needs to be the ability to decide on the fly that "A should go in M but that's already occupied by B, so A will go in N instead, which has the same properties as M" ... which means the embedding needs to have redundancies. I guess I could hardcode there being a few redundant copies of each channel somehow (shared weights?) but I don't like that idea. In general this seems much weaker than using attention to divorce the species representations from the preferred basis, allowing them to share dynamics to exactly the extent that is helpful via independent subspaces.
 # TODO: Test baseline ODE model that does not learn F(x) at all - either it's just torch.ones() or it's a torch.random() at initialization or it's a torch.random() in the forward call.
-# TODO: Test multi-layer attention-based models that are not fed into ODEs.
+# TODO: Test multi-layer attention-based models that do not utilize ODEs at all.

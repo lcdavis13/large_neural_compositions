@@ -18,8 +18,8 @@ csv_files = []
 # csv_files += glob.glob(os.path.join(folder_path, 'baseline-cNODE0_*ocean*_epochs.csv'))
 # csv_files += glob.glob(os.path.join(folder_path, 'cNODE1_*ocean*_epochs.csv'))
 # csv_files += glob.glob(os.path.join(folder_path, 'cNODE2_*ocean*_epochs.csv'))
-csv_files += glob.glob(os.path.join(folder_path, 'baseline*waimea_epochs.csv'))
-csv_files += glob.glob(os.path.join(folder_path, 'cNODE2-custom*waimea_epochs.csv'))
+csv_files += glob.glob(os.path.join(folder_path, '*waimea_epochs.csv'))
+# csv_files += glob.glob(os.path.join(folder_path, 'cNODE2-custom*waimea_epochs.csv'))
 
 # Initialize a dictionary to hold data from all files
 data = {}
@@ -111,8 +111,8 @@ for color, (model_name, folds_data) in zip(colors, data.items()):
             epochs_filtered_broken, train_loss_filtered_broken = break_lines(epochs_filtered, train_loss_filtered)
             plt.plot(epochs_broken, val_loss_broken, label=f'{model_name} Fold {fold} Validation', color=color,
                      linestyle=line_style)
-            plt.plot(epochs_filtered_broken, train_loss_filtered_broken, label=f'{model_name} Fold {fold} Training',
-                     color=color, linestyle='--')
+            # plt.plot(epochs_filtered_broken, train_loss_filtered_broken, label=f'{model_name} Fold {fold} Training',
+            #          color=color, linestyle='--')
 
 # Set y-limit for Avg Validation Loss vs Epoch plot
 if average_data:
@@ -148,8 +148,8 @@ for color, (model_name, folds_data) in zip(colors, data.items()):
                                                                                    train_loss_filtered)
             plt.plot(elapsed_time_broken, val_loss_broken, label=f'{model_name} Fold {fold} Validation', color=color,
                      linestyle=line_style)
-            plt.plot(elapsed_time_filtered_broken, train_loss_filtered_broken,
-                     label=f'{model_name} Fold {fold} Training', color=color, linestyle='--')
+            # plt.plot(elapsed_time_filtered_broken, train_loss_filtered_broken,
+            #          label=f'{model_name} Fold {fold} Training', color=color, linestyle='--')
 
 # Set y-limit for Avg Validation Loss vs Elapsed Time plot
 if average_data:

@@ -1,7 +1,11 @@
 import csv
 import os
 
+import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("TkAgg")
 
 
 def stream_results(filename, print_console, *args, prefix="", suffix=""):
@@ -25,12 +29,12 @@ def stream(keep_old, filename, print_console, *args, prefix="", suffix=""):
     # Check if file exists
     if filename:
         # Initialize the set of filenames if it doesn't exist
-        if not hasattr(stream_results, 'filenames'):
-            stream_results.filenames = set()
+        if not hasattr(stream, 'filenames'):
+            stream.filenames = set()
         
         # Check if it's the first time the function is called for this filename during this execution
-        if filename not in stream_results.filenames:
-            stream_results.filenames.add(filename)
+        if filename not in stream.filenames:
+            stream.filenames.add(filename)
             file_started = False
         else:
             file_started = True
@@ -96,3 +100,67 @@ def update_or_append(file_started, filename, names, values):
             
             # Write the values row
             writer.writerow(values)
+
+
+def plot(title, label, epoch, validation_loss, train_loss, add_point=False):
+    # Initialize the set of plots if it doesn't exist
+    if not hasattr(plot, 'figs'):
+        plot.figs = {}
+    
+    # Check if it's the first time the function is called for this plot name during this execution
+    if title not in plot.figs.keys():
+        fig, ax = plt.subplots()
+        plot.figs[title] = (fig, ax)
+    else:
+        fig, ax = plot.figs[title]
+    
+    # Find existing lines with the given label or create new ones
+    lines = {line.get_label(): line for line in ax.get_lines()}
+    val_label = f'{label} - Val Loss'
+    trn_label = f'{label} - Trn Loss'
+    
+    if val_label in lines:
+        val_line = lines[val_label]
+        if validation_loss:
+            val_line.set_xdata(list(val_line.get_xdata()) + [epoch])
+            val_line.set_ydata(list(val_line.get_ydata()) + [validation_loss])
+    else:
+        # Create new lines if they don't exist
+        if validation_loss:
+            ax.plot([epoch], [validation_loss], label=val_label)
+    
+    if trn_label in lines:
+        train_line = lines[trn_label]
+        if train_loss:
+            train_line.set_xdata(list(train_line.get_xdata()) + [epoch])
+            train_line.set_ydata(list(train_line.get_ydata()) + [train_loss])
+    else:
+        if train_loss:
+            ax.plot([epoch], [train_loss], label=trn_label)
+    
+    # Redraw the plot with the updated data
+    ax.relim()
+    ax.autoscale_view()
+    ax.set_title(title)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.legend()
+    
+    plt.draw()
+    plt.pause(0.0001)
+
+
+if __name__ == "__main__":
+    plot("Training Progress", "Model A", 1, 0.5, None)
+    plt.pause(0.5)
+    plot("other thing", "Model A", 10, 5, None)
+    plt.pause(1.0)
+    plot("Training Progress", "Model A", 2, 0.4, 2.5, True)
+    plt.pause(0.5)
+    plot("other thing", "Model A", 15, 5, 6)
+    plt.pause(1.0)
+    plot("Training Progress", "Model A", 3, 1.4, 0.5)
+    plt.pause(0.5)
+    plot("other thing", "Model A", 20, 4, 7)
+    plt.pause(1.0)
+    
