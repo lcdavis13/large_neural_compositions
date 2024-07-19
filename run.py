@@ -166,56 +166,55 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     # initial validation benchmark
     l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_epoch, verbosity > 0,
-        "fold", fold+1,
+        "fold", fold + 1,
         "epoch", 0,
         "training examples", 0,
         "Avg Training Loss", -1.0,
         "Avg Training Distr Error", -1.0,
         "Avg Validation Loss", l_val,
         "Avg Validation Distr Error", p_val,
+        "Learning Rate", LR,
         "Elapsed Time", 0.0,
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
     stream.plot(dataname, model_name, 0, l_val, None, add_point=False)
-
-
+    
     train_examples_seen = 0
     start_time = time.time()
     
     for e in range(max_epochs):
-        l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches,
-                                                 optimizer, scaler, t, outputs_per_epoch, train_examples_seen, fold, e,
-                                                 model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
+        l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
+            accumulated_minibatches, optimizer, scaler, t, outputs_per_epoch, train_examples_seen,
+            fold, e, model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
         # Update learning rate based on validation loss
         scheduler.step(l_trn)
         new_lr = scheduler.get_last_lr()
-        if not np.isclose(new_lr, old_lr):
-            old_lr = new_lr
-            lr_changed = True
-        else:
-            lr_changed = False
+        lr_changed = not np.isclose(new_lr, old_lr)
         
         current_time = time.time()
         elapsed_time = current_time - start_time
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         
         stream.stream_results(filepath_out_epoch, verbosity > 0,
-            "fold", fold+1,
-            "epoch", e+1,
+            "fold", fold + 1,
+            "epoch", e + 1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
             "Avg Training Distr Error", p_trn,
             "Avg Validation Loss", l_val,
             "Avg Validation Distr Error", p_val,
+            "Learning Rate", old_lr,
             "Elapsed Time", elapsed_time,
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot(dataname, model_name, e+1, l_val, l_trn, add_point=lr_changed)
+        stream.plot(dataname, model_name, e + 1, l_val, l_trn, add_point=lr_changed)
+        
+        old_lr = new_lr
         
         # early stopping & model backups
         if l_val < bestval_loss:
