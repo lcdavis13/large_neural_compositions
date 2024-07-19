@@ -143,7 +143,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience = patience // 2, cooldown = patience // 2)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
     
     bestval_loss = float('inf')
     bestval_trn_loss = float('inf')
@@ -158,6 +158,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     epochs_worsened = 0
     time_to_stop = False
     lr_changed = False
+    old_lr = LR
     
     filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
     filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
@@ -188,6 +189,15 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                                                  model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
+        
+        # Update learning rate based on validation loss
+        scheduler.step(l_trn)
+        new_lr = scheduler.get_last_lr()
+        if not np.isclose(new_lr, old_lr):
+            old_lr = new_lr
+            lr_changed = True
+        else:
+            lr_changed = False
         
         current_time = time.time()
         elapsed_time = current_time - start_time
@@ -247,15 +257,6 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                         print(f'Early stopping triggered after {e + 1} epochs.')
                     time_to_stop = True
                     break
-        
-        # Update learning rate based on validation loss
-        scheduler.step(l_val)
-        new_lr = scheduler.get_lr()
-        if new_lr != old_lr:
-            old_lr = new_lr
-            lr_changed = True
-        else
-            lr_changed = False
     
     if verbosity > 0:
         if not time_to_stop:
@@ -366,7 +367,7 @@ def main():
     # Hyperparameters to tune
     minibatch_examples = 32
     accumulated_minibatches = 1
-    LR_base = 0.004
+    LR_base = 0.1
     WD_base = 0.0
     
     hidden_dim = math.isqrt(data_dim)

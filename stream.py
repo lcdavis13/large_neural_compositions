@@ -124,19 +124,27 @@ def plot(title, label, epoch, validation_loss, train_loss, add_point=False):
         if validation_loss:
             val_line.set_xdata(list(val_line.get_xdata()) + [epoch])
             val_line.set_ydata(list(val_line.get_ydata()) + [validation_loss])
+            if add_point:
+                ax.plot([epoch], [validation_loss], '*', color=val_line.get_color())
     else:
         # Create new lines if they don't exist
         if validation_loss:
             ax.plot([epoch], [validation_loss], label=val_label)
+            if add_point:
+                ax.plot([epoch], [validation_loss], '*', color=ax.lines[-1].get_color())
     
     if trn_label in lines:
         train_line = lines[trn_label]
         if train_loss:
             train_line.set_xdata(list(train_line.get_xdata()) + [epoch])
             train_line.set_ydata(list(train_line.get_ydata()) + [train_loss])
+            if add_point:
+                ax.plot([epoch], [train_loss], '*', color=train_line.get_color())
     else:
         if train_loss:
             ax.plot([epoch], [train_loss], label=trn_label)
+            if add_point:
+                ax.plot([epoch], [train_loss], '*', color=ax.lines[-1].get_color())
     
     # Redraw the plot with the updated data
     ax.relim()
