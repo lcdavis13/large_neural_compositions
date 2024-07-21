@@ -4,6 +4,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
 
 import data
 import stream
@@ -148,7 +149,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
-    base_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
+    base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
     
     bestval_loss = float('inf')
@@ -372,8 +373,8 @@ def main():
     # Hyperparameters to tune
     minibatch_examples = 32
     accumulated_minibatches = 1
-    LR_base = 0.0316
-    WD_base = 0.01
+    LR = 0.0316
+    WD = 0.01
     
     hidden_dim = math.isqrt(data_dim)
     attend_dim = 16 # math.isqrt(hidden_dim)
@@ -446,28 +447,6 @@ def main():
         # "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
     
-    # # START of hacky hyperparam search - remove
-    # minibatch_examples_list = [1, 8, 16, 32]
-    # accumulated_minibatches_list = [1, 4, 8]
-    # LR_base_list = [0.0001, 0.002, 0.04, 0.8, 10.0]
-    # WD_base_list = [0.0, 0.0001, 0.001, 0.01]
-    # for minibatch_examples in minibatch_examples_list:
-    #     for accumulated_minibatches in accumulated_minibatches_list:
-    #         for LR_base in LR_base_list:
-    #             for WD_base in WD_base_list:
-    #                 #     # END of hacky hyperparam search - remove
-
-    # # START of hacky hyperparam search - remove
-    # LR_base_list = [0.00004, 0.0001, 0.0004, 0.001, 0.004] #, 0.01, 0.04] #, 0.1, 0.4, 1.0]
-    # WD_base_list = [0.0] #, 0.000001, 0.00001, 0.0001]
-    # for LR_base in LR_base_list:
-    #     for WD_base in WD_base_list:
-    #         # END of hacky hyperparam search - remove
-    
-    
-    # adjusted learning rate and decay
-    LR = LR_base # * math.sqrt(minibatch_examples * accumulated_minibatches)
-    WD = WD_base # * math.sqrt(minibatch_examples * accumulated_minibatches)
     
     # specify loss function
     loss_fn = loss_bc
@@ -478,6 +457,24 @@ def main():
     # time step "data"
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
+    
+    # # START of hacky hyperparam search - remove
+    # minibatch_examples_list = [1, 8, 16, 32]
+    # accumulated_minibatches_list = [1, 4, 8]
+    # LR_list = [0.0001, 0.002, 0.04, 0.8, 10.0]
+    # WD_list = [0.0, 0.0001, 0.001, 0.01]
+    # for minibatch_examples in minibatch_examples_list:
+    #     for accumulated_minibatches in accumulated_minibatches_list:
+    #         for LR in LR_list:
+    #             for WD in WD_list:
+    #                 #     # END of hacky hyperparam search - remove
+    
+    # # START of hacky hyperparam search - remove
+    # LR_list = [0.00004, 0.0001, 0.0004, 0.001, 0.004] #, 0.01, 0.04] #, 0.1, 0.4, 1.0]
+    # WD_list = [0.0] #, 0.000001, 0.00001, 0.0001]
+    # for LR in LR_list:
+    #     for WD in WD_list:
+    #         # END of hacky hyperparam search - remove
     
     # START of hacky hyperparam search - remove
     # for hidden_dim in [1, 2, 4, 8, 16, 32, 64]:
@@ -544,8 +541,8 @@ def main():
                 "accumulated_minibatches", accumulated_minibatches,
                 "learning rate", LR,
                 "weight decay", WD,
-                "LR_base", LR_base,
-                "WD_base", WD_base,
+                "LR", LR,
+                "WD", WD,
                 "timesteps", ode_timesteps,
                  *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
                 prefix="\n=======================================================EXPERIMENT========================================================\n",
@@ -580,8 +577,6 @@ def main():
         #         "accumulated_minibatches", accumulated_minibatches,
         #         "learning rate", LR,
         #         "weight decay", WD,
-        #         "LR_base", LR_base,
-        #         "WD_base", WD_base,
         #         "timesteps", ode_timesteps,
         #          *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
         #         prefix="\n=======================================================EXPERIMENT========================================================\n",

@@ -64,7 +64,7 @@ class LRScheduler:
 
 
 # Example usage
-if __name__ == "__main__":
+def main():
     epochs = 5
     steps_per_epoch = 10
     
@@ -91,4 +91,7 @@ if __name__ == "__main__":
             print(f"Step: {step}, LR: {lr_scheduler.get_last_lr()}")
         lr_scheduler.epoch_step(metrics=validation_losses[epoch])
         print(f"Epoch: {epoch}, LR: {lr_scheduler.get_last_lr()}")
-        
+    
+
+if __name__ == "__main__":
+    main()
