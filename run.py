@@ -149,7 +149,8 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
-    base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
+    # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
+    base_scheduler = OneCycleLR(optimizer, max_lr=0.1, epochs=epochs, steps_per_epoch=steps_per_epoch)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
     
     bestval_loss = float('inf')

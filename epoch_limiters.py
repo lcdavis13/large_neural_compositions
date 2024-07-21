@@ -1,0 +1,111 @@
+from abc import ABC, abstractmethod
+
+
+class EpochLimiter(ABC):
+    @abstractmethod
+    def should_stop(self, epoch, metrics):
+        pass
+
+
+class FixedEpochs(EpochLimiter):
+    def __init__(self, epochs):
+        self.epochs = epochs
+    
+    def should_stop(self, epoch, metrics):
+        return epoch >= self.epochs
+
+
+class MovingAverageEpochLimiter(EpochLimiter):
+    def __init__(self, alpha, threshold, mode='rel', criterion='earlystop'):
+        self.alpha = alpha
+        self.threshold = threshold
+        self.mode = mode
+        self.criterion = criterion
+        self.ema = None
+        self.initial_score = None
+        self.best_score = float('inf')
+    
+    def update_ema(self, value):
+        if self.ema is None:
+            self.ema = value
+        else:
+            self.ema = self.alpha * value + (1 - self.alpha) * self.ema
+        return self.ema
+    
+    def should_stop(self, epoch, metrics):
+        current_score = metrics['val'] if (self.criterion == 'earlystop') else metrics['train']
+        
+        ema_score = self.update_ema(current_score)
+        
+        self.best_score = min(self.best_score, ema_score)
+        if self.initial_score is None:
+            self.initial_score = current_score
+
+        if self.criterion == 'divergence' or self.criterion == 'earlystop':
+            reference = self.best_score
+        elif self.criterion == 'explosion':
+            reference = self.initial_score
+        else:
+            return True # default to stopping in case of unknown criterion
+        
+        if self.mode == 'rel':
+            result = ema_score > reference * (1.0 + self.threshold)
+        else:
+            result = ema_score > reference + self.threshold
+        
+        return result
+
+
+class ConvergenceEpochLimiter(EpochLimiter):
+    def __init__(self, alpha, threshold, mode='rel'):
+        self.alpha = alpha
+        self.threshold = threshold
+        self.mode = mode
+        self.ema = None
+        self.best_score = float('inf')
+        self.prev_score = None
+    
+    def update_ema(self, value):
+        if self.ema is None:
+            self.ema = value
+        else:
+            self.ema = self.alpha * value + (1 - self.alpha) * self.ema
+        return self.ema
+    
+    def should_stop(self, epoch, metrics):
+        current_score = metrics['train']
+        
+        if self.prev_score is None:
+            self.prev_score = current_score
+            return False
+            
+        ema_score = self.update_ema(current_score - self.prev_score)
+        self.prev_score = current_score
+        
+        self.best_score = min(self.best_score, ema_score)
+
+        
+        if self.mode == 'rel':
+            result = ema_score > self.best_score * (1.0 + self.threshold)
+        else:
+            result = ema_score > self.best_score + self.threshold
+            
+        return result
+
+
+if __name__ == "__main__":
+    # stopping_criterion = FixedEpochs(epochs=10)
+    stopping_criterion = MovingAverageEpochLimiter(alpha=0.3, threshold=0.05, mode='rel', criterion='earlystop')
+    
+    # mock training loop
+    max_epochs = 15
+    train_scores = [0.5, 0.4, 0.45, 0.43, 0.3, 0.2, 0.1, 0.05, 0.04, 0.03, 0.02, 0.01, 0.005, 0.002, 0.001]
+    val_scores = [0.6, 0.5, 0.55, 0.53, 0.4, 0.3, 0.2, 0.3, 0.34, 0.33, 0.32, 0.31, 0.305, 0.302, 0.301]
+    for epoch in range(max_epochs):
+        metrics = {'train': train_scores[epoch], 'val': val_scores[epoch]}
+        if stopping_criterion.should_stop(epoch, metrics):
+            print(f"Stopping at epoch {epoch}")
+            break
+    print("Done")
+    
+    # TODO: Need to return optimal epoch, not just that it's time to stop
