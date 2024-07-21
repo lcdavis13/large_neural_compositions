@@ -10,6 +10,7 @@ import stream
 import models
 import models_condensed
 import models_baseline
+import lr_schedule
 
 
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
@@ -55,7 +56,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, distr_er
     return avg_loss, avg_penalty
 
 
-def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, scaler, t, outputs_per_epoch,
+def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch,
                 prev_examples, fold, epoch_num, model_name, dataname, loss_fn, distr_error_fn, device, verbosity=1):
     model.train()
 
@@ -118,7 +119,10 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
                 "total examples seen", prev_examples + new_examples,
                 "Avg Loss", stream_loss / stream_examples,
                 "Avg Distr Error", stream_penalty / stream_examples,
-                "Examples per second", examples_per_second)
+                "Examples per second", examples_per_second,
+                "Learning Rate", scheduler.get_last_lr(),
+                )
+            stream.plot("LR", model_name, epoch_num + mb/minibatches, scheduler.get_last_lr(), None)
             stream_loss = 0
             stream_penalty = 0
             prev_time = end_time
@@ -127,6 +131,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         if ((mb + 1) % accumulated_minibatches == 0) or (mb == minibatches - 1):
             scaler.step(optimizer)
             scaler.update()
+            scheduler.batch_step() # TODO: Add accum_loss metric in case I ever want to do ReduceLROnPlateau with batch_step mode
             optimizer.zero_grad()
 
         #del x, y
@@ -143,7 +148,8 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
                early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
+    base_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
+    scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
     
     bestval_loss = float('inf')
     bestval_trn_loss = float('inf')
@@ -157,7 +163,6 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     
     epochs_worsened = 0
     time_to_stop = False
-    lr_changed = False
     old_lr = LR
     
     filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
@@ -185,15 +190,16 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     
     for e in range(max_epochs):
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
-            accumulated_minibatches, optimizer, scaler, t, outputs_per_epoch, train_examples_seen,
+            accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
             fold, e, model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
         # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
         
         # Update learning rate based on validation loss
-        scheduler.step(l_trn)
+        scheduler.epoch_step(l_trn)
         new_lr = scheduler.get_last_lr()
         lr_changed = not np.isclose(new_lr, old_lr)
+        add_point = lr_changed and isinstance(scheduler.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
         
         current_time = time.time()
         elapsed_time = current_time - start_time
@@ -207,12 +213,12 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
             "Avg Training Distr Error", p_trn,
             "Avg Validation Loss", l_val,
             "Avg Validation Distr Error", p_val,
-            "Learning Rate", old_lr,
+            "Learning Rate", old_lr, # should I track average LR in the epoch? Max and min LR?
             "Elapsed Time", elapsed_time,
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot(dataname, model_name, e + 1, l_val, l_trn, add_point=lr_changed)
+        stream.plot(dataname, model_name, e + 1, l_val, l_trn, add_point=add_point)
         
         old_lr = new_lr
         
@@ -596,6 +602,8 @@ if __name__ == "__main__":
 # TODO: Modify the stopping algorithm to use a linear fit of the last x% of scores instead of waiting until there's not a single trial that does better. Random fluctuations make that really unreliable.
 # TODO: Add support for LR scheduler in run_epochs.
 # TODO: Add a LR range finder function as an alternative to the crossvalidate_model. Run this before each experiment (or fold?) to set LR.
+# TODO: Instead of my lambda model constructors, try base_model = torchdistx.deferred_init.deferred_init(MyModel, param1, param2, ...)
+# TODO: Try muP for hyperparameter scaling: https://github.com/microsoft/mup
 
 # TODO: Try transfer learning with shared ODE but separate embed/unembed - espcially x-shaped conjoined networks for joint learning. Or Reptile for similar metalearning.
 # TODO: Create a parameterized generalized version of the canODE models so I can explore the model architectures as hyperparameters
