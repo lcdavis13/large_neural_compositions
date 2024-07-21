@@ -1,5 +1,7 @@
 import csv
+import itertools
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -102,73 +104,127 @@ def update_or_append(file_started, filename, names, values):
             writer.writerow(values)
 
 
-def plot(title, label, epoch, validation_loss, train_loss, add_point=False):
-    # Initialize the set of plots if it doesn't exist
+def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False):
+    plt.ion()
+    """
+    Plots an arbitrary number of curves against epochs.
+        x_value (number): x of new point
+        labels (list of str): labels of curves
+        y_values (list of numbers): list of values corresponding to the labels.
+        add_point (bool): Whether to add a point marker to the curves here
+    """
     if not hasattr(plot, 'figs'):
         plot.figs = {}
     
-    # Check if it's the first time the function is called for this plot name during this execution
-    if title not in plot.figs.keys():
+    # Handle exited plots
+    # (unfortunately, this code is only sometimes reached when multiple plots are opened but only some of them are closed. It seems to freeze on plt.pause() depending on which is closed first.)
+    if title in plot.figs and not plot.figs[title]:
+        return
+    if title in plot.figs and not plt.fignum_exists(plot.figs[title][0].number):
+        plot.figs[title] = None
+        return
+        
+    
+    if title not in plot.figs:
         fig, ax = plt.subplots()
         plot.figs[title] = (fig, ax)
-    else:
-        fig, ax = plot.figs[title]
     
-    # Find existing lines with the given label or create new ones
+    fig, ax = plot.figs[title]
+    
+    # Determine the current color index based on the number of existing lines and new lines
+    num_existing_lines = len(ax.get_lines())
+    num_new_lines = len(line_labels)
+    color_index = num_existing_lines // num_new_lines
+    
+    # Get the color for the current set of lines
+    color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    current_color = color_cycle[color_index % len(color_cycle)]
+    
+    # Define style cycle for each call
+    style_cycle = itertools.cycle(['-', '--', '-.', ':'])
+    
+    # Map styles to labels to maintain consistency
+    if not hasattr(plot, 'label_styles'):
+        plot.label_styles = {}
+    
+    for i, (label, value) in enumerate(zip(line_labels, y_values)):
+        if label not in plot.label_styles:
+            plot.label_styles[label] = next(itertools.islice(style_cycle, i, None))
+    
     lines = {line.get_label(): line for line in ax.get_lines()}
-    val_label = f'{label} - Val Loss'
-    trn_label = f'{label} - Trn Loss'
     
-    if val_label in lines:
-        val_line = lines[val_label]
-        if validation_loss:
-            val_line.set_xdata(list(val_line.get_xdata()) + [epoch])
-            val_line.set_ydata(list(val_line.get_ydata()) + [validation_loss])
-            if add_point:
-                ax.plot([epoch], [validation_loss], '*', color=val_line.get_color())
-    else:
-        # Create new lines if they don't exist
-        if validation_loss:
-            ax.plot([epoch], [validation_loss], label=val_label)
-            if add_point:
-                ax.plot([epoch], [validation_loss], '*', color=ax.lines[-1].get_color())
+    for label, value in zip(line_labels, y_values):
+        linestyle = plot.label_styles[label]
+        if label in lines:
+            line = lines[label]
+            if value is not None:
+                line.set_xdata(list(line.get_xdata()) + [x_value])
+                line.set_ydata(list(line.get_ydata()) + [value])
+                if add_point:
+                    ax.plot([x_value], [value], '*', color=line.get_color())
+        else:
+            if value is not None:
+                ax.plot([x_value], [value], label=label, color=current_color, linestyle=linestyle)
+                if add_point:
+                    ax.plot([x_value], [value], '*', color=current_color)
     
-    if trn_label in lines:
-        train_line = lines[trn_label]
-        if train_loss:
-            train_line.set_xdata(list(train_line.get_xdata()) + [epoch])
-            train_line.set_ydata(list(train_line.get_ydata()) + [train_loss])
-            if add_point:
-                ax.plot([epoch], [train_loss], '*', color=train_line.get_color())
-    else:
-        if train_loss:
-            ax.plot([epoch], [train_loss], label=trn_label)
-            if add_point:
-                ax.plot([epoch], [train_loss], '*', color=ax.lines[-1].get_color())
-    
-    # Redraw the plot with the updated data
     ax.relim()
     ax.autoscale_view()
     ax.set_title(title)
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.legend()
     
     plt.draw()
-    plt.pause(0.0001)
+    plt.pause(0.00000001)
+
+
+def plot_single(title, xlabel, ylabel, line_label, x_value, y_value, add_point=False):
+    """
+    Helper method to call the plot function with only one value of y and its label.
+    """
+    plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point)
+
+
+def plot_loss(title, label, epoch, train_loss, validation_loss=None, add_point=False):
+    """
+    Helper function to plot validation and training loss curves.
+
+    Parameters:
+        title (str): Title of the plot.
+        label (str): Base label for the curves.
+        epoch (int): Current epoch.
+        validation_loss (float): Validation loss value.
+        train_loss (float): Training loss value.
+        add_point (bool): Whether to add a point at the current epoch value.
+    """
+    labels = [f'{label} - Val Loss', f'{label} - Trn Loss']
+    values = [validation_loss, train_loss]
+    plot(title, 'Epoch', 'Loss', labels, epoch, values, add_point)
+    
+def keep_plots_open():
+    """
+    Keeps all plot windows open until they are closed by the user.
+    """
+    while plt.get_fignums():
+        plt.waitforbuttonpress()
 
 
 if __name__ == "__main__":
-    plot("Training Progress", "Model A", 1, 0.5, None)
-    plt.pause(0.5)
-    plot("other thing", "Model A", 10, 5, None)
-    plt.pause(1.0)
-    plot("Training Progress", "Model A", 2, 0.4, 2.5, True)
-    plt.pause(0.5)
-    plot("other thing", "Model A", 15, 5, 6)
-    plt.pause(1.0)
-    plot("Training Progress", "Model A", 3, 1.4, 0.5)
-    plt.pause(0.5)
-    plot("other thing", "Model A", 20, 4, 7)
-    plt.pause(1.0)
+    plot_loss("Training Progress", "Model A", 1, 0.5, None)
+    plot("other thing", "xthing", "ything", ["A thing 1", "A thing 2"], 10, [10, 5], None)
+    plot_loss("Training Progress", "Model A", 2, 0.4, 2.5, True)
+    plot("other thing", "xthing", "ything", ["A thing 1", "A thing 2"], 15, [8, 6], None)
+    plt.pause(5.0)
+    plot_loss("Training Progress", "Model A", 3, 1.4, 0.5)
+    plot("other thing", "xthing", "ything", ["A thing 1", "A thing 2"], 20, [11, 9], None)
+    plot_loss("Training Progress", "Model B", 1, 1.5, None)
+    plot("other thing", "xthing", "ything", ["B thing 1", "B thing 2"], 10, [11, 6], None)
+    plot_loss("Training Progress", "Model B", 2, 1.4, 3.5, True)
+    plot("other thing", "xthing", "ything", ["B thing 1", "B thing 2"], 15, [9, 7], None)
+    plot_loss("Training Progress", "Model B", 3, 2.4, 1.5)
+    plot("other thing", "xthing", "ything", ["B thing 1", "B thing 2"], 20, [12, 10], None)
+    # plt.pause(1.0)
+    print("done")
+    keep_plots_open()
     

@@ -122,7 +122,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
                 "Examples per second", examples_per_second,
                 "Learning Rate", scheduler.get_last_lr(),
                 )
-            stream.plot("LR", model_name, epoch_num + mb/minibatches, scheduler.get_last_lr(), None)
+            stream.plot_single("Learning Rate", "epochs", "LR", model_name, epoch_num + mb/minibatches, scheduler.get_last_lr(), False)
             stream_loss = 0
             stream_penalty = 0
             prev_time = end_time
@@ -183,7 +183,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
-    stream.plot(dataname, model_name, 0, l_val, None, add_point=False)
+    stream.plot_loss(dataname, model_name, 0, None, l_val, add_point=False)
     
     train_examples_seen = 0
     start_time = time.time()
@@ -218,7 +218,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot(dataname, model_name, e + 1, l_val, l_trn, add_point=add_point)
+        stream.plot_loss(dataname, model_name, e + 1, l_trn, l_val, add_point=add_point)
         
         old_lr = new_lr
         
@@ -344,10 +344,10 @@ def main():
     # dataname = "dki-real"
     
     kfolds = 5
-    min_epochs = 50
+    min_epochs = 3
     max_epochs = 30000
-    patience = 5
-    early_stop = False
+    patience = 1
+    early_stop = True
     DEBUG_SINGLE_FOLD = True
     
     # device
@@ -385,12 +385,12 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(data_dim),
-        # 'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
+        'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
         # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, 1),
         #     nn.Linear(1, data_dim))),
@@ -587,6 +587,9 @@ def main():
         #         prefix="\n=======================================================EXPERIMENT========================================================\n",
         #         suffix="\n=========================================================================================================================\n")
         #     print(f"Model {model_name} failed with error:\n{e}")
+
+    print("\n\nDONE")
+    stream.keep_plots_open()
 
 
 # main
