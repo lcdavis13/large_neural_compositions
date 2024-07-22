@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
 
 import data
+import epoch_halters
 import stream
 import models
 import models_condensed
@@ -144,27 +145,59 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
+class Optimum:
+    def __init__(self, metric, metric_type='min', epoch=-1, trn_loss=float('inf'), val_loss=float('inf'), lr=-1, time=-1):
+        self.metric_name = metric
+        self.metric_type = metric_type
+        
+        self.epoch = epoch
+        self.trn_loss = trn_loss
+        self.val_loss = val_loss
+        self.lr = lr
+        self.time = time
+
+        if metric_type == 'min':
+            self.best_metric = float('inf')
+        elif metric_type == 'max':
+            self.best_metric = -float('inf')
+
+    def track_best(self, epoch, trn_loss, val_loss, lr, time):
+        if self.metric_name is None:
+            best = True
+        else:
+            current_metric = getattr(self, self.metric_name)
+            if self.metric_type == 'min':
+                best = current_metric < self.best_metric
+            else:
+                best = current_metric > self.best_metric
+
+        if best:
+            if self.metric_name is not None:
+                self.best_metric = current_metric
+            self.epoch = epoch
+            self.trn_loss = trn_loss
+            self.val_loss = val_loss
+            self.lr = lr
+            self.time = time
+            
+        return best
+
+
 def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, scaler, x_train, y_train, x_valid, y_valid, t,
                model_name, dataname, fold, loss_fn, distr_error_fn, weight_decay, device,
                early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
     # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
-    base_scheduler = OneCycleLR(optimizer, max_lr=0.1, epochs=epochs, steps_per_epoch=steps_per_epoch)
+    steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples*accumulated_minibatches)
+    base_scheduler = OneCycleLR(optimizer, max_lr=0.1, epochs=min_epochs, steps_per_epoch=steps_per_epoch)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
+    halter = epoch_halters.FixedHalter(max_epochs=min_epochs)
     
-    bestval_loss = float('inf')
-    bestval_trn_loss = float('inf')
-    bestval_epoch = -1
-    bestval_time = -1
-
-    besttrn_loss = float('inf')
-    besttrn_val_loss = float('inf')
-    besttrn_epoch = -1
-    besttrn_time = -1
+    val_opt = Optimum('val_loss', 'min')
+    trn_opt = Optimum('trn_loss', 'min')
+    last_opt = Optimum(metric=None) # metric None to update it every time, even though metric="epoch" would do the same
     
-    epochs_worsened = 0
-    time_to_stop = False
     old_lr = LR
     
     filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
@@ -190,12 +223,12 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     train_examples_seen = 0
     start_time = time.time()
     
-    for e in range(max_epochs):
+    while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
-            fold, e, model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
+            fold, halter.epoch, model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
-        # l_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, device) # Sanity test, should use running loss from train_epoch instead as a cheap approximation
+        # l_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
         
         # Update learning rate based on validation loss
         scheduler.epoch_step(l_trn)
@@ -209,7 +242,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
         
         stream.stream_results(filepath_out_epoch, verbosity > 0,
             "fold", fold + 1,
-            "epoch", e + 1,
+            "epoch", halter.epoch + 1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
             "Avg Training Distr Error", p_trn,
@@ -220,61 +253,28 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot_loss(dataname, model_name, e + 1, l_trn, l_val, add_point=add_point)
+        stream.plot_loss(dataname, model_name, halter.epoch + 1, l_trn, l_val, add_point=add_point)
         
         old_lr = new_lr
         
-        # early stopping & model backups
-        if l_val < bestval_loss:
-            bestval_epoch = e
-            bestval_loss = l_val
-            bestval_trn_loss = l_trn
-            bestval_time = elapsed_time
-            if early_stop:
-                epochs_worsened = 0
+        # track best validation
+        if val_opt.track_best(halter.epoch, l_trn, l_val, old_lr, elapsed_time):
             torch.save(model.state_dict(), filepath_out_model)
-        else:
-            if early_stop:
-                epochs_worsened += 1
-                if verbosity > 0 and e+1 >= min_epochs:
-                    print(f"VALIDATION DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{patience}")
-                # early stop
-                if epochs_worsened >= patience and e+1 >= min_epochs:
-                    if verbosity > 0:
-                        print(f'Early stopping triggered after {e + 1} epochs.')
-                    time_to_stop = True
-                    break
 
-        if l_trn < besttrn_loss:
-            besttrn_epoch = e
-            besttrn_loss = l_trn
-            besttrn_val_loss = l_val
-            besttrn_time = elapsed_time
-            if not early_stop:
-                epochs_worsened = 0
-            torch.save(model.state_dict(), filepath_out_model)
-        else:
-            if not early_stop:
-                epochs_worsened += 1
-                if verbosity > 0 and e+1 >= min_epochs:
-                    print(f"TRAINING DIDN'T IMPROVE. PATIENCE {epochs_worsened}/{patience}")
-                # early stop
-                if epochs_worsened >= patience and e+1 >= min_epochs:
-                    if verbosity > 0:
-                        print(f'Early stopping triggered after {e + 1} epochs.')
-                    time_to_stop = True
-                    break
-    
-    if verbosity > 0:
-        if not time_to_stop:
-            print(f"Completed training. Optimal loss was {bestval_loss}")
-        else:
-            print(f"Training stopped early due to lack of improvement in validation loss. Optimal loss was {bestval_loss}")
+        # track best training
+        trn_opt.track_best(halter.epoch, l_trn, l_val, old_lr, elapsed_time)
+        
+        # track newest
+        last_opt.track_best(halter.epoch, l_trn, l_val, old_lr, elapsed_time)
+        
+        # check if we should continue
+        if halter.should_stop(last_opt):
+            break
     
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
     # TODO: could also try to save the source code, but would need to copy it at time of execution and then rename it if it gets the best score.
     
-    return bestval_loss, bestval_epoch, bestval_time, bestval_trn_loss, besttrn_loss, besttrn_epoch, besttrn_time, besttrn_val_loss
+    return val_opt, trn_opt, last_opt
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds, min_epochs, max_epochs,
@@ -296,10 +296,19 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         x_train, y_train, x_valid, y_valid = data_fold
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val_loss, val_epoch, val_time, val_trn_loss, trn_loss, trn_epoch, trn_time, trn_val_loss = (
-            run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, scaler, x_train, y_train,
+        val_opt, trn_opt, last_opt = run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, scaler, x_train, y_train,
                 x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, distr_error_fn, weight_decay, device, early_stop,
-                patience=patience, outputs_per_epoch=10, verbosity=verbosity - 1))
+                patience=patience, outputs_per_epoch=10, verbosity=verbosity - 1)
+        
+        val_loss = val_opt.val_loss
+        val_trn_loss = val_opt.trn_loss
+        val_epoch = val_opt.epoch
+        val_time = val_opt.time
+        trn_loss = trn_opt.trn_loss
+        trn_val_loss = trn_opt.val_loss
+        trn_epoch = trn_opt.epoch
+        trn_time = trn_opt.time
+        
         val_losses.append(val_loss)
         val_epochs.append(val_epoch)
         val_trn_losses.append(val_trn_loss)
@@ -346,7 +355,7 @@ def main():
     # dataname = "dki-real"
     
     kfolds = 5
-    min_epochs = 3
+    min_epochs = 30
     max_epochs = 30000
     patience = 1
     early_stop = True
@@ -387,7 +396,7 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
+        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
