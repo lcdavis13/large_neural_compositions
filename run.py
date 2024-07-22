@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
 
 import data
-import epoch_halters
+import epoch_managers
 import stream
 import models
 import models_condensed
@@ -183,22 +183,14 @@ class Optimum:
         return best
 
 
-def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, scaler, x_train, y_train, x_valid, y_valid, t,
-               model_name, dataname, fold, loss_fn, distr_error_fn, weight_decay, device,
-               early_stop, patience=10, outputs_per_epoch=10, verbosity=1):
-    
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
-    # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, patience = patience // 2, cooldown = patience)
-    steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples*accumulated_minibatches)
-    base_scheduler = OneCycleLR(optimizer, max_lr=0.1, epochs=min_epochs, steps_per_epoch=steps_per_epoch)
-    scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
-    halter = epoch_halters.FixedHalter(max_epochs=min_epochs)
-    
+def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
+               model_name, dataname, fold, loss_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1):
+    # track stats at various definitions of the "best" epoch
     val_opt = Optimum('val_loss', 'min')
     trn_opt = Optimum('trn_loss', 'min')
-    last_opt = Optimum(metric=None) # metric None to update it every time, even though metric="epoch" would do the same
+    last_opt = Optimum(metric=None) # metric None to update it every time. metric="epoch" would do the same
     
-    old_lr = LR
+    old_lr = scheduler.get_last_lr()
     
     filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
     filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
@@ -213,7 +205,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
         "Avg Training Distr Error", -1.0,
         "Avg Validation Loss", l_val,
         "Avg Validation Distr Error", p_val,
-        "Learning Rate", LR,
+        "Learning Rate", old_lr,
         "Elapsed Time", 0.0,
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
@@ -226,7 +218,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
     while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
-            fold, halter.epoch, model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
+            fold, manager.epoch, model_name, dataname, loss_fn, distr_error_fn, device, verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
         # l_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
         
@@ -242,7 +234,7 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
         
         stream.stream_results(filepath_out_epoch, verbosity > 0,
             "fold", fold + 1,
-            "epoch", halter.epoch + 1,
+            "epoch", manager.epoch + 1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
             "Avg Training Distr Error", p_trn,
@@ -253,22 +245,22 @@ def run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_mi
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot_loss(dataname, model_name, halter.epoch + 1, l_trn, l_val, add_point=add_point)
+        stream.plot_loss(dataname, model_name, manager.epoch + 1, l_trn, l_val, add_point=add_point)
         
         old_lr = new_lr
         
         # track best validation
-        if val_opt.track_best(halter.epoch, l_trn, l_val, old_lr, elapsed_time):
+        if val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time):
             torch.save(model.state_dict(), filepath_out_model)
 
         # track best training
-        trn_opt.track_best(halter.epoch, l_trn, l_val, old_lr, elapsed_time)
+        trn_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time)
         
         # track newest
-        last_opt.track_best(halter.epoch, l_trn, l_val, old_lr, elapsed_time)
+        last_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time)
         
         # check if we should continue
-        if halter.should_stop(last_opt):
+        if manager.should_stop(last_opt):
             break
     
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
@@ -292,13 +284,21 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     trn_times = []
     for fold_num, data_fold in enumerate(data_folded):
         model = model_constr(model_args).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
+        manager = epoch_managers.FixedManager(max_epochs=min_epochs)
         
         x_train, y_train, x_valid, y_valid = data_fold
+        
+        steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples * accumulated_minibatches)
+        # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, min_epochs=min_epochs, max_epochs=max_epochs, patience = patience // 2, cooldown = patience)
+        base_scheduler = OneCycleLR(optimizer, max_lr=0.1, epochs=min_epochs, steps_per_epoch=steps_per_epoch)
+        scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
+        
+        
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val_opt, trn_opt, last_opt = run_epochs(model, min_epochs, max_epochs, minibatch_examples, accumulated_minibatches, LR, scaler, x_train, y_train,
-                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, distr_error_fn, weight_decay, device, early_stop,
-                patience=patience, outputs_per_epoch=10, verbosity=verbosity - 1)
+        val_opt, trn_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
+                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1)
         
         val_loss = val_opt.val_loss
         val_trn_loss = val_opt.trn_loss

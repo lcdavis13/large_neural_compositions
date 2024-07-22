@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
 
 
-class EpochHalter(ABC):
+class EpochManager(ABC):
     @abstractmethod
     def should_stop(self, epoch, metrics):
         pass
 
 
-class FixedHalter(EpochHalter):
+class FixedManager(EpochManager):
     def __init__(self, max_epochs):
         self.max_epochs = max_epochs
         self.epoch = 0
@@ -17,7 +17,7 @@ class FixedHalter(EpochHalter):
         return self.epoch >= self.max_epochs
 
 
-class MovingAverageEpochHalter(EpochHalter):
+class MovingAverageEpochManager(EpochManager):
     def __init__(self, memory, threshold, mode='rel', criterion='earlystop', min_epochs=0, max_epochs=None):
         self.epoch = 0
         self.min_epochs = min_epochs
@@ -71,22 +71,22 @@ class MovingAverageEpochHalter(EpochHalter):
             return ema_score > reference + self.threshold
 
 
-class EarlyStopHalter(MovingAverageEpochHalter):
+class EarlyStopManager(MovingAverageEpochManager):
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
         super().__init__(memory, threshold, mode, criterion='earlystop', min_epochs=min_epochs, max_epochs=max_epochs)
 
 
-class DivergenceHalter(MovingAverageEpochHalter):
+class DivergenceManager(MovingAverageEpochManager):
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
         super().__init__(memory, threshold, mode, criterion='divergence', min_epochs=min_epochs, max_epochs=max_epochs)
 
 
-class ExplosionHalter(MovingAverageEpochHalter):
+class ExplosionManager(MovingAverageEpochManager):
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
         super().__init__(memory, threshold, mode, criterion='explosion', min_epochs=min_epochs, max_epochs=max_epochs)
 
 
-class ConvergenceHalter(EpochHalter):
+class ConvergenceManager(EpochManager):
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
         self.epoch = 0
         self.min_epochs = min_epochs
@@ -139,18 +139,18 @@ if __name__ == "__main__":
             self.trn_loss = trn_loss
             self.val_loss = val_loss
     
-    # halter = FixedHalter(max_epochs=10)
-    # halter = MovingAverageEpochHalter(memory=0.7, threshold=0.05, mode='rel', criterion='earlystop', min_epochs=3, max_epochs=15)
-    halter = EarlyStopHalter(memory=0.7, threshold=0.05, mode='rel', min_epochs=3, max_epochs=15)
+    # manager = FixedHalter(max_epochs=10)
+    # manager = MovingAverageEpochManager(memory=0.7, threshold=0.05, mode='rel', criterion='earlystop', min_epochs=3, max_epochs=15)
+    manager = EarlyStopManager(memory=0.7, threshold=0.05, mode='rel', min_epochs=3, max_epochs=15)
     
     # mock training loop
     train_scores = [0.5, 0.4, 0.45, 0.43, 0.3, 0.2, 0.1, 0.05, 0.04, 0.03, 0.02, 0.01, 0.005, 0.002, 0.001]
     val_scores = [0.6, 0.5, 0.55, 0.53, 0.4, 0.3, 0.2, 0.3, 0.34, 0.33, 0.32, 0.31, 0.305, 0.302, 0.301]
     while True:
-        metrics = Metrics(trn_loss=train_scores[halter.epoch], val_loss=val_scores[halter.epoch])
-        if halter.should_stop(metrics):
+        metrics = Metrics(trn_loss=train_scores[manager.epoch], val_loss=val_scores[manager.epoch])
+        if manager.should_stop(metrics):
             break
-    print(f"Done after {halter.epoch} epochs")
+    print(f"Done after {manager.epoch} epochs")
 
 # TO DO: add max and min epochs to all of the halters except FixedHalter
 # Migrate my run_epochs early stopping to use this instead
