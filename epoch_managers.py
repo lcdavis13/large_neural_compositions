@@ -6,6 +6,10 @@ class EpochManager(ABC):
     def should_stop(self, epoch, metrics):
         pass
 
+    @abstractmethod
+    def get_metric(self):
+        pass
+
 
 class FixedManager(EpochManager):
     def __init__(self, max_epochs):
@@ -15,6 +19,9 @@ class FixedManager(EpochManager):
     def should_stop(self, metrics):
         self.epoch += 1
         return self.epoch >= self.max_epochs
+    
+    def get_metric(self):
+        return self.epoch / self.max_epochs
 
 
 class MovingAverageEpochManager(EpochManager):
@@ -69,6 +76,9 @@ class MovingAverageEpochManager(EpochManager):
             return ema_score > reference * (1.0 + self.threshold)
         else:
             return ema_score > reference + self.threshold
+        
+    def get_metric(self):
+        return self.ema
 
 
 class EarlyStopManager(MovingAverageEpochManager):
@@ -131,6 +141,9 @@ class ConvergenceManager(EpochManager):
             result = ema_score > self.best_score + self.threshold
         
         return result
+        
+    def get_metric(self):
+        return self.ema
 
 
 if __name__ == "__main__":

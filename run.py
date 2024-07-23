@@ -33,7 +33,7 @@ def ceildiv(a, b):
 
 
 class Optimum:
-    def __init__(self, metric, metric_type='min', epoch=-1, trn_loss=float('inf'), val_loss=float('inf'), lr=-1, time=-1):
+    def __init__(self, metric, metric_type='min', epoch=-1, trn_loss=float('inf'), val_loss=float('inf'), lr=-1, time=-1, manager_metric=float('inf')):
         self.metric_name = metric
         self.metric_type = metric_type
         
@@ -42,23 +42,27 @@ class Optimum:
         self.val_loss = val_loss
         self.lr = lr
         self.time = time
+        self.manager_metric = manager_metric
 
         if metric_type == 'min':
             self.best_metric = float('inf')
         elif metric_type == 'max':
             self.best_metric = -float('inf')
 
-    def track_best(self, epoch, trn_loss, val_loss, lr, time):
+    def track_best(self, epoch, trn_loss, val_loss, lr, time, manager_metric):
         if self.metric_name is None:
             best = True
         else:
             current_metric = locals()[self.metric_name]
-            if self.metric_type == 'min':
-                best = current_metric < self.best_metric
+            if current_metric is not None:
+                if self.metric_type == 'min':
+                    best = current_metric < self.best_metric
+                else:
+                    best = current_metric > self.best_metric
+                if best:
+                    self.best_metric = current_metric
             else:
-                best = current_metric > self.best_metric
-            if best:
-                self.best_metric = current_metric
+                best = False
 
         if best:
             self.epoch = epoch
@@ -66,6 +70,7 @@ class Optimum:
             self.val_loss = val_loss
             self.lr = lr
             self.time = time
+            self.manager_metric = manager_metric
             
         return best
 
@@ -163,11 +168,11 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
                 "Learning Rate", scheduler.get_last_lr(),
                 )
             if lr_plot:
-                stream.plot_single(lr_plot, "epochs", "LR", model_name, epoch_num + mb/minibatches, scheduler.get_last_lr(), False)
+                stream.plot_single(lr_plot, "epochs", "LR", model_name, epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=True)
             if loss_plot:
                 stream.plot_loss(loss_plot, model_name, epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
-                stream.plot_single(lr_loss_plot, "Learning Rate", "Loss", model_name, scheduler.get_last_lr(), stream_loss / stream_examples, False)
+                stream.plot_single(lr_loss_plot, "Learning Rate", "Loss", model_name, scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
             stream_loss = 0
             stream_penalty = 0
             prev_time = end_time
@@ -189,53 +194,95 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
 
 
 def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1):
+    total_samples = x.size(0)
+    steps_per_epoch = ceildiv(total_samples, minibatch_examples * accumulated_minibatches)
+    
     model = model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-7, weight_decay=weight_decay)
-    manager = epoch_managers.DivergenceManager(memory=0.5, threshold=0.05, min_epochs=min_epochs, max_epochs=max_epochs)
-    steps_per_epoch = minibatch_examples * accumulated_minibatches
-    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=3.3, steps_per_epoch = steps_per_epoch)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=weight_decay)
+    manager = epoch_managers.DivergenceManager(memory=0.99, threshold=0.03, min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
+    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=10.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase x10 after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=1e-7)
     
-    # TO DO: It's currently using EPOCH metrics to find the optimum instead of smoothed batch metrics.
-    # This loses much of the benefit of a fast LR Finder since it requires many epochs to get a good result that way.
-    # After switching to batch metrics, it's also extremely important that they be smoothed.
-    # Using epochs also prevents the manager from stopping at the right time, so really I should just be doing batches and avoid the concept of epochs entirely.
-
-    filepath_out_incremental = f'results/logs/{model_name}_{dataname}_LRRangeSearch.csv'
-    
+    # filepath_out_incremental = f'results/logs/{model_name}_{dataname}_LRRangeSearch.csv'
     old_lr = scheduler.get_last_lr()
     train_examples_seen = 0
-    trn_opt = Optimum('trn_loss', 'min')
-    last_opt = Optimum(metric=None) # metric None to update it every time. metric="epoch" would do the same
-    while True:
-        l_trn, p_trn, train_examples_seen = train_epoch(model, x, y, minibatch_examples,
-                                                        accumulated_minibatches, optimizer, scheduler, scaler,
-                                                        timesteps, steps_per_epoch, train_examples_seen,
-                                                        0, manager.epoch, model_name, dataname, loss_fn,
-                                                        distr_error_fn, device, filepath_out_incremental, loss_plot="LR Range Search epochs", lr_loss_plot="LR Range Search", verbosity=verbosity - 1)
+    smoothed_loss_opt = Optimum('manager_metric', 'min', manager_metric=float("inf"))
+    last_opt = Optimum(metric=None, manager_metric=float("inf"))
+    
+    total_samples = x.size(0)
+    minibatches = ceildiv(total_samples, minibatch_examples)
+    current_index = 0
+    
+    model.train()
+    optimizer.zero_grad()
+    
+    stream_interval = 1 # max(1, minibatches // steps_per_epoch)
+    
+    total_loss = 0
+    total_penalty = 0
+    stream_loss = 0
+    stream_penalty = 0
+    stream_examples = 0
+    
+    done = False
+    while not done:
+        x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index)
+        if current_index >= total_samples:
+            current_index = 0
         
-        # Update learning rate based on validation loss
-        scheduler.epoch_step(l_trn)
+        y_pred = model(timesteps, x_batch).to(device)
+        loss = loss_fn(y_pred, y_batch) / accumulated_minibatches
+        scaler.scale(loss).backward()
         
-        # stream.plot_loss(f"{dataname}:LR search", model_name, manager.epoch + 1, l_trn, None)
+        distr_error = distr_error_fn(y_pred)
+        total_loss += loss.item() * x_batch.size(0)
+        total_penalty += distr_error.item() * x_batch.size(0)
+        train_examples_seen += x_batch.size(0)
         
-        # track best training
-        trn_opt.track_best(manager.epoch, l_trn, None, old_lr, None)
+        if (manager.epoch + 1) % accumulated_minibatches == 0:
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.batch_step()
+            optimizer.zero_grad()
         
-        # track newest
-        last_opt.track_best(manager.epoch, l_trn, None, old_lr, None)
+        stream_loss += total_loss
+        stream_penalty += total_penalty
+        stream_examples += x_batch.size(0)
+        
+        scheduler.epoch_step(loss)
+        
+        # TODO: Fix bug, manager.get_metric will be behind by 1 epoch, truncating final values
+        smoothed_loss_opt.track_best(manager.epoch, loss, None, old_lr, None, manager.get_metric())
+        last_opt.track_best(manager.epoch, loss, None, old_lr, None, manager.get_metric())
         
         old_lr = scheduler.get_last_lr()
         
-        # check if we should continue
+        done = manager.should_stop(last_opt)
+        
+        if (manager.epoch + 1) % stream_interval == 0:
+            # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
+            #                    manager.epoch, manager.get_metric().item(), add_point=False)
+            stream.plot_single("LRRS Loss vs LR", "Learning Rate", "Smoothed Loss", model_name,
+                               scheduler.get_last_lr(), manager.get_metric().item(), add_point=False, x_log=True)
+        stream_loss = 0
+        stream_penalty = 0
+        stream_examples = 0
+        
         if manager.should_stop(last_opt):
             break
     
     print(f"Last LR: {last_opt.lr}")
-    print(f"Best LR: {trn_opt.lr}")
-    
-    alpha = 0.9 # TO DO: instead of averaging the LR, we should average the epoch and get the LR at that moment.
-    return alpha*trn_opt.lr + (1.0 - alpha)*last_opt.lr
+    print(f"Best LR: {smoothed_loss_opt.lr}")
+
+    # TODO: Track the SLOPE of the smoothed loss, and use a mix of that LR and the "best" LR. The minimum is occurring when it has stopped improving, so using a point after that is causing me to overestimate the point at which "slight divergence" occurs.
+    # TODO: Draw the point that is chosen onto the LR Finder curve plot. I'll need to add a new method for that.
+    # TODO: Tune the LR Finder / OneCycle params. I'm not really getting good performance right now. It might be too few epochs.
+    # TODO: Most importantly, I need to do some fast hyperparameter searching on each model using the LR Finder as metric (in particular WD).
+    alpha = 0.9
+    diverge_lr = math.exp(alpha * math.log(smoothed_loss_opt.lr) + (1.0 - alpha) * math.log(last_opt.lr))
+    print(f"Peak LR: {diverge_lr}")
+    return diverge_lr
+
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
@@ -304,15 +351,15 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         stream.plot_loss(dataname, model_name, manager.epoch + 1, l_trn, l_val, add_point=add_point)
         
         # track best validation
-        val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time)
+        val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time, manager.get_metric())
         # if val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time):
         #     torch.save(model.state_dict(), filepath_out_model)
 
         # track best training
-        trn_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time)
+        trn_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time, manager.get_metric())
         
         # track newest
-        last_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time)
+        last_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time, manager.get_metric())
         
         old_lr = new_lr
         
@@ -454,12 +501,12 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
-        # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
+        'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(data_dim),
         'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
         # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(data_dim, 1),
         #     nn.Linear(1, data_dim))),

@@ -104,7 +104,7 @@ def update_or_append(file_started, filename, names, values):
             writer.writerow(values)
 
 
-def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False):
+def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False, x_log=False, y_log=False):
     plt.ion()
     """
     Plots an arbitrary number of curves against epochs.
@@ -174,16 +174,20 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.legend()
+    if x_log:
+        ax.set_xscale('log')
+    if y_log:
+        ax.set_yscale('log')
     
     plt.draw()
     plt.pause(0.00000001)
 
 
-def plot_single(title, xlabel, ylabel, line_label, x_value, y_value, add_point=False):
+def plot_single(title, xlabel, ylabel, line_label, x_value, y_value, add_point=False, x_log=False, y_log=False):
     """
     Helper method to call the plot function with only one value of y and its label.
     """
-    plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point)
+    plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log, y_log=y_log)
 
 
 def plot_loss(title, label, epoch, train_loss, validation_loss=None, add_point=False):
