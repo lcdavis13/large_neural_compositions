@@ -172,7 +172,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             if loss_plot:
                 stream.plot_loss(loss_plot, model_name, epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
-                stream.plot_single(lr_loss_plot, "Learning Rate", "Loss", model_name, scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
+                stream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", model_name, scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
             stream_loss = 0
             stream_penalty = 0
             prev_time = end_time
@@ -262,7 +262,7 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
         if (manager.epoch + 1) % stream_interval == 0:
             # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
-            stream.plot_single("LRRS Loss vs LR", "Learning Rate", "Smoothed Loss", model_name,
+            stream.plot_single("LRRS Loss vs LR", "log( Learning Rate )", "Smoothed Loss", model_name,
                                scheduler.get_last_lr(), manager.get_metric().item(), add_point=False, x_log=True)
         stream_loss = 0
         stream_penalty = 0
