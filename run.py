@@ -14,6 +14,8 @@ import models_condensed
 import models_baseline
 import lr_schedule
 
+from dotsy import dicy, ency
+
 
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))  # more robust implementation?
@@ -199,8 +201,8 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     
     model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=weight_decay)
-    manager = epoch_managers.DivergenceManager(memory=0.99, threshold=0.03, min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
-    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=10.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase x10 after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
+    manager = epoch_managers.DivergenceManager(memory=0.99, threshold=0.05, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
+    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase x10 after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=1e-7)
     
     # filepath_out_incremental = f'results/logs/{model_name}_{dataname}_LRRangeSearch.csv'
@@ -262,7 +264,7 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
         if (manager.epoch + 1) % stream_interval == 0:
             # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
-            stream.plot_single("LRRS Loss vs LR", "log( Learning Rate )", "Smoothed Loss", model_name,
+            stream.plot_single(f"LRRS for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}",
                                scheduler.get_last_lr(), manager.get_metric().item(), add_point=False, x_log=True)
         stream_loss = 0
         stream_penalty = 0
@@ -284,6 +286,39 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     print(f"Peak LR: {diverge_lr}")
     return diverge_lr
 
+
+# Search for hyperparameters by identifying the values that lead to the highest learning rate before divergence
+# Based on notes found here: https://sgugger.github.io/the-1cycle-policy.html
+def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches,
+                                       device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn,
+                                       threshold_proportion=0.9, verbosity=1):
+    # weight_decay_values = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0] # SLPReplicator
+    weight_decay_values = [0, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7] #, 1e-6, 1e-5, 1e-4, 1e-3] # cNODE0
+    
+    highest_lr = -np.inf
+    lr_results = {}
+
+    # Perform the hyperparameter search
+    for wd in weight_decay_values:
+        model = model_constr(model_args)
+        
+        diverge_lr = find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches,
+                             device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, verbosity)
+        lr_results[wd] = diverge_lr
+        stream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
+                           False, y_log=True, x_log=True)
+        
+        if diverge_lr > highest_lr:
+            highest_lr = diverge_lr
+
+    # Determine the valid weight_decay values within the threshold proportion
+    valid_weight_decays = [wd for wd, lr in lr_results.items() if lr >= threshold_proportion * highest_lr]
+
+    # Select the largest valid weight_decay
+    optimal_weight_decay = max(valid_weight_decays)
+    optimal_lr = lr_results[optimal_weight_decay]
+
+    return optimal_weight_decay, optimal_lr
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
@@ -449,7 +484,11 @@ def pessimistic_summary(fold_losses):
 
 def main():
     
-    # Experiment parameters
+    # device
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(device)
+    
+    # Data
     
     # dataname = "waimea"
     # dataname = "waime a-condensed"
@@ -462,16 +501,9 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
+    # data folding params
     kfolds = 5
-    min_epochs = 30
-    max_epochs = 30000
-    patience = 1
-    early_stop = True
     DEBUG_SINGLE_FOLD = True
-    
-    # device
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    print(device)
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
@@ -484,88 +516,93 @@ def main():
     print(f'training data shape: {data_folded[0][0].shape}')
     print(f'validation data shape: {data_folded[0][2].shape}')
     
-    # get dimensions of data for model construction
-    _, data_dim = x.shape
+    # experiment hyperparameters
+    hp = dicy()
+    hp.min_epochs = 30
+    hp.max_epochs = 30000
+    hp.patience = 1
+    hp.early_stop = True
     
-    
-    # Hyperparameters to tune
-    minibatch_examples = 32
-    accumulated_minibatches = 1
-    LR = 0.0316
-    WD = 0.01
-    
-    hidden_dim = math.isqrt(data_dim)
-    attend_dim = 16 # math.isqrt(hidden_dim)
-    num_heads = 4
-    depth = 2
-    ffn_dim_multiplier = 0.5
-    assert attend_dim % num_heads == 0, "attend_dim must be divisible by num_heads"
+    # optimization hyperparameters
+    hp.minibatch_examples = 32
+    hp.accumulated_minibatches = 1
+    hp.LR = 0.0316
+    hp.WD = 0.01
+
+    # model shape hyperparameters
+    _, hp.data_dim = x.shape
+    hp.hidden_dim = math.isqrt(hp.data_dim)
+    hp.attend_dim = 16 # math.isqrt(hidden_dim)
+    hp.num_heads = 4
+    hp.depth = 2
+    hp.ffn_dim_multiplier = 0.5
+    assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(data_dim),
-        # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(data_dim),
-        # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(data_dim),
-        # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(data_dim),
-        'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(data_dim),
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(data_dim),
+        # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
+        # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
+        # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
+        # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
+        # 'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(hp.data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
         # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, 1),
-        #     nn.Linear(1, data_dim))),
-        
+        #     nn.Linear(hp.data_dim, 1),
+        #     nn.Linear(1, hp.data_dim))),
+        #
         'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-            nn.Linear(data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], data_dim))),
+            nn.Linear(hp.data_dim, args["hidden_dim"]),
+            nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE2-custom-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
+        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE-deep3': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
+        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE-deep3-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
+        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE-deep4-flat': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
+        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE-deep4-flat-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(data_dim, args["hidden_dim"]),
+        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(data_dim),
-        'cNODE2': lambda args: models.cNODE2(data_dim),
+        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
+        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         
-        # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(data_dim, args["attend_dim"], args["attend_dim"]),
-        # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE': lambda args: models_condensed.canODE_attention(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], args["num_heads"]),
-        # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(data_dim, args["attend_dim"], 1),
-        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
-        'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(data_dim, 8, 2, 3, 0.5),
-        'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(data_dim, 32, 4, 3, 1.0),
-        'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(data_dim, 64, 16, 3, 2.0),
+        # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE': lambda args: models_condensed.canODE_attention(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], args["num_heads"]),
+        # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], 1),
+        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
+        'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
+        'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
+        'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
         
-        # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(data_dim, args["hidden_dim"]),  # this model is not good
-        # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(data_dim), # sanity test, this is the same as cNODE2 but less optimized
-        # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(data_dim, data_dim), nn.Linear(data_dim, data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        # "cNODE2-static": lambda args: models.cNODE2_ExternalFitness(data_dim),
-        # "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
+        # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
+        # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(hp.data_dim), # sanity test, this is the same as cNODE2 but less optimized
+        # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(hp.data_dim, hp.data_dim), nn.Linear(hp.data_dim, hp.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        # "cNODE2-static": lambda args: models.cNODE2_ExternalFitness(hp.data_dim),
+        # "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(hp.data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
     
     
@@ -574,6 +611,8 @@ def main():
     # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
     
     distr_error_fn = distribution_error
+    
+    scaler = torch.cuda.amp.GradScaler()
     
     # time step "data"
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
@@ -614,12 +653,10 @@ def main():
     #             for depth in [2, 3]:
     #     # END of hacky hyperparam search - remove
     
-    model_args = {"hidden_dim": hidden_dim, "attend_dim": attend_dim, "num_heads": num_heads, "depth": depth, "ffn_dim_multiplier": ffn_dim_multiplier}
-    
-    scaler = torch.cuda.amp.GradScaler()
-    
     filepath_out_expt = f'results/{dataname}_experiments.csv'
     for model_name, model_constr in models_to_test.items():
+    
+        model_args = {"hidden_dim": hp.hidden_dim, "attend_dim": hp.attend_dim, "num_heads": hp.num_heads, "depth": hp.depth, "ffn_dim_multiplier": hp.ffn_dim_multiplier}
         
         # # TODO remove this: it's just to resume from where we were previously
         # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
@@ -627,22 +664,24 @@ def main():
         
         try:
             print(f"\nRunning model: {model_name}")
-        
+            
             # test construction and print parameter count
             model = model_constr(model_args)
             num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"Number of parameters in model: {num_params}")
             
             # find optimal LR
-            LR = find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches, device, 3, 100, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=1)
+            hp.WD, hp.LR = hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches, device, 3, 100, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1)
             
             # train and test the model across multiple folds
-            val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = (
-                crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience,
-                    kfolds, min_epochs, max_epochs, minibatch_examples, model_constr, model_args,
-                    model_name, dataname, timesteps, loss_fn, distr_error_fn, WD, verbosity=0))
+            val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
+                hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
+                kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
+                model_name, dataname, timesteps, loss_fn, distr_error_fn, hp.WD, verbosity=0
+            )
             
-    
+            
+            
             print(f"Val Losses: {val_losses}")
             print(f"Epochs: {val_epochs}")
             print(f"Durations: {val_times}")
@@ -661,15 +700,8 @@ def main():
                     "Trn @ Time", trn_times[i],
                     "Trn @ Val Loss", trn_val_losses[i],
                     "k-folds", kfolds,
-                    "early stop patience", patience,
-                    "minibatch_examples", minibatch_examples,
-                    "accumulated_minibatches", accumulated_minibatches,
-                    "learning rate", LR,
-                    "weight decay", WD,
-                    "LR", LR,
-                    "WD", WD,
                     "timesteps", ode_timesteps,
-                     *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                    *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
                     prefix="\n=======================================================EXPERIMENT========================================================\n",
                     suffix="\n=========================================================================================================================\n")
             
@@ -697,13 +729,8 @@ def main():
                 "Trn @ Time", -1,
                 "Trn @ Val Loss", -1,
                 "k-folds", kfolds,
-                "early stop patience", patience,
-                "minibatch_examples", minibatch_examples,
-                "accumulated_minibatches", accumulated_minibatches,
-                "learning rate", LR,
-                "weight decay", WD,
                 "timesteps", ode_timesteps,
-                 *list(itertools.chain(*model_args.items())), # unroll the model args dictionary
+                *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
                 prefix="\n=======================================================EXPERIMENT========================================================\n",
                 suffix="\n=========================================================================================================================\n")
             print(f"Model {model_name} failed with error:\n{e}")
@@ -722,9 +749,6 @@ if __name__ == "__main__":
 # TODO: Confirm that changes of t shape do not alter performance, then remove t argument to model forward for non-ODEfuncs. The t can be generated in forward to pass to odeint.
 # TODO: realtime visualization
 # TODO: Add param count to filename of logs
-# TODO: Modify the stopping algorithm to use a linear fit of the last x% of scores instead of waiting until there's not a single trial that does better. Random fluctuations make that really unreliable.
-# TODO: Add support for LR scheduler in run_epochs.
-# TODO: Add a LR range finder function as an alternative to the crossvalidate_model. Run this before each experiment (or fold?) to set LR.
 # TODO: Instead of my lambda model constructors, try base_model = torchdistx.deferred_init.deferred_init(MyModel, param1, param2, ...)
 # TODO: Try muP for hyperparameter scaling: https://github.com/microsoft/mup
 
@@ -734,3 +758,5 @@ if __name__ == "__main__":
 # TODO: (Probably not a good idea) As an alternative to attention, try condensing into a high enough space that we can still use channels as IDs (minimum size would be the largest summed assemblage in the dataset) and then use a vanilla (but smaller) cNODE. The difficulty here is that the embed mapping needs to be dynamic because many input channels will map to the same embedded channels and some of those could occur at the same time. There effectively needs to be the ability to decide on the fly that "A should go in M but that's already occupied by B, so A will go in N instead, which has the same properties as M" ... which means the embedding needs to have redundancies. I guess I could hardcode there being a few redundant copies of each channel somehow (shared weights?) but I don't like that idea. In general this seems much weaker than using attention to divorce the species representations from the preferred basis, allowing them to share dynamics to exactly the extent that is helpful via independent subspaces.
 # TODO: Test baseline ODE model that does not learn F(x) at all - either it's just torch.ones() or it's a torch.random() at initialization or it's a torch.random() in the forward call.
 # TODO: Test multi-layer attention-based models that do not utilize ODEs at all.
+
+# TODO: Try all of the small models with higher parameter counts. We don't need to use such small embedding dimension.

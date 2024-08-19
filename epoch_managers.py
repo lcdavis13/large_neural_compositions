@@ -73,7 +73,9 @@ class MovingAverageEpochManager(EpochManager):
             return True  # default to stopping in case of unknown criterion
         
         if self.mode == 'rel':
-            return ema_score > reference * (1.0 + self.threshold)
+            return ema_score > reference + reference*self.threshold
+        elif self.mode == 'rel_start':
+            return ema_score > reference + self.initial_score*self.threshold
         else:
             return ema_score > reference + self.threshold
         
