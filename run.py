@@ -612,7 +612,7 @@ def main():
     
     distr_error_fn = distribution_error
     
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler(device)
     
     # time step "data"
     ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
@@ -760,3 +760,5 @@ if __name__ == "__main__":
 # TODO: Test multi-layer attention-based models that do not utilize ODEs at all.
 
 # TODO: Try all of the small models with higher parameter counts. We don't need to use such small embedding dimension.
+
+# cNODE-based models seem to get nearly unlimited ability to handle high LR the lower WD is (at least during LRRS tests), BUT the models become very stiff and therefore torchdiffeq solving is slow. Would it be better to tune our LR based on optimizing Loss vs Time, rather than Loss vs Samples?

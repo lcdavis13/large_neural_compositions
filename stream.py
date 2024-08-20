@@ -5,9 +5,10 @@ import time
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+
 import matplotlib
 matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 
 
 def stream_results(filename, print_console, *args, prefix="", suffix=""):
