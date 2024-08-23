@@ -615,8 +615,9 @@ def main():
     scaler = torch.amp.GradScaler(device)
     
     # time step "data"
-    ode_timesteps = 2  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
-    timesteps = torch.arange(0.0, 1.0, 1.0 / ode_timesteps).to(device)
+    ode_timesteps = 5  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
+    ode_timemax = 1.0
+    timesteps = torch.arange(0.0, ode_timemax, ode_timemax / (ode_timesteps - 1)).to(device)
     
     # # START of hacky hyperparam search - remove
     # minibatch_examples_list = [1, 8, 16, 32]
