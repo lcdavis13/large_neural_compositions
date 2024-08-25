@@ -61,3 +61,20 @@ def get_batch(x, y, mb_size, current_index):
     # print(f'y {y_batch.shape}')
     # print(f'y {y_batch[0, :]}')
     return x_batch, y_batch, end_index
+
+
+def shuffle_data(x, y):
+    # Assuming x and y are numpy arrays or PyTorch tensors
+    assert len(x) == len(y)
+    
+    # If x and y are PyTorch tensors
+    if isinstance(x, torch.Tensor):
+        permutation = torch.randperm(len(x))
+        x = x[permutation]
+        y = y[permutation]
+    else:  # If x and y are numpy arrays
+        permutation = np.random.permutation(len(x))
+        x = x[permutation]
+        y = y[permutation]
+    
+    return x, y

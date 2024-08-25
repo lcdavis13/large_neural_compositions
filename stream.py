@@ -133,6 +133,8 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
     fig, ax = plot.figs[title]
     
     # Determine the current color index based on the number of existing lines and new lines
+    # assumption is that every time this function is called for this plot, there will be the same number of lines.
+    # If that number is more than one, they will all use the same color, but different style.
     num_existing_lines = len(ax.get_lines())
     num_new_lines = len(line_labels)
     color_index = num_existing_lines // num_new_lines
@@ -162,12 +164,12 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
                 line.set_xdata(list(line.get_xdata()) + [x_value])
                 line.set_ydata(list(line.get_ydata()) + [value])
                 if add_point:
-                    ax.plot([x_value], [value], '*', color=line.get_color())
+                    ax.text(x_value, value, '*', fontsize=18, color=line.get_color(), ha='center', va='center')
         else:
             if value is not None:
                 ax.plot([x_value], [value], label=label, color=current_color, linestyle=linestyle)
                 if add_point:
-                    ax.plot([x_value], [value], '*', color=current_color)
+                    ax.text(x_value, value, '*', fontsize=18, color=current_color, ha='center', va='center')
     
     ax.relim()
     ax.autoscale_view()
@@ -180,6 +182,35 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
     if y_log:
         ax.set_yscale('log')
     
+    plt.draw()
+    plt.pause(0.00000001)
+    
+    
+def plot_point(title, line_label, x_value, y_value, symbol="o"):
+    """
+    Plots a single point on an existing curve.
+        title (str): Title of the plot
+        line_label (str): Label of the curve
+        x_value (number): x of the point
+        y_value (number): y of the point
+    """
+    if not hasattr(plot, 'figs') or title not in plot.figs:
+        print(f"Plot with title '{title}' does not exist.")
+        return
+
+    fig, ax = plot.figs[title]
+
+    lines = {line.get_label(): line for line in ax.get_lines()}
+
+    if line_label in lines:
+        line = lines[line_label]
+        ax.text(x_value, y_value, '*', fontsize=18, color=line.get_color(), ha='center', va='center')
+    else:
+        print(f"Line with label '{line_label}' does not exist in the plot '{title}'.")
+        return
+
+    ax.relim()
+    ax.autoscale_view()
     plt.draw()
     plt.pause(0.00000001)
 

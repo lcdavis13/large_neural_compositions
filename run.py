@@ -1,20 +1,20 @@
 import itertools
 import math
 import time
+
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
+from dotsy import dicy
+from torch.optim.lr_scheduler import OneCycleLR
 
 import data
 import epoch_managers
-import stream
-import models
-import models_condensed
-import models_baseline
 import lr_schedule
-
-from dotsy import dicy, ency
+import models
+import models_baseline
+import models_condensed
+import stream
 
 
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
@@ -134,6 +134,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         
         if current_index >= total_samples:
             current_index = 0  # Reset index if end of dataset is reached
+            x, y = data.shuffle_data(x, y)
         
         y_pred = model(t, x).to(device)
 
@@ -201,8 +202,8 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     
     model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=weight_decay)
-    manager = epoch_managers.DivergenceManager(memory=0.99, threshold=0.05, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
-    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase x10 after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
+    manager = epoch_managers.DivergenceManager(memory=0.95, threshold=0.05, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
+    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase by epoch_lr_factor after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=1e-7)
     
     # filepath_out_incremental = f'results/logs/{model_name}_{dataname}_LRRangeSearch.csv'
@@ -218,7 +219,7 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     model.train()
     optimizer.zero_grad()
     
-    stream_interval = 1 # max(1, minibatches // steps_per_epoch)
+    stream_interval = 1#minibatches
     
     total_loss = 0
     total_penalty = 0
@@ -231,6 +232,7 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
         x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index)
         if current_index >= total_samples:
             current_index = 0
+            x, y = data.shuffle_data(x, y)
         
         y_pred = model(timesteps, x_batch).to(device)
         loss = loss_fn(y_pred, y_batch) / accumulated_minibatches
@@ -259,18 +261,23 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
         
         old_lr = scheduler.get_last_lr()
         
-        done = manager.should_stop(last_opt)
+        stop = manager.should_stop(last_opt)
         
-        if (manager.epoch + 1) % stream_interval == 0:
+        if manager.epoch % stream_interval == 0:
             # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
             stream.plot_single(f"LRRS for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}",
                                scheduler.get_last_lr(), manager.get_metric().item(), add_point=False, x_log=True)
+            stream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss", f"{model_name}, wd:{weight_decay}",
+                               scheduler.get_last_lr(), loss.item(), add_point=False, x_log=True)
+            print(f"Updated on {manager.epoch}")
+        else:
+            print(f"No update on {manager.epoch}")
         stream_loss = 0
         stream_penalty = 0
         stream_examples = 0
         
-        if manager.should_stop(last_opt):
+        if stop:
             break
     
     print(f"Last LR: {last_opt.lr}")
@@ -282,7 +289,12 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     # TODO: Most importantly, I need to do some fast hyperparameter searching on each model using the LR Finder as metric (in particular WD).
     # alpha = 0.9
     # diverge_lr = math.exp(alpha * math.log(smoothed_loss_opt.lr) + (1.0 - alpha) * math.log(last_opt.lr))
-    diverge_lr = smoothed_loss_opt.lr * 0.5
+    diverge_lr = smoothed_loss_opt.lr # * 0.5
+    diverge_loss = smoothed_loss_opt.best_metric
+    
+    stream.plot_point(f"LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
+    stream.plot_point(f"Raw LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
+    
     print(f"Peak LR: {diverge_lr}")
     return diverge_lr
 
@@ -317,6 +329,8 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     # Select the largest valid weight_decay
     optimal_weight_decay = max(valid_weight_decays)
     optimal_lr = lr_results[optimal_weight_decay]
+    
+    stream.plot_point(f"WD vs divergence LR", model_name, optimal_weight_decay, optimal_lr, symbol="*")
 
     return optimal_weight_decay, optimal_lr
 
@@ -508,6 +522,7 @@ def main():
     # load data
     filepath_train = f'data/{dataname}_train.csv'
     x, y = data.load_data(filepath_train, device)
+    x, y = data.shuffle_data(x, y)
     data_folded = data.fold_data(x, y, kfolds)
     if DEBUG_SINGLE_FOLD:
         data_folded = [data_folded[0]]
@@ -612,7 +627,8 @@ def main():
     
     distr_error_fn = distribution_error
     
-    scaler = torch.amp.GradScaler(device)
+    # scaler = torch.amp.GradScaler(device)
+    scaler = torch.cuda.amp.GradScaler()
     
     # time step "data"
     ode_timesteps = 5  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
@@ -663,78 +679,78 @@ def main():
         # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
         #     continue
         
-        try:
-            print(f"\nRunning model: {model_name}")
-            
-            # test construction and print parameter count
-            model = model_constr(model_args)
-            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            print(f"Number of parameters in model: {num_params}")
-            
-            # find optimal LR
-            hp.WD, hp.LR = hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches, device, 3, 100, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1)
-            
-            # train and test the model across multiple folds
-            val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
-                hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
-                kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
-                model_name, dataname, timesteps, loss_fn, distr_error_fn, hp.WD, verbosity=0
-            )
-            
-            
-            
-            print(f"Val Losses: {val_losses}")
-            print(f"Epochs: {val_epochs}")
-            print(f"Durations: {val_times}")
-            print(f"Trn Losses: {val_trn_losses}")
-            
-            for i in range(len(val_losses)):
-                stream.stream_scores(filepath_out_expt, True,
-                    "model", model_name,
-                    "model parameters", num_params,
-                    "Validation Score", val_losses[i],
-                    "Val @ Epoch", val_epochs[i],
-                    "Val @ Time", val_times[i],
-                    "Val @ Trn Loss", val_trn_losses[i],
-                    "Train Score", trn_losses[i],
-                    "Trn @ Epoch", trn_epochs[i],
-                    "Trn @ Time", trn_times[i],
-                    "Trn @ Val Loss", trn_val_losses[i],
-                    "k-folds", kfolds,
-                    "timesteps", ode_timesteps,
-                    *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
-                    prefix="\n=======================================================EXPERIMENT========================================================\n",
-                    suffix="\n=========================================================================================================================\n")
-            
-            # summary score for each result vector
-            model_score = pessimistic_summary(val_losses)
-            model_epoch = pessimistic_summary(val_epochs)
-            model_time = pessimistic_summary(val_times)
-            model_trn_loss = pessimistic_summary(val_trn_losses)
-            
-            print(f"Avg Val Losses: {model_score}")
-            print(f"Avg Epochs: {model_epoch}")
-            print(f"Avg Durations: {model_time}")
-            print(f"Avg Trn Losses: {model_trn_loss}")
+        # try:
+        print(f"\nRunning model: {model_name}")
         
-        except Exception as e:
+        # test construction and print parameter count
+        model = model_constr(model_args)
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters in model: {num_params}")
+        
+        # find optimal LR
+        hp.WD, hp.LR = hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches, device, 3, 100, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1)
+        
+        # train and test the model across multiple folds
+        val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
+            hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
+            kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
+            model_name, dataname, timesteps, loss_fn, distr_error_fn, hp.WD, verbosity=0
+        )
+        
+        
+        
+        print(f"Val Losses: {val_losses}")
+        print(f"Epochs: {val_epochs}")
+        print(f"Durations: {val_times}")
+        print(f"Trn Losses: {val_trn_losses}")
+        
+        for i in range(len(val_losses)):
             stream.stream_scores(filepath_out_expt, True,
                 "model", model_name,
-                "model parameters", -1,
-                "Validation Score", -1,
-                "Val @ Epoch", -1,
-                "Val @ Time", -1,
-                "Val @ Trn Loss", -1,
-                "Train Score", -1,
-                "Trn @ Epoch", -1,
-                "Trn @ Time", -1,
-                "Trn @ Val Loss", -1,
+                "model parameters", num_params,
+                "Validation Score", val_losses[i],
+                "Val @ Epoch", val_epochs[i],
+                "Val @ Time", val_times[i],
+                "Val @ Trn Loss", val_trn_losses[i],
+                "Train Score", trn_losses[i],
+                "Trn @ Epoch", trn_epochs[i],
+                "Trn @ Time", trn_times[i],
+                "Trn @ Val Loss", trn_val_losses[i],
                 "k-folds", kfolds,
                 "timesteps", ode_timesteps,
                 *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
                 prefix="\n=======================================================EXPERIMENT========================================================\n",
                 suffix="\n=========================================================================================================================\n")
-            print(f"Model {model_name} failed with error:\n{e}")
+        
+        # summary score for each result vector
+        model_score = pessimistic_summary(val_losses)
+        model_epoch = pessimistic_summary(val_epochs)
+        model_time = pessimistic_summary(val_times)
+        model_trn_loss = pessimistic_summary(val_trn_losses)
+        
+        print(f"Avg Val Losses: {model_score}")
+        print(f"Avg Epochs: {model_epoch}")
+        print(f"Avg Durations: {model_time}")
+        print(f"Avg Trn Losses: {model_trn_loss}")
+        
+        # except Exception as e:
+        #     stream.stream_scores(filepath_out_expt, True,
+        #         "model", model_name,
+        #         "model parameters", -1,
+        #         "Validation Score", -1,
+        #         "Val @ Epoch", -1,
+        #         "Val @ Time", -1,
+        #         "Val @ Trn Loss", -1,
+        #         "Train Score", -1,
+        #         "Trn @ Epoch", -1,
+        #         "Trn @ Time", -1,
+        #         "Trn @ Val Loss", -1,
+        #         "k-folds", kfolds,
+        #         "timesteps", ode_timesteps,
+        #         *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
+        #         prefix="\n=======================================================EXPERIMENT========================================================\n",
+        #         suffix="\n=========================================================================================================================\n")
+        #     print(f"Model {model_name} failed with error:\n{e}")
 
     print("\n\nDONE")
     stream.keep_plots_open()
@@ -744,6 +760,7 @@ def main():
 if __name__ == "__main__":
     main()
 
+# TODO: Set seed for reproducible shuffling
 # TODO: hyperparameter optimization
 # TODO: time limit and/or time based early stopping
 # TODO: hyperparameters optimization based on loss change rate against clock time, somehow
