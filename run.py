@@ -5,8 +5,8 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from dotsy import dicy
-from torch.optim.lr_scheduler import OneCycleLR
+from dotsy import dicy, ency
+from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
 import data
 import epoch_managers
@@ -34,45 +34,44 @@ def ceildiv(a, b):
     return -(a // -b)
 
 
-class Optimum:
-    def __init__(self, metric, metric_type='min', epoch=-1, trn_loss=float('inf'), val_loss=float('inf'), lr=-1, time=-1, manager_metric=float('inf')):
+# TODO: switch most of this functionality to dict. Optimum just needs to accept a key name and info about how to evaluate that key, then in each step it gets the dict as an argument. It just conditionally copies the dict's contents into its internal dict.
+# Can the internal dict copy be empty during construction, and get filled during the first update call? That way we don't have to worry about default values.
+# Can we make this an Ency for convenience? (and to finally test Ency)
+class Optimum(ency):
+    def __init__(self, metric, metric_type='min', dict=None):
         self.metric_name = metric
         self.metric_type = metric_type
         
-        self.epoch = epoch
-        self.trn_loss = trn_loss
-        self.val_loss = val_loss
-        self.lr = lr
-        self.time = time
-        self.manager_metric = manager_metric
+        if dict is not None:
+            self.dict = dict.copy()
+        else:
+            self.dict = {}
 
         if metric_type == 'min':
             self.best_metric = float('inf')
         elif metric_type == 'max':
             self.best_metric = -float('inf')
+            
+        super().__init__(["dict"])  # initialize data for ency dot-access
 
-    def track_best(self, epoch, trn_loss, val_loss, lr, time, manager_metric):
-        if self.metric_name is None:
+    def track_best(self, dict):
+        if self.metric_name is None or self.metric_name not in self.dict:
             best = True
         else:
-            current_metric = locals()[self.metric_name]
-            if current_metric is not None:
-                if self.metric_type == 'min':
-                    best = current_metric < self.best_metric
-                else:
-                    best = current_metric > self.best_metric
-                if best:
-                    self.best_metric = current_metric
-            else:
+            current_metric = dict[self.metric_name]
+            last_metric = self.dict[self.metric_name]
+            if current_metric is None:
                 best = False
+            elif last_metric is None:
+                best = True
+            else:
+                if self.metric_type == 'min':
+                    best = current_metric < last_metric
+                else:
+                    best = current_metric > last_metric
 
         if best:
-            self.epoch = epoch
-            self.trn_loss = trn_loss
-            self.val_loss = val_loss
-            self.lr = lr
-            self.time = time
-            self.manager_metric = manager_metric
+            self.dict = dict.copy()
             
         return best
 
@@ -171,11 +170,11 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
                 "Learning Rate", scheduler.get_last_lr(),
                 )
             if lr_plot:
-                stream.plot_single(lr_plot, "epochs", "LR", model_name, epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=True)
+                stream.plot_single(lr_plot, "epochs", "LR", f"{model_name} fold {fold}", epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=True)
             if loss_plot:
-                stream.plot_loss(loss_plot, model_name, epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
+                stream.plot_loss(loss_plot, f"{model_name} fold {fold}", epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
-                stream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", model_name, scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
+                stream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_name} fold {fold}", scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
             stream_loss = 0
             stream_penalty = 0
             prev_time = end_time
@@ -196,21 +195,29 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
-def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1):
+def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1, seed=None):    # Set the seed for reproducibility
+    # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
+    
+    if seed is not None:
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+    
     total_samples = x.size(0)
     steps_per_epoch = ceildiv(total_samples, minibatch_examples * accumulated_minibatches)
     
+    initial_lr = 1e-3
     model = model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=weight_decay)
-    manager = epoch_managers.DivergenceManager(memory=0.95, threshold=0.05, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
+    # manager = epoch_managers.DivergenceManager(memory=0.95, threshold=0.025, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
+    manager = epoch_managers.ConvergenceManager(memory=0.01, threshold=10.0, mode="rel", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
     base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase by epoch_lr_factor after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
-    scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=1e-7)
+    scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=initial_lr)
     
     # filepath_out_incremental = f'results/logs/{model_name}_{dataname}_LRRangeSearch.csv'
     old_lr = scheduler.get_last_lr()
     train_examples_seen = 0
-    smoothed_loss_opt = Optimum('manager_metric', 'min', manager_metric=float("inf"))
-    last_opt = Optimum(metric=None, manager_metric=float("inf"))
+    smoothed_loss_opt = Optimum('manager_metric', 'min')
+    last_opt = Optimum(metric=None)
     
     total_samples = x.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
@@ -255,24 +262,28 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
         
         scheduler.epoch_step(loss)
         
+        # quick and dirty way to get these in dictinoary format. I should refactor the above code so that the variables are always in a dictionary instead.
+        dict = {"epoch": manager.epoch, "trn_loss": loss, "lr": old_lr, "manager_metric": manager.get_metric()}
+        
         # TODO: Fix bug, manager.get_metric will be behind by 1 epoch, truncating final values
-        smoothed_loss_opt.track_best(manager.epoch, loss, None, old_lr, None, manager.get_metric())
-        last_opt.track_best(manager.epoch, loss, None, old_lr, None, manager.get_metric())
+        smoothed_loss_opt.track_best(dict)
+        last_opt.track_best(dict)
         
         old_lr = scheduler.get_last_lr()
         
         stop = manager.should_stop(last_opt)
+        metric = manager.get_metric()
+        if metric is not None:
+            metric = metric.item()
         
         if manager.epoch % stream_interval == 0:
             # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
             stream.plot_single(f"LRRS for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}",
-                               scheduler.get_last_lr(), manager.get_metric().item(), add_point=False, x_log=True)
+                               scheduler.get_last_lr(), metric, add_point=False, x_log=True)
             stream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss", f"{model_name}, wd:{weight_decay}",
                                scheduler.get_last_lr(), loss.item(), add_point=False, x_log=True)
-            print(f"Updated on {manager.epoch}")
-        else:
-            print(f"No update on {manager.epoch}")
+        
         stream_loss = 0
         stream_penalty = 0
         stream_examples = 0
@@ -290,9 +301,12 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     # alpha = 0.9
     # diverge_lr = math.exp(alpha * math.log(smoothed_loss_opt.lr) + (1.0 - alpha) * math.log(last_opt.lr))
     diverge_lr = smoothed_loss_opt.lr # * 0.5
-    diverge_loss = smoothed_loss_opt.best_metric
+    diverge_loss = smoothed_loss_opt.trn_loss
+    diverge_metric = smoothed_loss_opt.manager_metric
     
-    stream.plot_point(f"LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
+    # TODO: if averaging along the logarithmic scale (to find halfway point between 1e-3 and 1e-2 for eample), do the geometric mean sqrt(a*b). We want to use this to find e.g. the point between two optima measurements. If we need to weight that geometric mean, it's exp(alpha * log(a) + (1-alpha) * log(b))
+    
+    stream.plot_point(f"LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_metric.item(), symbol="*")
     stream.plot_point(f"Raw LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
     
     print(f"Peak LR: {diverge_lr}")
@@ -303,19 +317,22 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
 # Based on notes found here: https://sgugger.github.io/the-1cycle-policy.html
 def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches,
                                        device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn,
-                                       threshold_proportion=0.9, verbosity=1):
+                                       threshold_proportion=0.9, verbosity=1, seed=None):
     # weight_decay_values = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0] # SLPReplicator
-    weight_decay_values = [0, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7] #, 1e-6, 1e-5, 1e-4, 1e-3] # cNODE0
+    weight_decay_values = [1.0, 3.3, 10] #[1e-1, 0.33, 1e0, 3.3, 1e1, 33] # cNODE2
     
     highest_lr = -np.inf
     lr_results = {}
+    
+    model_base = model_constr(model_args)
 
     # Perform the hyperparameter search
     for wd in weight_decay_values:
         model = model_constr(model_args)
+        model.load_state_dict(model_base.state_dict())
         
         diverge_lr = find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches,
-                             device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, verbosity)
+                             device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, verbosity, seed=seed)
         lr_results[wd] = diverge_lr
         stream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
                            False, y_log=True, x_log=True)
@@ -363,7 +380,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
-    stream.plot_loss(dataname, model_name, 0, None, l_val, add_point=False)
+    stream.plot_loss(dataname, f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
     
     train_examples_seen = 0
     start_time = time.time()
@@ -373,7 +390,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
             fold, manager.epoch, model_name, dataname, loss_fn, distr_error_fn, device, filepath_out_incremental, lr_plot="Learning Rate", verbosity=verbosity - 1)
         l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
-        # l_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
+        l_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
         
         # Update learning rate based on validation loss
         scheduler.epoch_step(l_trn)
@@ -398,18 +415,20 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot_loss(dataname, model_name, manager.epoch + 1, l_trn, l_val, add_point=add_point)
+        stream.plot_loss(dataname, f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
         
+        # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
+        dict = {"epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "lr": old_lr, "time": elapsed_time, "gpu_memory": gpu_memory_reserved, "metric": p_val}
         # track best validation
-        val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time, manager.get_metric())
+        val_opt.track_best(dict)
         # if val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time):
         #     torch.save(model.state_dict(), filepath_out_model)
 
         # track best training
-        trn_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time, manager.get_metric())
+        trn_opt.track_best(dict)
         
         # track newest
-        last_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time, manager.get_metric())
+        last_opt.track_best(dict)
         
         old_lr = new_lr
         
@@ -429,7 +448,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
-    LR_start_factor = 0.01
+    LR_start_factor = 0.1
     
     val_losses = []
     val_trn_losses = []
@@ -443,11 +462,12 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         model = model_constr(model_args).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
         manager = epoch_managers.FixedManager(max_epochs=min_epochs)
+        # manager = epoch_managers.ConvergenceManager(memory=0.1, threshold=0.001, mode="const", min_epochs=min_epochs, max_epochs=max_epochs)
         
         x_train, y_train, x_valid, y_valid = data_fold
         
         steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples * accumulated_minibatches)
-        # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.316, min_epochs=min_epochs, max_epochs=max_epochs, patience = patience // 2, cooldown = patience)
+        # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = patience // 2, cooldown = patience, threshold_mode='rel', threshold=0.01)
         base_scheduler = OneCycleLR(optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor)
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR*LR_start_factor)
         
@@ -516,8 +536,8 @@ def main():
     # dataname = "dki-real"
     
     # data folding params
-    kfolds = 5
-    DEBUG_SINGLE_FOLD = True
+    kfolds = -1
+    DEBUG_SINGLE_FOLD = False
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
@@ -533,8 +553,8 @@ def main():
     
     # experiment hyperparameters
     hp = dicy()
-    hp.min_epochs = 30
-    hp.max_epochs = 30000
+    hp.min_epochs = 8
+    hp.max_epochs = 10
     hp.patience = 1
     hp.early_stop = True
     
@@ -561,14 +581,18 @@ def main():
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
         # 'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(hp.data_dim),
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        # LRRS range: 1e-2...1e0.5
+        # WD range: 1e-6...1e0
+        # LR:0.5994842503189424, WD:0.33
+        # LR:0.8799225435691093, WD:0.33
         # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(hp.data_dim, 1),
         #     nn.Linear(1, hp.data_dim))),
         #
-        'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-            nn.Linear(hp.data_dim, args["hidden_dim"]),
-            nn.Linear(args["hidden_dim"], hp.data_dim))),
+        # 'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
+        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE2-custom-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(hp.data_dim, args["hidden_dim"]),
         #     nn.ReLU(),
@@ -598,6 +622,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         'cNODE2': lambda args: models.cNODE2(hp.data_dim),
+        # LR: 0.03, WD: 3.3
         
         # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -608,9 +633,9 @@ def main():
         # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
-        'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
-        'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
-        'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
+        # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
+        # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
+        # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
@@ -671,6 +696,7 @@ def main():
     #     # END of hacky hyperparam search - remove
     
     filepath_out_expt = f'results/{dataname}_experiments.csv'
+    seed = int(time.time()) # currently only used to set the data shuffle seed in find_LR
     for model_name, model_constr in models_to_test.items():
     
         model_args = {"hidden_dim": hp.hidden_dim, "attend_dim": hp.attend_dim, "num_heads": hp.num_heads, "depth": hp.depth, "ffn_dim_multiplier": hp.ffn_dim_multiplier}
@@ -688,7 +714,17 @@ def main():
         print(f"Number of parameters in model: {num_params}")
         
         # find optimal LR
-        hp.WD, hp.LR = hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches, device, 3, 100, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1)
+        # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+        #     model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches,
+        #     device, 5, 100, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1, seed=seed)
+        # print(f"LR:{hp.LR}, WD:{hp.WD}")
+        # TODO: remove, hardcoded values for cNODE2 (steepest point found in LRFinder)
+        hp.WD = 0.33
+        hp.LR = 0.03
+        
+        # print hyperparams
+        for key, value in hp.items():
+            print(f"{key}: {value}")
         
         # train and test the model across multiple folds
         val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
@@ -761,6 +797,7 @@ if __name__ == "__main__":
     main()
 
 # TODO: Set seed for reproducible shuffling
+# TODO: in particular we want to ensure that LR/WD search is using the same model+data on each trial, so we aren't just selecting which initialization was randomly more tolerant of high LR
 # TODO: hyperparameter optimization
 # TODO: time limit and/or time based early stopping
 # TODO: hyperparameters optimization based on loss change rate against clock time, somehow

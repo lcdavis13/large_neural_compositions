@@ -131,6 +131,7 @@ class ConvergenceManager(EpochManager):
         self.ema2 = None
         self.best_score = float('inf')
         self.prev_score = None
+        self.initial_score = None
     
     def update_dema(self, value):
         if self.ema1 is None:
@@ -151,6 +152,9 @@ class ConvergenceManager(EpochManager):
         
         current_score = metrics.trn_loss
         
+        if self.initial_score is None:
+            self.initial_score = current_score
+        
         if self.prev_score is None:
             self.prev_score = current_score
             return False  # Can't compute slope until 2nd epoch. Inconsequential bug: if max_epochs is 1, this will cause it to run 2 epochs instead.
@@ -168,13 +172,19 @@ class ConvergenceManager(EpochManager):
         
         if self.mode == 'rel':
             result = dema_score > self.best_score * (1.0 + self.threshold)
-        else:
+        elif self.mode == 'abs':
             result = dema_score > self.best_score + self.threshold
+        elif self.mode == 'rel_start':
+            result = dema_score > self.best_score + self.initial_score * self.threshold
+        elif self.mode == "const":
+            result = dema_score > self.threshold
         
         return result
     
     def get_metric(self):
-        return 2 * self.ema1 - self.ema2
+        if self.ema1 is None:
+            return None
+        return 2.0 * self.ema1 - self.ema2
 
 
 if __name__ == "__main__":
