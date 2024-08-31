@@ -1,5 +1,11 @@
 from abc import ABC, abstractmethod
 
+#
+# # holt winters
+# # single exponential smoothing
+# from statsmodels.tsa.holtwinters import SimpleExpSmoothing
+# # double and triple exponential smoothing
+# from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 class EpochManager(ABC):
     """Parent class for epoch managers"""
