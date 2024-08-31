@@ -17,9 +17,12 @@ import models_condensed
 import stream
 
 
+# TODO: everywhere that I'm reporting loss, I should use the DKI implementation for comparison, even if that's not what I'm optimizing.
+def loss_bc_dki(y_pred, y_true):
+    return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred + y_true))   # DKI implementation
+
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))  # more robust implementation?
-    # return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred + y_true))   # DKI implementation
     # return torch.sum(torch.abs(y_pred - y_true)) / (2.0 * y_pred.shape[0])   # simplified by assuming every vector is a species composition that sums to 1 ... but some models may violate that constraint so maybe don't use this
 
 def distribution_error(x):  # penalties for invalid distributions
@@ -79,8 +82,9 @@ class Optimum(ency):
 def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, distr_error_fn, device):
     model.eval()
     
-    total_loss = 0
-    total_distr_error = 0
+    total_loss = 0.0
+    total_dki_loss = 0.0
+    total_distr_error = 0.0
     total_samples = x_val.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
     current_index = 0  # Initialize current index to start of dataset
@@ -93,13 +97,16 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, distr_er
             y_pred = model(t, x).to(device)
 
             loss = loss_fn(y_pred, y)
+            dki_loss = loss_bc_dki(y_pred, y)
             distr_error = distr_error_fn(y_pred)
             total_loss += loss.item() * mb_examples  # Multiply loss by batch size
+            total_dki_loss += dki_loss.item() * mb_examples
             total_distr_error += distr_error.item() * mb_examples
 
     avg_loss = total_loss / total_samples
+    avg_dki_loss = total_dki_loss / total_samples
     avg_penalty = total_distr_error / total_samples
-    return avg_loss, avg_penalty
+    return avg_loss, avg_dki_loss, avg_penalty
 
 
 def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch,
@@ -366,14 +373,16 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     filepath_out_incremental = f'results/logs/{model_name}_{dataname}_incremental.csv'
     
     # initial validation benchmark
-    l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
+    l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_epoch, verbosity > 0,
         "fold", fold + 1,
         "epoch", 0,
         "training examples", 0,
         "Avg Training Loss", -1.0,
+        "Avg DKI Trn Loss", -1.0,
         "Avg Training Distr Error", -1.0,
         "Avg Validation Loss", l_val,
+        "Avg DKI Val Loss", l_dki_val,
         "Avg Validation Distr Error", p_val,
         "Learning Rate", old_lr,
         "Elapsed Time", 0.0,
@@ -381,6 +390,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
     stream.plot_loss(dataname, f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
+    # stream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], 0, [l_val, None, l_dki_val, None], add_point=False)
     
     train_examples_seen = 0
     start_time = time.time()
@@ -389,8 +399,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
             fold, manager.epoch, model_name, dataname, loss_fn, distr_error_fn, device, filepath_out_incremental, lr_plot="Learning Rate", verbosity=verbosity - 1)
-        l_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
-        l_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
+        l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
+        l_trn, l_dki_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
         
         # Update learning rate based on validation loss
         scheduler.epoch_step(l_trn)
@@ -407,8 +417,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             "epoch", manager.epoch + 1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
+            "Avg DKI Trn Loss", -1.0,
             "Avg Training Distr Error", p_trn,
             "Avg Validation Loss", l_val,
+            "Avg DKI Val Loss", l_dki_val,
             "Avg Validation Distr Error", p_val,
             "Learning Rate", old_lr, # should I track average LR in the epoch? Max and min LR?
             "Elapsed Time", elapsed_time,
@@ -416,6 +428,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
         stream.plot_loss(dataname, f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
+        # stream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, l_dki_val, l_dki_trn], add_point=add_point)
+        if l_val != l_dki_val:
+            print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
         
         # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
         dict = {"epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "lr": old_lr, "time": elapsed_time, "gpu_memory": gpu_memory_reserved, "metric": p_val}
@@ -559,7 +574,7 @@ def main():
     hp.early_stop = True
     
     # optimization hyperparameters
-    hp.minibatch_examples = 32
+    hp.minibatch_examples = 1
     hp.accumulated_minibatches = 1
     hp.LR = 0.0316
     hp.WD = 0.01
@@ -697,6 +712,7 @@ def main():
     
     filepath_out_expt = f'results/{dataname}_experiments.csv'
     seed = int(time.time()) # currently only used to set the data shuffle seed in find_LR
+    print(f"Seed: {seed}")
     for model_name, model_constr in models_to_test.items():
     
         model_args = {"hidden_dim": hp.hidden_dim, "attend_dim": hp.attend_dim, "num_heads": hp.num_heads, "depth": hp.depth, "ffn_dim_multiplier": hp.ffn_dim_multiplier}
