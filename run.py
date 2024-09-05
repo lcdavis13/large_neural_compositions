@@ -15,6 +15,7 @@ import models
 import models_baseline
 import models_condensed
 import stream
+import user_confirmation as ui
 
 
 # TODO: everywhere that I'm reporting loss, I should use the DKI implementation for comparison, even if that's not what I'm optimizing.
@@ -216,7 +217,7 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
     # manager = epoch_managers.DivergenceManager(memory=0.95, threshold=0.025, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
-    manager = epoch_managers.ConvergenceManager(memory=0.01, threshold=10.0, mode="rel", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
+    manager = epoch_managers.ConvergenceManager(memory=0.95, threshold=10.0, mode="rel", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
     base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase by epoch_lr_factor after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=initial_lr)
     
@@ -326,7 +327,8 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
                                        device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn,
                                        threshold_proportion=0.9, verbosity=1, seed=None):
     # weight_decay_values = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0] # SLPReplicator
-    weight_decay_values = [1.0, 3.3, 10] #[1e-1, 0.33, 1e0, 3.3, 1e1, 33] # cNODE2
+    # weight_decay_values = [1.0, 3.3, 10] #[1e-1, 0.33, 1e0, 3.3, 1e1, 33] # cNODE2
+    weight_decay_values = [1e-2, 1e-1, 0.33, 1e0, 3.3]
     
     highest_lr = -np.inf
     lr_results = {}
@@ -483,7 +485,9 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         
         steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples * accumulated_minibatches)
         # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = patience // 2, cooldown = patience, threshold_mode='rel', threshold=0.01)
-        base_scheduler = OneCycleLR(optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor)
+        base_scheduler = OneCycleLR(
+            optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
+            final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4)
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR*LR_start_factor)
         
         
@@ -539,9 +543,9 @@ def main():
     
     # Data
     
-    # dataname = "waimea"
-    # dataname = "waime a-condensed"
-    dataname = "cNODE-paper-ocean"
+    dataname = "waimea"
+    # dataname = "waimea-condensed"
+    # dataname = "cNODE-paper-ocean"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -551,8 +555,8 @@ def main():
     # dataname = "dki-real"
     
     # data folding params
-    kfolds = -1
-    DEBUG_SINGLE_FOLD = False
+    kfolds = 7
+    DEBUG_SINGLE_FOLD = True
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
@@ -574,7 +578,7 @@ def main():
     hp.early_stop = True
     
     # optimization hyperparameters
-    hp.minibatch_examples = 1
+    hp.minibatch_examples = 256
     hp.accumulated_minibatches = 1
     hp.LR = 0.0316
     hp.WD = 0.01
@@ -595,7 +599,7 @@ def main():
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
-        # 'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(hp.data_dim),
+        'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(hp.data_dim),
         # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
         # LRRS range: 1e-2...1e0.5
         # WD range: 1e-6...1e0
@@ -636,7 +640,7 @@ def main():
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
         # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
-        'cNODE2': lambda args: models.cNODE2(hp.data_dim),
+        # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
         # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -730,13 +734,15 @@ def main():
         print(f"Number of parameters in model: {num_params}")
         
         # find optimal LR
-        # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-        #     model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches,
-        #     device, 5, 100, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1, seed=seed)
-        # print(f"LR:{hp.LR}, WD:{hp.WD}")
+        hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+            model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches,
+            device, 6, 6, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1, seed=seed)
+        print(f"LR:{hp.LR}, WD:{hp.WD}")
         # TODO: remove, hardcoded values for cNODE2 (steepest point found in LRFinder)
-        hp.WD = 0.33
-        hp.LR = 0.03
+        # hp.WD = 0.33
+        # hp.LR = 0.03
+        
+        hp = ui.ask(hp, keys=["LR", "WD"])
         
         # print hyperparams
         for key, value in hp.items():
@@ -833,3 +839,6 @@ if __name__ == "__main__":
 # TODO: Try all of the small models with higher parameter counts. We don't need to use such small embedding dimension.
 
 # cNODE-based models seem to get nearly unlimited ability to handle high LR the lower WD is (at least during LRRS tests), BUT the models become very stiff and therefore torchdiffeq solving is slow. Would it be better to tune our LR based on optimizing Loss vs Time, rather than Loss vs Samples?
+# ...Turns out that there is a bit of divergence after a brief optimum, but then it plateaus and usually doesn't diverge further until absurdly high LR levels. But the exponential average was masking that behavior.
+
+# TODO: I think LRRS arguments should specify the number of iterations as a hyperparameter instead of epochs, and compute epochs. Because the logic around processing and analyzing the results is very step-centric. We would get much higher end loss for low step sizes, but should still be able to identify optimal LR which is the real goal.
