@@ -31,7 +31,15 @@ def analyze_csv_file(df, transpose=False):
         else:
             determination_type = "UNDERDETERMINED"
     
-    return num_rows, num_cols, ratio, determination_type
+    # Calculate avg_richness as the percentage of non-zero values
+    total_values = num_rows * num_cols
+    if total_values == 0:
+        avg_richness = 0
+    else:
+        non_zero_values = (df != 0).sum().sum()
+        avg_richness = (non_zero_values / total_values) * 100
+    
+    return num_rows, num_cols, ratio, determination_type, avg_richness
 
 
 # Collect all files into a dictionary by their base name (without _train or _test)
@@ -62,15 +70,16 @@ for base_name, files in file_dict.items():
         # Concatenate train and test files by appending rows
         combined_df = pd.concat(dfs, ignore_index=True)
         print(f'{base_name}_train and {base_name}_test concatenated:')
-        num_rows, num_cols, ratio, determination_type = analyze_csv_file(combined_df)
+        num_rows, num_cols, ratio, determination_type, avg_richness = analyze_csv_file(combined_df)
     else:
         # Process each file separately
         for file_name, df in zip(files, dfs):
             print(f'{file_name}:')
-            num_rows, num_cols, ratio, determination_type = analyze_csv_file(df)
+            num_rows, num_cols, ratio, determination_type, avg_richness = analyze_csv_file(df)
     
     # Print the result for the current file or concatenated file in the desired format
     print(f'shape: {num_rows} x {num_cols}')
     print(f'determination: {ratio}')
     print(f'{determination_type}')
+    print(f'average richness: {avg_richness:.2f}%')
     print('-' * 40)
