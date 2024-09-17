@@ -38,7 +38,6 @@ def glv_ode(x, t, A, r):
     
     # Convert to a dense array to apply the condition
     dydt = dydt.toarray().flatten()
-    dydt[dydt < 0] = 0  # Non-negative population change
     
     return dydt
 
@@ -61,44 +60,6 @@ def glv(N, A, r, x_0, tstart, tend, tstep):
     result = odeint(glv_ode, x_0, t, args=(A, r))
     
     return result[-1]
-
-
-# def generate_steadystate_samples(N, M, N_sub, A, r):
-#     # Preallocate sparse matrices for steady state results
-#     steady_state_relative = sp.lil_matrix((N, M))  # Use LIL format for incremental construction
-#     steady_state_absolute = sp.lil_matrix((N, M))
-#
-#     update_intervale = M // 100
-#
-#     # Simulate for each sample
-#     for i in range(M):
-#         if i % update_intervale == 0:
-#             print(f"Processing sample {i + 1}/{M}")
-#
-#         np.random.seed(i)
-#         # Select a random subset of species
-#         collection = np.random.choice(np.arange(N), N_sub, replace=False)
-#
-#         # Initialize with random values for selected species
-#         y_0 = np.zeros(N)
-#         # y_0 = sp.csr_matrix(y_0).T
-#         y_0[collection] = np.random.uniform(size=N_sub)
-#
-#         # Simulate using the GLV model (assuming glv function exists)
-#         x = glv(N, A, r, y_0, 0, 100, 100)
-#
-#         # print(steady_state_absolute[:, i].shape, sp.lil_matrix(x[:]).shape)
-#
-#         # Store only the non-zero results to save memory
-#         steady_state_absolute[:, i] = x[:]
-#         steady_state_relative[:, i] = x[:] / np.sum(x[:]) if np.sum(x[:]) != 0 else x[:]
-#
-#     # Set any negative values to 0
-#     steady_state_relative[steady_state_relative < 0] = 0
-#     steady_state_absolute[steady_state_absolute < 0] = 0
-#
-#     # Convert to CSR format for efficient operations and returning
-#     return steady_state_relative.tocsr(), steady_state_absolute.tocsr()
 
 
 def generate_composition_data(N, M, A, r, N_sub, C, sigma, nu, boost_rate, path_dir, resume):
