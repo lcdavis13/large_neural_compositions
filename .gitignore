@@ -241,3 +241,4 @@ fabric.properties
 results/*
 /data/synth
 data/Ptrain.csv
+/analysis/interaction_determinedness
