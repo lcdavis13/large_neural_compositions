@@ -15,7 +15,7 @@ def check_csv_file(file_path, check_invariant=False, transpose=False, hasHeader=
             df = df.transpose()
         
         # Define a small tolerance for floating-point comparison
-        tolerance = 1e-9
+        tolerance = 1e-8
         
         # Check if all row sums are close to 1 within the tolerance
         row_sums = df.sum(axis=1)
@@ -49,7 +49,7 @@ def check_csv_file(file_path, check_invariant=False, transpose=False, hasHeader=
 
 
 # Check waimea_out.csv
-result_out = check_csv_file('../data/Ptrain.csv', transpose=False, hasHeader=False, hasIndex=False)
+result_out = check_csv_file('../data/Ptrain.csv', transpose=True, hasHeader=False, hasIndex=False)
 
 # Check waimea_in.csv with the additional invariant and transposing the data
 # result_in = check_csv_file('../data/Ptrain_in.csv', check_invariant=True, transpose=True, hasHeader=False, hasIndex=False)

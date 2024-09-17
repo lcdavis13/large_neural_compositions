@@ -67,6 +67,21 @@ class SingleLayerReplicator(nn.Module):
         return x + dxdt  # B x N
 
 
+class ConstReplicator(nn.Module):
+    def __init__(self, N):
+        super(ConstReplicator, self).__init__()
+        self.f = nn.Parameter(torch.randn(N))
+    
+    def forward(self, t, x):  # x' = x + x*(f(x) - mean(f(x)))
+        fx = self.f.expand(x.size(0), -1)  # B x N
+        
+        xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fx - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return x + dxdt  # B x N
+
+
 class ODEFunc_cNODE0(nn.Module):  # cNODE where "F(x)" does not depend on x
     def __init__(self, N):
         super(ODEFunc_cNODE0, self).__init__()

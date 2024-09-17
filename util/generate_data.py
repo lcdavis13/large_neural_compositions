@@ -236,10 +236,10 @@ def main():
     path_prefix = '../data/synth/gLV_'
     
     p = dicy()
-    p.N = 5000  # number of species
-    p.M = 50000  # number of samples
+    p.N = 73  # number of species
+    p.M = 10000  # number of samples
     
-    p.N_sub = p.N // 36  # richness (proportion of total species present in each sample) (1/36 ~= 2.77% for Waimea)
+    p.N_sub = p.N // 2  # richness (proportion of total species present in each sample) (1/36 ~= 2.77% for Waimea, 1/2 as the best approximation of ~68% for ocean, 1/3 ~= 32% for oral)
     p.C = 0.05  # connectivity rate
     p.sigma = 0.01  # characteristic interaction strength
     
