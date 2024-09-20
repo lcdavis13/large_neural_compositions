@@ -178,7 +178,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
                 "Learning Rate", scheduler.get_last_lr(),
                 )
             if lr_plot:
-                stream.plot_single(lr_plot, "epochs", "LR", f"{model_name} fold {fold}", epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=True)
+                stream.plot_single(lr_plot, "epochs", "LR", f"{model_name} fold {fold}", epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=False)
             if loss_plot:
                 stream.plot_loss(loss_plot, f"{model_name} fold {fold}", epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
@@ -203,7 +203,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
-def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1, seed=None):    # Set the seed for reproducibility
+def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, initial_lr, verbosity=1, seed=None, run_validation=False):    # Set the seed for reproducibility
     # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
     
     if seed is not None:
@@ -213,12 +213,11 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
     total_samples = x.size(0)
     steps_per_epoch = ceildiv(total_samples, minibatch_examples * accumulated_minibatches)
     
-    initial_lr = 1e-3
     model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
     # manager = epoch_managers.DivergenceManager(memory=0.95, threshold=0.025, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
     manager = epoch_managers.ConvergenceManager(memory=0.95, threshold=10.0, mode="rel", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
-    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=4*steps_per_epoch) # multiplying by 4 as a cheap way to say I want the LR to increase by epoch_lr_factor after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
+    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0, steps_per_epoch=2*steps_per_epoch) # multiplying by 2 as a cheap way to say I want the LR to increase by epoch_lr_factor after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=initial_lr)
     
     # filepath_out_incremental = f'results/logs/{model_name}_{dataname}_LRRangeSearch.csv'
@@ -285,12 +284,23 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
             metric = metric.item()
         
         if manager.epoch % stream_interval == 0:
+            # VALIDATION
+            if run_validation:
+                l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, timesteps, loss_fn,
+                                                     distr_error_fn, device)
+                stream.plot(f"Raw LRRS for {model_name}", "log( Learning Rate )", "loss",
+                            [f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Val", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Trn"], scheduler.get_last_lr(),
+                            [l_val, loss.item()], add_point=False, x_log=True)
+            else:
+                stream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss",
+                                   f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
+                                   scheduler.get_last_lr(), loss.item(), add_point=False, x_log=True)
+            
             # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
-            stream.plot_single(f"LRRS for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}",
+            stream.plot_single(f"LRRS metric for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
                                scheduler.get_last_lr(), metric, add_point=False, x_log=True)
-            stream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss", f"{model_name}, wd:{weight_decay}",
-                               scheduler.get_last_lr(), loss.item(), add_point=False, x_log=True)
+
         
         stream_loss = 0
         stream_penalty = 0
@@ -323,12 +333,16 @@ def find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_min
 
 # Search for hyperparameters by identifying the values that lead to the highest learning rate before divergence
 # Based on notes found here: https://sgugger.github.io/the-1cycle-policy.html
-def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches,
+def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, data_folded, minibatch_examples, accumulated_minibatches,
                                        device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn,
-                                       threshold_proportion=0.9, verbosity=1, seed=None):
+                                       threshold_proportion=0.9, verbosity=1, seed=None, run_validation=False):
+    x, y, x_valid, y_valid = data_folded[0]
+    
     # weight_decay_values = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0] # SLPReplicator
     # weight_decay_values = [1.0, 3.3, 10] #[1e-1, 0.33, 1e0, 3.3, 1e1, 33] # cNODE2
-    weight_decay_values = [1e-2, 1e-1, 0.33, 1e0, 3.3]
+    weight_decay_values = [1e-3, 1e-2, 1e-1, 0.32]
+    # weight_decay_values = [1e-1, 0.33, 1e0, 3.3, 1e1]
+    initial_lr_values = [1e-2]
     
     highest_lr = -np.inf
     lr_results = {}
@@ -337,17 +351,19 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
     # Perform the hyperparameter search
     for wd in weight_decay_values:
-        model = model_constr(model_args)
-        model.load_state_dict(model_base.state_dict())
-        
-        diverge_lr = find_LR(model, model_name, scaler, x, y, minibatch_examples, accumulated_minibatches,
-                             device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, verbosity, seed=seed)
-        lr_results[wd] = diverge_lr
-        stream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
-                           False, y_log=True, x_log=True)
-        
-        if diverge_lr > highest_lr:
-            highest_lr = diverge_lr
+        for initial_lr in initial_lr_values:
+            model = model_constr(model_args)
+            model.load_state_dict(model_base.state_dict())
+            
+            diverge_lr = find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches,
+                                 device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, initial_lr,
+                                 verbosity, seed=seed, run_validation=True)
+            lr_results[wd] = diverge_lr
+            stream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
+                               False, y_log=True, x_log=True)
+            
+            if diverge_lr > highest_lr:
+                highest_lr = diverge_lr
 
     # Determine the valid weight_decay values within the threshold proportion
     valid_weight_decays = [wd for wd, lr in lr_results.items() if lr >= threshold_proportion * highest_lr]
@@ -487,7 +503,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = patience // 2, cooldown = patience, threshold_mode='rel', threshold=0.01)
         base_scheduler = OneCycleLR(
             optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
-            final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4)
+            final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR*LR_start_factor)
         
         
@@ -543,9 +559,10 @@ def main():
     
     # Data
     
-    dataname = "waimea"
+    # dataname = "P"
+    # dataname = "waimea"
     # dataname = "waimea-condensed"
-    # dataname = "cNODE-paper-ocean"
+    dataname = "cNODE-paper-ocean"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -572,13 +589,13 @@ def main():
     
     # experiment hyperparameters
     hp = dicy()
-    hp.min_epochs = 8
-    hp.max_epochs = 10
+    hp.min_epochs = 12
+    hp.max_epochs = 12
     hp.patience = 1
     hp.early_stop = True
     
     # optimization hyperparameters
-    hp.minibatch_examples = 256
+    hp.minibatch_examples = 16
     hp.accumulated_minibatches = 1
     hp.LR = 0.0316
     hp.WD = 0.01
@@ -599,8 +616,9 @@ def main():
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
-        'baseline-SLPReplicator': lambda args: models_baseline.SingleLayerReplicator(hp.data_dim),
-        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
+        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
         # LRRS range: 1e-2...1e0.5
         # WD range: 1e-6...1e0
         # LR:0.5994842503189424, WD:0.33
@@ -714,6 +732,10 @@ def main():
     #             for depth in [2, 3]:
     #     # END of hacky hyperparam search - remove
     
+    # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
+    # Model dictionary. Hyperparam override(s)
+    
+    
     filepath_out_expt = f'results/{dataname}_experiments.csv'
     seed = int(time.time()) # currently only used to set the data shuffle seed in find_LR
     print(f"Seed: {seed}")
@@ -733,14 +755,54 @@ def main():
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
-        # find optimal LR
-        hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-            model_constr, model_args, model_name, scaler, x, y, hp.minibatch_examples, hp.accumulated_minibatches,
-            device, 6, 6, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1, seed=seed)
-        print(f"LR:{hp.LR}, WD:{hp.WD}")
+        # # find optimal LR
+        # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+        #     model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+        #     device, 2, 2, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1, seed=seed)
+        # print(f"LR:{hp.LR}, WD:{hp.WD}")
+        
         # TODO: remove, hardcoded values for cNODE2 (steepest point found in LRFinder)
-        # hp.WD = 0.33
-        # hp.LR = 0.03
+        
+        # # transformer big:
+        # hp.WD = 3.2
+        # hp.LR = 0.01
+        # # hp.WD = 0.1
+        # # hp.LR = 0.001
+        #
+        # # # cNODE2:
+        # # hp.WD = 3.2
+        # # hp.LR = 0.032
+        
+        # # cNODE1:`
+        # hp.WD = 0.01
+        # hp.LR = 1.0
+        
+        # baseline-SLPReplicator:
+        hp.WD = 0.01
+        hp.LR = 2.0
+        
+        # cNODE0:
+        
+        
+        ## synth data batch size 16
+        # # baseline-SLPReplicator:
+        # # if model_name == "baseline-SLPReplicator":
+        # #     hp.WD = 0.1
+        # #     hp.LR = 0.032
+        # hp.WD = 0.1
+        # hp.LR = 0.032
+        
+        # cNODE2:
+        if model_name == "cNODE2":
+            hp.WD = 0.33
+            hp.LR = 0.0002
+
+        # # transformer big:
+        # hp.WD = 0.032
+        # hp.LR = 0.001
+        # # hp.WD = 0.01
+        # # hp.LR = 0.00001
+        
         
         hp = ui.ask(hp, keys=["LR", "WD"])
         
@@ -842,3 +904,13 @@ if __name__ == "__main__":
 # ...Turns out that there is a bit of divergence after a brief optimum, but then it plateaus and usually doesn't diverge further until absurdly high LR levels. But the exponential average was masking that behavior.
 
 # TODO: I think LRRS arguments should specify the number of iterations as a hyperparameter instead of epochs, and compute epochs. Because the logic around processing and analyzing the results is very step-centric. We would get much higher end loss for low step sizes, but should still be able to identify optimal LR which is the real goal.
+
+# TODO: Try data augmentation by removing features and renormalizing
+# TODO: Try self-supervised task by masking out features (and not renormalizing) then predict the masked embedding (no need to unembed unless we have a real classification task). Allowing to learn how species interact by what is missing.
+# ACTUALLY isn't that a more direct way of estimating keystoneness?
+
+# TODO: Try using proportion as magnitude, multiplied against the species embedding, instead of concatenated or added.
+
+# TODO: Settings for training and validating on less than a full batch. Like, max number of data samples per train/val "epoch". But I would need to make sure shuffling only occurs after full epoch. Useful for training on large datasets, but even more useful for LRRS. (The latter can probably switch entirely to a number of samples config instead of epoch-based config.)
+#  Problem: K-Fold paradigm superficially seems to conflict with this. In particular the validation since we would want to use the same samples for each time step. In that case, what we really want is a "Hold X out" fold rather than a K-fold. And we can use a subsample of that for LRRS validation.
+#  One option to reduce config complexity: when K is negative, it is the number of samples to hold out for validation. When K is positive, it is the number of folds. But I will have to compute the number of folds (last of which will usually be smaller) from the number of held out samples.
