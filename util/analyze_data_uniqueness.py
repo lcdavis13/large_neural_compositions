@@ -9,7 +9,7 @@ transpose_files = True  # Set to True if you want to transpose the files
 concatenate_files = True  # Set to False if you don't want to concatenate matching _train and _test files
 
 
-# Function to count rows with unique vs. duplicated zero patterns
+# Function to count unique zero patterns and unambiguous rows
 def analyze_zero_pattern_counts(df, transpose=False):
     # Transpose the DataFrame if needed
     if transpose:
@@ -24,11 +24,16 @@ def analyze_zero_pattern_counts(df, transpose=False):
     # Count how often each unique zero pattern occurs
     zero_pattern_counts = zero_patterns.value_counts()
     
-    # Count the number of rows with unique zero patterns and duplicated zero patterns
-    unique_count = (zero_pattern_counts == 1).sum()  # Rows with a pattern that appears only once
-    duplicated_count = (zero_pattern_counts > 1).sum()  # Rows with a pattern that appears more than once
+    # Calculate the total number of unique zero patterns
+    unique_patterns_count = zero_patterns.nunique()  # Get number of unique zero patterns
     
-    return unique_count, duplicated_count
+    # Calculate the number of unambiguous rows (patterns that appear exactly once)
+    unambiguous_count = (zero_pattern_counts == 1).sum()
+    
+    # Total number of rows
+    total_rows = len(zero_patterns)
+    
+    return unique_patterns_count, unambiguous_count, total_rows
 
 
 # Collect all files into a dictionary by their base name (without _train or _test)
@@ -59,14 +64,14 @@ for base_name, files in file_dict.items():
         # Concatenate train and test files by appending rows
         combined_df = pd.concat(dfs, ignore_index=True)
         print(f'{base_name}_train and {base_name}_test concatenated:')
-        unique_count, duplicated_count = analyze_zero_pattern_counts(combined_df)
+        unique_patterns_count, unambiguous_count, total_rows = analyze_zero_pattern_counts(combined_df)
     else:
         # Process each file separately
         for file_name, df in zip(files, dfs):
             print(f'{file_name}:')
-            unique_count, duplicated_count = analyze_zero_pattern_counts(df)
+            unique_patterns_count, unambiguous_count, total_rows = analyze_zero_pattern_counts(df)
     
-    # Print the result for the current file or concatenated file in the desired format
-    print(f'Rows with unique zero patterns: {unique_count}')
-    print(f'Rows with duplicated zero patterns: {duplicated_count}')
+    # Output the results in the desired format
+    print(f'Unique zero patterns: {unique_patterns_count} / {total_rows}')
+    print(f'Unambiguous samples: {unambiguous_count} / {total_rows}')
     print('-' * 40)
