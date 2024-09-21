@@ -619,7 +619,7 @@ def main():
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
         'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
         'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
         # LRRS range: 1e-2...1e0.5
         # WD range: 1e-6...1e0
         # LR:0.5994842503189424, WD:0.33
@@ -874,7 +874,7 @@ def main():
         #     print(f"Model {model_name} failed with error:\n{e}")
 
     print("\n\nDONE")
-    stream.keep_plots_open()
+    plotstream.keep_plots_open()
 
 
 # main

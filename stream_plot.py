@@ -1,5 +1,12 @@
 import matplotlib.pyplot as plt
 import itertools
+import threading
+import queue
+import time
+import matplotlib
+
+# Use a backend that supports threading (e.g., TkAgg, Qt5Agg)
+matplotlib.use('TkAgg')
 
 
 class PlotStreamer:
@@ -14,10 +21,38 @@ class PlotStreamer:
     def _initialize(self):
         self.figs = {}
         self.label_styles = {}
+        self.queue = queue.Queue()  # Queue to handle data between threads
+        self.plotting_thread = threading.Thread(target=self._plotting_loop, daemon=True)
+        self.plotting_thread.start()
     
     def plot(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False, x_log=False, y_log=False):
-        plt.ion()
-        
+        # Add plotting instructions to the queue
+        self.queue.put((title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log))
+    
+    def _plotting_loop(self):
+        while True:
+            batch_data = []
+            try:
+                # Fetch all data points from the queue without blocking
+                while True:
+                    batch_data.append(self.queue.get_nowait())
+            except queue.Empty:
+                pass
+            
+            # Only plot if we have accumulated some data
+            if batch_data:
+                for data in batch_data:
+                    # Process each data point in batch but do not plot after each one
+                    title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log = data
+                    self._update_data(title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log)
+                
+                # Now update the plot after processing all data in the queue
+                self._draw_plots()
+            
+            # Keep figures responsive
+            plt.pause(0.001)
+    
+    def _update_data(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log):
         if title in self.figs and not plt.fignum_exists(self.figs[title][0].number):
             self.figs[title] = None
             return
@@ -67,61 +102,49 @@ class PlotStreamer:
             ax.set_xscale('log')
         if y_log:
             ax.set_yscale('log')
-        
-        plt.draw()
-        plt.pause(0.00000001)
     
-    def plot_point(self, title, line_label, x_value, y_value, symbol="o"):
-        if title not in self.figs:
-            print(f"Plot with title '{title}' does not exist.")
-            return
-        
-        fig, ax = self.figs[title]
-        lines = {line.get_label(): line for line in ax.get_lines()}
-        
-        if line_label in lines:
-            line = lines[line_label]
-            ax.text(x_value, y_value, '*', fontsize=18, color=line.get_color(), ha='center', va='center')
-        else:
-            print(f"Line with label '{line_label}' does not exist in the plot '{title}'.")
-        
-        ax.relim()
-        ax.autoscale_view()
+    def _draw_plots(self):
+        """Draw the plots after processing all queued data."""
         plt.draw()
-        plt.pause(0.00000001)
+    
+    def keep_plots_open(self):
+        """Block the main thread until all plot windows are closed."""
+        while plt.get_fignums():  # Check if any figures are open
+            time.sleep(0.1)
+    
+    # ----------------- Convenience Methods ----------------- #
+    def plot_point(self, title, line_label, x_value, y_value, symbol="o"):
+        """
+        Plots a single point on an existing curve.
+        """
+        self.plot(title, "", "", [line_label], x_value, [y_value], add_point=True)
     
     def plot_single(self, title, xlabel, ylabel, line_label, x_value, y_value, add_point=False, x_log=False,
                     y_log=False):
+        """
+        Helper method to call the plot function with only one value of y and its label.
+        """
         self.plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log,
                   y_log=y_log)
     
     def plot_loss(self, title, label, epoch, train_loss, validation_loss=None, add_point=False):
+        """
+        Helper function to plot validation and training loss curves.
+        """
         labels = [f'{label} - Val Loss', f'{label} - Trn Loss']
         values = [validation_loss, train_loss]
         self.plot(title, 'Epoch', 'Loss', labels, epoch, values, add_point)
-    
-    def keep_plots_open(self):
-        while plt.get_fignums():
-            plt.waitforbuttonpress()
 
 
+# Create a global instance of the PlotManager
 plotstream = PlotStreamer()
 
 
 if __name__ == "__main__":
-    plotstream.plot_loss("Training Progress", "Model A", 1, 0.5, None)
-    plotstream.plot("other thing", "xthing", "ything", ["A thing 1", "A thing 2"], 10, [10, 5], None)
-    plotstream.plot_loss("Training Progress", "Model A", 2, 0.4, 2.5, True)
-    plotstream.plot("other thing", "xthing", "ything", ["A thing 1", "A thing 2"], 15, [8, 6], None)
-    plt.pause(5.0)
-    plotstream.plot_loss("Training Progress", "Model A", 3, 1.4, 0.5)
-    plotstream.plot("other thing", "xthing", "ything", ["A thing 1", "A thing 2"], 20, [11, 9], None)
-    plotstream.plot_loss("Training Progress", "Model B", 1, 1.5, None)
-    plotstream.plot("other thing", "xthing", "ything", ["B thing 1", "B thing 2"], 10, [11, 6], None)
-    plotstream.plot_loss("Training Progress", "Model B", 2, 1.4, 3.5, True)
-    plotstream.plot("other thing", "xthing", "ything", ["B thing 1", "B thing 2"], 15, [9, 7], None)
-    plotstream.plot_loss("Training Progress", "Model B", 3, 2.4, 1.5)
-    plotstream.plot("other thing", "xthing", "ything", ["B thing 1", "B thing 2"], 20, [12, 10], None)
-    
-    print("done")
+    for i in range(10):
+        time.sleep(0.5)  # Simulate a long computation
+        plotstream.plot_loss("Training Progress", "Model A", i, train_loss=i ** 2, validation_loss=i ** 1.5)
+
+    print("Computation complete.")
+
     plotstream.keep_plots_open()
