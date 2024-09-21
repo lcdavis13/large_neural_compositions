@@ -15,6 +15,7 @@ import models
 import models_baseline
 import models_condensed
 import stream
+from stream_plot import plotstream
 import user_confirmation as ui
 
 
@@ -178,11 +179,11 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
                 "Learning Rate", scheduler.get_last_lr(),
                 )
             if lr_plot:
-                stream.plot_single(lr_plot, "epochs", "LR", f"{model_name} fold {fold}", epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=False)
+                plotstream.plot_single(lr_plot, "epochs", "LR", f"{model_name} fold {fold}", epoch_num + mb/minibatches, scheduler.get_last_lr(), False, y_log=False)
             if loss_plot:
-                stream.plot_loss(loss_plot, f"{model_name} fold {fold}", epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
+                plotstream.plot_loss(loss_plot, f"{model_name} fold {fold}", epoch_num + mb/minibatches, stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
-                stream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_name} fold {fold}", scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
+                plotstream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_name} fold {fold}", scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
             stream_loss = 0
             stream_penalty = 0
             prev_time = end_time
@@ -288,17 +289,17 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
             if run_validation:
                 l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, timesteps, loss_fn,
                                                      distr_error_fn, device)
-                stream.plot(f"Raw LRRS for {model_name}", "log( Learning Rate )", "loss",
+                plotstream.plot(f"Raw LRRS for {model_name}", "log( Learning Rate )", "loss",
                             [f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Val", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Trn"], scheduler.get_last_lr(),
                             [l_val, loss.item()], add_point=False, x_log=True)
             else:
-                stream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss",
+                plotstream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss",
                                    f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
                                    scheduler.get_last_lr(), loss.item(), add_point=False, x_log=True)
             
-            # stream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
+            # plotstream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
-            stream.plot_single(f"LRRS metric for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
+            plotstream.plot_single(f"LRRS metric for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
                                scheduler.get_last_lr(), metric, add_point=False, x_log=True)
 
         
@@ -324,8 +325,8 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     # TODO: if averaging along the logarithmic scale (to find halfway point between 1e-3 and 1e-2 for eample), do the geometric mean sqrt(a*b). We want to use this to find e.g. the point between two optima measurements. If we need to weight that geometric mean, it's exp(alpha * log(a) + (1-alpha) * log(b))
     
-    stream.plot_point(f"LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_metric.item(), symbol="*")
-    stream.plot_point(f"Raw LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
+    plotstream.plot_point(f"LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_metric.item(), symbol="*")
+    plotstream.plot_point(f"Raw LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
     
     print(f"Peak LR: {diverge_lr}")
     return diverge_lr
@@ -359,7 +360,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
                                  device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, initial_lr,
                                  verbosity, seed=seed, run_validation=True)
             lr_results[wd] = diverge_lr
-            stream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
+            plotstream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
                                False, y_log=True, x_log=True)
             
             if diverge_lr > highest_lr:
@@ -372,7 +373,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     optimal_weight_decay = max(valid_weight_decays)
     optimal_lr = lr_results[optimal_weight_decay]
     
-    stream.plot_point(f"WD vs divergence LR", model_name, optimal_weight_decay, optimal_lr, symbol="*")
+    plotstream.plot_point(f"WD vs divergence LR", model_name, optimal_weight_decay, optimal_lr, symbol="*")
 
     return optimal_weight_decay, optimal_lr
 
@@ -407,8 +408,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
-    stream.plot_loss(dataname, f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
-    # stream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], 0, [l_val, None, l_dki_val, None], add_point=False)
+    plotstream.plot_loss(dataname, f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
+    # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], 0, [l_val, None, l_dki_val, None], add_point=False)
     
     train_examples_seen = 0
     start_time = time.time()
@@ -445,8 +446,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        stream.plot_loss(dataname, f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
-        # stream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, l_dki_val, l_dki_trn], add_point=add_point)
+        plotstream.plot_loss(dataname, f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
+        # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, l_dki_val, l_dki_trn], add_point=add_point)
         if l_val != l_dki_val:
             print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
         
