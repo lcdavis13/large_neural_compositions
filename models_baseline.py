@@ -24,6 +24,26 @@ class ConstOutput(nn.Module):
     
     def forward(self, t, x):
         return self.f
+
+
+class ConstOutputFilteredNormalized(nn.Module):
+    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N):
+        super().__init__()
+        self.f = nn.Parameter(torch.randn(N))
+    
+    def forward(self, t, x):
+        f = self.f
+        
+        mask = x != 0
+        f_selected = f[mask]
+        f_normalized = f_selected / f_selected.sum()
+        
+        # Create the output y, fill zeros where masked, fill with f_normalized where unmasked
+        y = torch.zeros_like(f)
+        y[mask] = f_normalized
+        
+        return y
     
     
 class SingleLayerPerceptron(nn.Module):
