@@ -49,6 +49,27 @@ def fold_data(x, y, k=5):
     return fold_data
 
 
+def check_leakage(folded_data):
+    """
+    Checks for data leakage by verifying if any fold contains the same data row repeated in both y_train and y_valid.
+    """
+    for fold_idx, (x_train, y_train, x_valid, y_valid) in enumerate(folded_data):
+        # Convert y_train and y_valid to sets for fast comparison
+        y_train_set = set(y_train)
+        y_valid_set = set(y_valid)
+        
+        # Find intersection between y_train and y_valid
+        leakage = y_train_set.intersection(y_valid_set)
+        
+        if leakage:
+            print(f"LEAKAGE DETECTED in fold {fold_idx}: {leakage}")
+            return False
+    
+    # If no leakage detected in any fold
+    # print("No leakage detected in any fold.")
+    return True
+
+
 def get_batch(x, y, mb_size, current_index):
     end_index = current_index + mb_size
     if end_index > x.size(0):

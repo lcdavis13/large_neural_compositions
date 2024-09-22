@@ -10,11 +10,44 @@ from models import cNODE1
 
 class ReturnInput(nn.Module):
     # This model returns the input as the output. Since our inputs are fixed value for all nonzero features, this model is equivalent to returning a uniform distribution of the species in the assemblage.
-    def __init__(self, N):
+    def __init__(self):
         super().__init__()
     
     def forward(self, t, x):
         return x
+
+class SingleConst(nn.Module):
+    # This model returns the input as the output. Since our inputs are fixed value for all nonzero features, this model is equivalent to returning a uniform distribution of the species in the assemblage.
+    def __init__(self):
+        super().__init__()
+        self.f = nn.Parameter(torch.randn(1))
+    
+    def forward(self, t, x):
+        return self.f.expand(x.shape)
+
+
+class SingleConstFilteredNormalized(nn.Module):
+    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self):
+        super().__init__()
+        self.f = nn.Parameter(torch.randn(1))
+    
+    def forward(self, t, x):
+        f = self.f.expand(x.shape)
+        
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(f)  # This will hold the output
+        
+        for i in range(x.shape[0]):
+            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        
+        return y
 
 
 class ConstOutput(nn.Module):
@@ -23,7 +56,10 @@ class ConstOutput(nn.Module):
         self.f = nn.Parameter(torch.randn(N))
     
     def forward(self, t, x):
-        return self.f
+        # x is assumed to be batched with shape (batch_size, input_dim)
+        batch_size = x.shape[0]
+        f_repeated = self.f.unsqueeze(0).expand(batch_size, -1)  # Repeat f for each batch element
+        return f_repeated
 
 
 class ConstOutputFilteredNormalized(nn.Module):
@@ -33,15 +69,23 @@ class ConstOutputFilteredNormalized(nn.Module):
         self.f = nn.Parameter(torch.randn(N))
     
     def forward(self, t, x):
-        f = self.f
+        # x is assumed to be batched with shape (batch_size, input_dim)
+        batch_size = x.shape[0]
+        input_dim = x.shape[1]
         
-        mask = x != 0
-        f_selected = f[mask]
-        f_normalized = f_selected / f_selected.sum()
+        f = self.f.unsqueeze(0).expand(batch_size, -1)  # Repeat f for each batch element
         
-        # Create the output y, fill zeros where masked, fill with f_normalized where unmasked
-        y = torch.zeros_like(f)
-        y[mask] = f_normalized
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(f)  # This will hold the output
+        
+        for i in range(batch_size):
+            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
         
         return y
     

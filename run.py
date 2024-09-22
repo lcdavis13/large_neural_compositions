@@ -3,6 +3,7 @@ import math
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from dotsy import dicy, ency
@@ -19,13 +20,25 @@ from stream_plot import plotstream
 import user_confirmation as ui
 
 
-# TODO: everywhere that I'm reporting loss, I should use the DKI implementation for comparison, even if that's not what I'm optimizing.
 def loss_bc_dki(y_pred, y_true):
-    return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred + y_true))   # DKI implementation
+    return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred + y_true))   # DKI repo implementation (incorrect)
 
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
-    return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))  # more robust implementation?
-    # return torch.sum(torch.abs(y_pred - y_true)) / (2.0 * y_pred.shape[0])   # simplified by assuming every vector is a species composition that sums to 1 ... but some models may violate that constraint so maybe don't use this
+    return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))
+    # return torch.sum(torch.abs(y_pred - y_true)) / (2.0 * y_true.shape[0])   # simplified by assuming every vector is a species composition that sums to 1 ... but some models may violate that constraint so maybe don't use this
+
+def loss_bc_scaled(y_pred, y_true, epsilon=1e-10):
+    numerator = torch.sum(torch.abs(y_pred - y_true) / (torch.abs(y_true) + epsilon))
+    denominator = torch.sum(torch.abs(y_pred) + torch.abs(y_true) / (torch.abs(y_true) + epsilon))
+    return numerator / denominator
+
+def loss_bc_root(y_pred, y_true):
+    return torch.sqrt(loss_bc(y_pred, y_true))
+
+def loss_bc_logscaled(y_pred, y_true, epsilon=1e-10):
+    numerator = torch.sum(torch.abs(y_pred - y_true) / torch.log(torch.abs(y_true) + 1 + epsilon))
+    denominator = torch.sum(torch.abs(y_pred) + torch.abs(y_true) / torch.log(torch.abs(y_true) + 1 + epsilon))
+    return numerator / denominator
 
 def distribution_error(x):  # penalties for invalid distributions
     a = 1.0
@@ -81,11 +94,11 @@ class Optimum(ency):
         return best
 
 
-def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, distr_error_fn, device):
+def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device):
     model.eval()
     
     total_loss = 0.0
-    total_dki_loss = 0.0
+    total_score = 0.0
     total_distr_error = 0.0
     total_samples = x_val.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
@@ -99,20 +112,20 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, distr_er
             y_pred = model(t, x).to(device)
 
             loss = loss_fn(y_pred, y)
-            dki_loss = loss_bc_dki(y_pred, y)
+            score = score_fn(y_pred, y)
             distr_error = distr_error_fn(y_pred)
             total_loss += loss.item() * mb_examples  # Multiply loss by batch size
-            total_dki_loss += dki_loss.item() * mb_examples
+            total_score += score.item() * mb_examples
             total_distr_error += distr_error.item() * mb_examples
 
     avg_loss = total_loss / total_samples
-    avg_dki_loss = total_dki_loss / total_samples
+    avg_score = total_score / total_samples
     avg_penalty = total_distr_error / total_samples
-    return avg_loss, avg_dki_loss, avg_penalty
+    return avg_loss, avg_score, avg_penalty
 
 
 def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch,
-                prev_examples, fold, epoch_num, model_name, dataname, loss_fn, distr_error_fn, device, filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1):
+                prev_examples, fold, epoch_num, model_name, dataname, loss_fn, score_fn, distr_error_fn, device, filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1):
     model.train()
 
     
@@ -204,8 +217,10 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
-def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, initial_lr, verbosity=1, seed=None, run_validation=False):    # Set the seed for reproducibility
+def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, initial_lr, verbosity=1, seed=None, run_validation=False):    # Set the seed for reproducibility
     # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
+    
+    assert(data.check_leakage([(x, y, x_valid, y_valid)]))
     
     if seed is not None:
         np.random.seed(seed)
@@ -287,7 +302,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
         if manager.epoch % stream_interval == 0:
             # VALIDATION
             if run_validation:
-                l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, timesteps, loss_fn,
+                l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, timesteps, loss_fn, score_fn,
                                                      distr_error_fn, device)
                 plotstream.plot(f"Raw LRRS for {model_name}", "log( Learning Rate )", "loss",
                             [f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Val", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Trn"], scheduler.get_last_lr(),
@@ -299,8 +314,8 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
             
             # plotstream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
             #                    manager.epoch, manager.get_metric().item(), add_point=False)
-            plotstream.plot_single(f"LRRS metric for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
-                               scheduler.get_last_lr(), metric, add_point=False, x_log=True)
+            # plotstream.plot_single(f"LRRS metric for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
+            #                    scheduler.get_last_lr(), metric, add_point=False, x_log=True)
 
         
         stream_loss = 0
@@ -325,7 +340,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     # TODO: if averaging along the logarithmic scale (to find halfway point between 1e-3 and 1e-2 for eample), do the geometric mean sqrt(a*b). We want to use this to find e.g. the point between two optima measurements. If we need to weight that geometric mean, it's exp(alpha * log(a) + (1-alpha) * log(b))
     
-    plotstream.plot_point(f"LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_metric.item(), symbol="*")
+    # plotstream.plot_point(f"LRRS metric for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_metric.item(), symbol="*")
     plotstream.plot_point(f"Raw LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_loss.item(), symbol="*")
     
     print(f"Peak LR: {diverge_lr}")
@@ -335,15 +350,15 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
 # Search for hyperparameters by identifying the values that lead to the highest learning rate before divergence
 # Based on notes found here: https://sgugger.github.io/the-1cycle-policy.html
 def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, data_folded, minibatch_examples, accumulated_minibatches,
-                                       device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn,
+                                       device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn,
                                        threshold_proportion=0.9, verbosity=1, seed=None, run_validation=False):
     x, y, x_valid, y_valid = data_folded[0]
     
     # weight_decay_values = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0] # SLPReplicator
     # weight_decay_values = [1.0, 3.3, 10] #[1e-1, 0.33, 1e0, 3.3, 1e1, 33] # cNODE2
-    weight_decay_values = [1e-3, 1e-2, 1e-1, 0.32]
+    weight_decay_values = [0.0, 1e-3, 1e-2, 1e-1, 0.32, 1e0, 3.2]
     # weight_decay_values = [1e-1, 0.33, 1e0, 3.3, 1e1]
-    initial_lr_values = [1e-2]
+    initial_lr_values = [0.03]
     
     highest_lr = -np.inf
     lr_results = {}
@@ -357,7 +372,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
             model.load_state_dict(model_base.state_dict())
             
             diverge_lr = find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches,
-                                 device, min_epochs, max_epochs, dataname, timesteps, loss_fn, distr_error_fn, wd, initial_lr,
+                                 device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn, wd, initial_lr,
                                  verbosity, seed=seed, run_validation=True)
             lr_results[wd] = diverge_lr
             plotstream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
@@ -379,7 +394,9 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
-               model_name, dataname, fold, loss_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1):
+               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1):
+    assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
+    
     # track stats at various definitions of the "best" epoch
     val_opt = Optimum('val_loss', 'min')
     trn_opt = Optimum('trn_loss', 'min')
@@ -392,7 +409,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     filepath_out_incremental = f'results/logs/{model_name}_{dataname}_incremental.csv'
     
     # initial validation benchmark
-    l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
+    l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_epoch, verbosity > 0,
         "fold", fold + 1,
         "epoch", 0,
@@ -401,15 +418,16 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         "Avg DKI Trn Loss", -1.0,
         "Avg Training Distr Error", -1.0,
         "Avg Validation Loss", l_val,
-        "Avg DKI Val Loss", l_dki_val,
+        "Avg DKI Val Loss", score_val,
         "Avg Validation Distr Error", p_val,
         "Learning Rate", old_lr,
         "Elapsed Time", 0.0,
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
-    plotstream.plot_loss(dataname, f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
-    # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], 0, [l_val, None, l_dki_val, None], add_point=False)
+    plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
+    plotstream.plot_loss(f"score {dataname}", f"{model_name} fold {fold}", 0, None, score_val, add_point=False)
+    # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], 0, [l_val, None, score_val, None], add_point=False)
     
     train_examples_seen = 0
     start_time = time.time()
@@ -417,9 +435,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
-            fold, manager.epoch, model_name, dataname, loss_fn, distr_error_fn, device, filepath_out_incremental, lr_plot="Learning Rate", verbosity=verbosity - 1)
-        l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, distr_error_fn, device)
-        l_trn, l_dki_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, distr_error_fn, device)
+            fold, manager.epoch, model_name, dataname, loss_fn, score_fn, distr_error_fn, device, filepath_out_incremental, lr_plot="Learning Rate", verbosity=verbosity - 1)
+        l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+        l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
         
         # Update learning rate based on validation loss
         scheduler.epoch_step(l_trn)
@@ -439,20 +457,21 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             "Avg DKI Trn Loss", -1.0,
             "Avg Training Distr Error", p_trn,
             "Avg Validation Loss", l_val,
-            "Avg DKI Val Loss", l_dki_val,
+            "Avg DKI Val Loss", score_val,
             "Avg Validation Distr Error", p_val,
             "Learning Rate", old_lr, # should I track average LR in the epoch? Max and min LR?
             "Elapsed Time", elapsed_time,
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
-        plotstream.plot_loss(dataname, f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
-        # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, l_dki_val, l_dki_trn], add_point=add_point)
-        if l_val != l_dki_val:
-            print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
+        plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
+        plotstream.plot_loss(f"score {dataname}", f"{model_name} fold {fold}", manager.epoch + 1, score_trn, score_val, add_point=add_point)
+        # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, score_val, score_trn], add_point=add_point)
+        # if l_val != score_val:
+        #     print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
         
         # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
-        dict = {"epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "lr": old_lr, "time": elapsed_time, "gpu_memory": gpu_memory_reserved, "metric": p_val}
+        dict = {"epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val, "val_score": score_val, "lr": old_lr, "time": elapsed_time, "gpu_memory": gpu_memory_reserved, "metric": p_val}
         # track best validation
         val_opt.track_best(dict)
         # if val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time):
@@ -478,17 +497,19 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds, min_epochs, max_epochs,
-                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, distr_error_fn, weight_decay, verbosity=1):
+                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1):
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
     LR_start_factor = 0.1
     
     val_losses = []
+    val_scores = []
     val_trn_losses = []
     val_epochs = []
     val_times = []
     trn_losses = []
+    trn_scores = []
     trn_val_losses = []
     trn_epochs = []
     trn_times = []
@@ -511,22 +532,65 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, trn_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
-                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1)
+                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1)
+        
+        # print output of model on a batch of test examples
+        DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
+        DEBUG_OUT_NUM = 4
+        DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_output_vs_true.csv"
+        if DEBUG_OUTPUT and fold_num == 0:
+            model.eval()
+            with torch.no_grad():
+                # Get the model output for the first minibatch
+                output = model(timesteps, x_valid[:DEBUG_OUT_NUM].to(device))
+                
+                # Get the corresponding y_valid batch
+                y_valid_batch = y_valid[:DEBUG_OUT_NUM].to(device)
+            
+                print(f"Example output of model {model_name} on first test batch")
+                
+                csv_data = []
+                # Iterate row by row
+                for i in range(DEBUG_OUT_NUM):
+                    output_row = output[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
+                    y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy
+                    
+                    # Add output and y_valid as alternating rows
+                    csv_data.append(list(output_row))  # Append the output row
+                    csv_data.append(list(y_valid_row))  # Append the corresponding y_valid row
+                    
+                    # For console printing
+                    print(f"Row {i}:")
+                    print("Output:")
+                    print(output_row)
+                    print("y_valid:")
+                    print(y_valid_row)
+                    print('-' * 50)  # Separator between rows
+                
+                # Create a DataFrame for exporting to CSV
+                df = pd.DataFrame(csv_data)
+            
+            # Export to CSV
+            df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
         
         val_loss = val_opt.val_loss
+        val_score = val_opt.val_score
         val_trn_loss = val_opt.trn_loss
         val_epoch = val_opt.epoch
         val_time = val_opt.time
         trn_loss = trn_opt.trn_loss
+        trn_score = trn_opt.trn_score
         trn_val_loss = trn_opt.val_loss
         trn_epoch = trn_opt.epoch
         trn_time = trn_opt.time
         
         val_losses.append(val_loss)
+        val_scores.append(val_score)
         val_epochs.append(val_epoch)
         val_trn_losses.append(val_trn_loss)
         val_times.append(val_time)
         trn_losses.append(trn_loss)
+        trn_scores.append(trn_score)
         trn_epochs.append(trn_epoch)
         trn_val_losses.append(trn_val_loss)
         trn_times.append(trn_time)
@@ -534,17 +598,19 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         stream.stream_results(filepath_out_fold, verbosity > 0,
             "fold", fold_num+1,
             "Validation Loss", val_loss,
+            "Validation Score", val_score,
             "Val @ epochs", val_epoch+1,
             "Val @ time", val_time,
             "Val @ training loss", val_trn_loss,
             "Training Loss", trn_loss,
+            "Training Score", trn_score,
             "Trn @ epochs", trn_epoch+1,
             "Trn @ time", trn_time,
             "Trn @ validation loss", trn_val_loss,
             prefix="\n========================================FOLD=========================================\n",
             suffix="\n=====================================================================================\n")
         
-    return val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses
+    return val_losses, val_scores, val_epochs, val_times, val_trn_losses, trn_losses, trn_scores, trn_epochs, trn_times, trn_val_losses
 
 
 def pessimistic_summary(fold_losses):
@@ -560,10 +626,10 @@ def main():
     
     # Data
     
-    # dataname = "P"
+    dataname = "P"
     # dataname = "waimea"
     # dataname = "waimea-condensed"
-    dataname = "cNODE-paper-ocean"
+    # dataname = "cNODE-paper-ocean"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -583,6 +649,8 @@ def main():
     data_folded = data.fold_data(x, y, kfolds)
     if DEBUG_SINGLE_FOLD:
         data_folded = [data_folded[0]]
+    assert(data.check_leakage(data_folded))
+    
     
     print('dataset:', filepath_train)
     print(f'training data shape: {data_folded[0][0].shape}')
@@ -590,13 +658,13 @@ def main():
     
     # experiment hyperparameters
     hp = dicy()
-    hp.min_epochs = 12
-    hp.max_epochs = 12
+    hp.min_epochs = 16
+    hp.max_epochs = 16
     hp.patience = 1
     hp.early_stop = True
     
     # optimization hyperparameters
-    hp.minibatch_examples = 16
+    hp.minibatch_examples = 1
     hp.accumulated_minibatches = 1
     hp.LR = 0.0316
     hp.WD = 0.01
@@ -613,12 +681,16 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
+        # 'baseline-1const': lambda args: models_baseline.SingleConst(),
+        # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
+        'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
         # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
-        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
-        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
+        # 'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
+        # 'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
         # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
         # LRRS range: 1e-2...1e0.5
         # WD range: 1e-6...1e0
@@ -686,6 +758,7 @@ def main():
     
     # specify loss function
     loss_fn = loss_bc
+    score_fn = loss_bc
     # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
     
     distr_error_fn = distribution_error
@@ -735,7 +808,15 @@ def main():
     
     # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
     # Model dictionary. Hyperparam override(s)
-    
+
+    # Establish baseline performance and add to plots
+    trivial_model = models_baseline.ReturnInput()
+    trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)
+    plotstream.plot_horizontal_line(f"loss {dataname}", trivial_loss, f"Trivial (in=out)")
+    plotstream.plot_horizontal_line(f"score {dataname}", trivial_score, f"Trivial (in=out)")
+    # trivial_model2 = models_baseline.ReturnZeros()
+    # trivial_loss2 = validate_epoch(trivial_model2, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)[0]
+    # plotstream.plot_horizontal_line(dataname, trivial_loss2, f"Trivial (zeros)")
     
     filepath_out_expt = f'results/{dataname}_experiments.csv'
     seed = int(time.time()) # currently only used to set the data shuffle seed in find_LR
@@ -756,84 +837,134 @@ def main():
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
-        # # find optimal LR
-        # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-        #     model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
-        #     device, 2, 2, dataname, timesteps, loss_fn, distr_error_fn, verbosity=1, seed=seed)
-        # print(f"LR:{hp.LR}, WD:{hp.WD}")
+        hp.WD = 0.0
+        hp.LR = 0.15
+        # find optimal LR
+        hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+            model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+            device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
+        print(f"LR:{hp.LR}, WD:{hp.WD}")
         
         # TODO: remove, hardcoded values for cNODE2 (steepest point found in LRFinder)
         
-        # # transformer big:
-        # hp.WD = 3.2
-        # hp.LR = 0.01
-        # # hp.WD = 0.1
-        # # hp.LR = 0.001
-        #
-        # # # cNODE2:
-        # # hp.WD = 3.2
-        # # hp.LR = 0.032
-        
-        # # cNODE1:`
-        # hp.WD = 0.01
-        # hp.LR = 1.0
-        
-        # baseline-SLPReplicator:
-        hp.WD = 0.01
-        hp.LR = 2.0
-        
-        # cNODE0:
-        
-        
-        ## synth data batch size 16
-        # # baseline-SLPReplicator:
-        # # if model_name == "baseline-SLPReplicator":
-        # #     hp.WD = 0.1
-        # #     hp.LR = 0.032
-        # hp.WD = 0.1
-        # hp.LR = 0.032
-        
-        # cNODE2:
-        if model_name == "cNODE2":
-            hp.WD = 0.33
-            hp.LR = 0.0002
 
-        # # transformer big:
-        # hp.WD = 0.032
-        # hp.LR = 0.001
-        # # hp.WD = 0.01
-        # # hp.LR = 0.00001
+        
+        # OCEAN
+        if dataname == "cNODE-paper-ocean" and hp.minibatch_examples == 16:
+        
+            # # transformer big:
+            # hp.WD = 3.2
+            # hp.LR = 0.01
+            # # hp.WD = 0.1
+            # # hp.LR = 0.001
+            #
+            # # # cNODE2:
+            # # hp.WD = 3.2
+            # # hp.LR = 0.032
+            
+            # cNODE1:`
+            if model_name == "cNODE1":
+                hp.LR = 0.1
+                hp.WD = 0.1
+            
+            # # baseline-SLPReplicator:
+            # hp.LR = 2.0
+            # hp.WD = 0.01
+            
+            # if model_name == "baseline-const":
+            #     hp.LR = 0.2
+            #     hp.WD = 0.32
+            #
+            # if model_name == "baseline-constShaped":
+            #     hp.LR = 10
+            #     hp.WD = 0.001
+            
+            if model_name == "baseline-const":
+                hp.LR = 0.02
+                hp.WD = 0.32
+                
+            if model_name == "baseline-constShaped":
+                hp.LR = 1
+                hp.WD = 0.001
+            
+            if model_name == "baseline-cNODE0-1step":
+                hp.LR = 0.5
+                hp.WD = 0.0
+                
+            if model_name == "baseline-cNODE1-1step":
+                hp.LR = 1.0
+                hp.WD = 0.0
+            
+        if dataname == "p" and hp.minibatch_examples == 16:
+            ## synth data batch size 16
+    
+            # # baseline-SLPReplicator:
+            if model_name == "baseline-SLPReplicator":
+                hp.WD = 0.1
+                hp.LR = 0.032
+            # hp.WD = 0.1
+            # hp.LR = 0.032
+            
+            # # cNODE2:
+            # if model_name == "cNODE2":
+            #     hp.WD = 0.33
+            #     hp.LR = 0.0002
+    
+            # # transformer big:
+            # hp.WD = 0.032
+            # hp.LR = 0.001
+            # # hp.WD = 0.01
+            # # hp.LR = 0.00001
         
         
-        hp = ui.ask(hp, keys=["LR", "WD"])
+        # hp = ui.ask(hp, keys=["LR", "WD"])
         
         # print hyperparams
         for key, value in hp.items():
             print(f"{key}: {value}")
         
         # train and test the model across multiple folds
-        val_losses, val_epochs, val_times, val_trn_losses, trn_losses, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
+        val_losses, val_scores, val_epochs, val_times, val_trn_losses, trn_losses, trn_scores, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
-            model_name, dataname, timesteps, loss_fn, distr_error_fn, hp.WD, verbosity=0
+            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=0
         )
         
         
         
         print(f"Val Losses: {val_losses}")
+        print(f"Val Scores: {val_scores}")
         print(f"Epochs: {val_epochs}")
         print(f"Durations: {val_times}")
-        print(f"Trn Losses: {val_trn_losses}")
+        print(f"Trn Losses: {trn_losses}")
+        print(f"Trn Scores: {trn_scores}")
+        
+        # summary score for each result vector
+        model_score = pessimistic_summary(val_scores)
+        model_loss = pessimistic_summary(val_losses)
+        model_epoch = pessimistic_summary(val_epochs)
+        model_time = pessimistic_summary(val_times)
+        model_trn_loss = pessimistic_summary(trn_losses)
+        model_trn_score = pessimistic_summary(trn_scores)
+        
+        print(f"Avg Val Scores: {model_score}")
+        print(f"Avg Val Losses: {model_loss}")
+        print(f"Avg Epochs: {model_epoch}")
+        print(f"Avg Durations: {model_time}")
+        print(f"Avg Trn Losses: {model_trn_loss}")
+        print(f"Avg Trn Scores: {model_trn_score}")
         
         for i in range(len(val_losses)):
             stream.stream_scores(filepath_out_expt, True,
                 "model", model_name,
                 "model parameters", num_params,
-                "Validation Score", val_losses[i],
+                "Validation Score", val_scores[i],
+                "Validation Loss", val_losses[i],
                 "Val @ Epoch", val_epochs[i],
                 "Val @ Time", val_times[i],
                 "Val @ Trn Loss", val_trn_losses[i],
-                "Train Score", trn_losses[i],
+                "Train Score", trn_scores[i],
+                "Train Loss", trn_losses[i],
                 "Trn @ Epoch", trn_epochs[i],
                 "Trn @ Time", trn_times[i],
                 "Trn @ Val Loss", trn_val_losses[i],
@@ -842,27 +973,19 @@ def main():
                 *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
                 prefix="\n=======================================================EXPERIMENT========================================================\n",
                 suffix="\n=========================================================================================================================\n")
-        
-        # summary score for each result vector
-        model_score = pessimistic_summary(val_losses)
-        model_epoch = pessimistic_summary(val_epochs)
-        model_time = pessimistic_summary(val_times)
-        model_trn_loss = pessimistic_summary(val_trn_losses)
-        
-        print(f"Avg Val Losses: {model_score}")
-        print(f"Avg Epochs: {model_epoch}")
-        print(f"Avg Durations: {model_time}")
-        print(f"Avg Trn Losses: {model_trn_loss}")
+
         
         # except Exception as e:
         #     stream.stream_scores(filepath_out_expt, True,
         #         "model", model_name,
         #         "model parameters", -1,
         #         "Validation Score", -1,
+        #         "Validation Loss", -1,
         #         "Val @ Epoch", -1,
         #         "Val @ Time", -1,
         #         "Val @ Trn Loss", -1,
         #         "Train Score", -1,
+        #         "Train Loss", -1,
         #         "Trn @ Epoch", -1,
         #         "Trn @ Time", -1,
         #         "Trn @ Val Loss", -1,
@@ -874,7 +997,7 @@ def main():
         #     print(f"Model {model_name} failed with error:\n{e}")
 
     print("\n\nDONE")
-    plotstream.keep_plots_open()
+    plotstream.wait_for_plot_exit()
 
 
 # main

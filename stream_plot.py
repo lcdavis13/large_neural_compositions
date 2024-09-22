@@ -21,13 +21,30 @@ class PlotStreamer:
     def _initialize(self):
         self.figs = {}
         self.label_styles = {}
+        self.color_cycle_positions = {}  # Dictionary to track color cycle position per plot
         self.queue = queue.Queue()  # Queue to handle data between threads
         self.plotting_thread = threading.Thread(target=self._plotting_loop, daemon=True)
         self.plotting_thread.start()
     
-    def plot(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False, x_log=False, y_log=False):
-        # Add plotting instructions to the queue
-        self.queue.put((title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log))
+    def plot(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False, x_log=False, y_log=False,
+             hline=None, vline=None):
+        """
+        Add plotting instructions to the queue, including optional horizontal and vertical lines.
+
+        :param title: The title of the plot.
+        :param xlabel: The label for the X-axis.
+        :param ylabel: The label for the Y-axis.
+        :param line_labels: A list of labels for the plotted lines or lines (including hline/vline).
+        :param x_value: The X-value for the point to be plotted.
+        :param y_values: A list of Y-values corresponding to the labels.
+        :param add_point: Whether to add a point marker to the plot.
+        :param x_log: Whether the X-axis should be logarithmic.
+        :param y_log: Whether the Y-axis should be logarithmic.
+        :param hline: A tuple (y_value, label, color, linestyle) for horizontal lines. Default is None.
+        :param vline: A tuple (x_value, label, color, linestyle) for vertical lines. Default is None.
+        """
+        # Pass hline and vline through the queue
+        self.queue.put((title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline, vline))
     
     def _plotting_loop(self):
         while True:
@@ -43,8 +60,10 @@ class PlotStreamer:
             if batch_data:
                 for data in batch_data:
                     # Process each data point in batch but do not plot after each one
-                    title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log = data
-                    self._update_data(title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log)
+                    # Unpacking new hline and vline arguments
+                    title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline, vline = data
+                    self._update_data(title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log,
+                                      hline, vline)
                 
                 # Now update the plot after processing all data in the queue
                 self._draw_plots()
@@ -52,7 +71,11 @@ class PlotStreamer:
             # Keep figures responsive
             plt.pause(0.001)
     
-    def _update_data(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log):
+    def _update_data(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline,
+                     vline):
+        """
+        Update data for the plots, including optional horizontal and vertical lines.
+        """
         if title in self.figs and not plt.fignum_exists(self.figs[title][0].number):
             self.figs[title] = None
             return
@@ -60,44 +83,81 @@ class PlotStreamer:
         if title not in self.figs:
             fig, ax = plt.subplots()
             self.figs[title] = (fig, ax)
+            self.color_cycle_positions[title] = 0  # Initialize color cycle position for new plot
         
         fig, ax = self.figs[title]
-        num_existing_lines = len(ax.get_lines())
-        num_new_lines = len(line_labels)
-        color_index = num_existing_lines // num_new_lines
         
-        color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-        current_color = color_cycle[color_index % len(color_cycle)]
+        # Handle regular lines
+        if line_labels and y_values:
+            color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+            style_cycle = itertools.cycle(['-', '--', '-.', ':'])
+            
+            # Get the current color cycle position for this plot
+            current_position = self.color_cycle_positions.get(title, 0)
+            current_color = color_cycle[current_position % len(color_cycle)]
+            
+            lines = {line.get_label(): line for line in ax.get_lines()}
+            
+            # Track if any new lines are added
+            new_lines_added = False
+            
+            for i, (label, value) in enumerate(zip(line_labels, y_values)):
+                if label in lines:
+                    # Update existing line if it has already been plotted
+                    line = lines[label]
+                    if value is not None:
+                        line.set_xdata(list(line.get_xdata()) + [x_value])
+                        line.set_ydata(list(line.get_ydata()) + [value])
+                        if add_point:
+                            ax.text(x_value, value, '*', fontsize=18, color=line.get_color(), ha='center', va='center')
+                else:
+                    # Use the same color for all new lines in this batch, determined by the saved position
+                    color = current_color
+                    linestyle = next(style_cycle)
+                    
+                    if label in self.label_styles:
+                        linestyle = self.label_styles[label]
+                    else:
+                        self.label_styles[label] = linestyle
+                    
+                    # Register the line, even if value is None (plot it with NaN values to maintain style/color)
+                    if value is not None:
+                        ax.plot([x_value], [value], label=label, color=color, linestyle=linestyle)
+                        if add_point:
+                            ax.text(x_value, value, '*', fontsize=18, color=color, ha='center', va='center')
+                    else:
+                        # Create an empty line with NaN values to maintain the label and color for future points
+                        ax.plot([x_value], [float('nan')], label=label, color=color, linestyle=linestyle)
+                    
+                    # Mark that new lines were added
+                    new_lines_added = True
+            
+            # Increment the color cycle position only if new lines were added in this batch
+            if new_lines_added:
+                self.color_cycle_positions[title] = (current_position + 1) % len(color_cycle)
         
-        style_cycle = itertools.cycle(['-', '--', '-.', ':'])
+        # Handle horizontal lines
+        if hline:
+            y_value, hline_label, hline_color, hline_style = hline
+            if line_labels and hline_label:
+                hline_label = line_labels[0]
+            ax.axhline(y=y_value, color=hline_color or 'black', linestyle=hline_style or '--', label=hline_label)
         
-        for i, (label, value) in enumerate(zip(line_labels, y_values)):
-            if label not in self.label_styles:
-                self.label_styles[label] = next(itertools.islice(style_cycle, i, None))
+        # Handle vertical lines
+        if vline:
+            x_value, vline_label, vline_color, vline_style = vline
+            if line_labels and vline_label:
+                vline_label = line_labels[1] if len(line_labels) > 1 else line_labels[0]
+            ax.axvline(x=x_value, color=vline_color or 'black', linestyle=vline_style or '--', label=vline_label)
         
-        lines = {line.get_label(): line for line in ax.get_lines()}
-        
-        for label, value in zip(line_labels, y_values):
-            linestyle = self.label_styles[label]
-            if label in lines:
-                line = lines[label]
-                if value is not None:
-                    line.set_xdata(list(line.get_xdata()) + [x_value])
-                    line.set_ydata(list(line.get_ydata()) + [value])
-                    if add_point:
-                        ax.text(x_value, value, '*', fontsize=18, color=line.get_color(), ha='center', va='center')
-            else:
-                if value is not None:
-                    ax.plot([x_value], [value], label=label, color=current_color, linestyle=linestyle)
-                    if add_point:
-                        ax.text(x_value, value, '*', fontsize=18, color=current_color, ha='center', va='center')
-        
+        # Adjust the plot appearance
         ax.relim()
         ax.autoscale_view()
         ax.set_title(title)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.legend()
+        
         if x_log:
             ax.set_xscale('log')
         if y_log:
@@ -107,25 +167,12 @@ class PlotStreamer:
         """Draw the plots after processing all queued data."""
         plt.draw()
     
-    def keep_plots_open(self):
+    def wait_for_plot_exit(self):
         """Block the main thread until all plot windows are closed."""
         while plt.get_fignums():  # Check if any figures are open
             time.sleep(0.1)
     
     # ----------------- Convenience Methods ----------------- #
-    def plot_point(self, title, line_label, x_value, y_value, symbol="o"):
-        """
-        Plots a single point on an existing curve.
-        """
-        self.plot(title, "", "", [line_label], x_value, [y_value], add_point=True)
-    
-    def plot_single(self, title, xlabel, ylabel, line_label, x_value, y_value, add_point=False, x_log=False,
-                    y_log=False):
-        """
-        Helper method to call the plot function with only one value of y and its label.
-        """
-        self.plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log,
-                  y_log=y_log)
     
     def plot_loss(self, title, label, epoch, train_loss, validation_loss=None, add_point=False):
         """
@@ -134,6 +181,47 @@ class PlotStreamer:
         labels = [f'{label} - Val Loss', f'{label} - Trn Loss']
         values = [validation_loss, train_loss]
         self.plot(title, 'Epoch', 'Loss', labels, epoch, values, add_point)
+        
+        
+    def plot_point(self, title, line_label, x_value, y_value, symbol="o"):
+        """
+        Plots a single point on an existing curve.
+        """
+        self.plot(title, "", "", [line_label], x_value, [y_value], add_point=True)
+    
+    def plot_horizontal_line(self, title, y_value, label=None, color='black', linestyle='--'):
+        """
+        Helper method to add a horizontal line by calling plot with hline.
+
+        :param title: The title of the plot.
+        :param y_value: The y-coordinate for the horizontal line.
+        :param label: The label for the horizontal line.
+        :param color: The color of the horizontal line (default is black).
+        :param linestyle: The style of the horizontal line (default is dashed).
+        """
+        hline = (y_value, label, color, linestyle)
+        self.plot(title, "", "", [label], None, [], hline=hline)
+    
+    def plot_vertical_line(self, title, x_value, label=None, color='black', linestyle='--'):
+        """
+        Helper method to add a vertical line by calling plot with vline.
+
+        :param title: The title of the plot.
+        :param x_value: The x-coordinate for the vertical line.
+        :param label: The label for the vertical line.
+        :param color: The color of the vertical line (default is black).
+        :param linestyle: The style of the vertical line (default is dashed).
+        """
+        vline = (x_value, label, color, linestyle)
+        self.plot(title, "", "", [label], None, [], vline=vline)
+    
+    def plot_single(self, title, xlabel, ylabel, line_label, x_value, y_value, add_point=False, x_log=False,
+                    y_log=False):
+        """
+        Helper method to call the plot function with only one value of y and its label.
+        """
+        self.plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log,
+                  y_log=y_log)
 
 
 # Create a global instance of the PlotManager
@@ -141,10 +229,12 @@ plotstream = PlotStreamer()
 
 
 if __name__ == "__main__":
+    plotstream.plot_horizontal_line("Training Progress", 10, "Target Loss")
     for i in range(10):
         time.sleep(0.5)  # Simulate a long computation
         plotstream.plot_loss("Training Progress", "Model A", i, train_loss=i ** 2, validation_loss=i ** 1.5)
-
+        plotstream.plot_loss("Training Progress", "Model B", i, train_loss=i ** 2 - i, validation_loss=i ** 1.5 + 1)
+    plotstream.plot_vertical_line("Training Progress", 5, "Halfway")
     print("Computation complete.")
 
-    plotstream.keep_plots_open()
+    plotstream.wait_for_plot_exit()
