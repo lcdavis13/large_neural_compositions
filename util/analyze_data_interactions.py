@@ -97,7 +97,9 @@ for file_name in os.listdir(input_folder):
             file_dict[base_name] = []
         file_dict[base_name].append(file_name)
 
-# Iterate over the file pairs/groups and process them
+# Initialize an empty list to store the statistics for each dataset
+stats_list = []
+
 for base_name, files in file_dict.items():
     dfs = []
     all_determinedness = []  # To collect all interaction determinedness for distribution plot
@@ -141,5 +143,26 @@ for base_name, files in file_dict.items():
     print(f'Number of non-zero interactions: {non_zero_count}')
     print('-' * 40)
     
+    # Store the statistics in the list
+    stats_list.append({
+        'Dataset': base_name,
+        'Avg Determinedness': avg_determinedness,
+        'Std Determinedness': std_determinedness,
+        'Avg Non-Zero Determinedness': avg_nonzero_determinedness,
+        'Std Non-Zero Determinedness': std_nonzero_determinedness,
+        'Zero Count': zero_count,
+        'Non-Zero Count': non_zero_count
+    })
+    
     # Generate the plot of determinedness distribution
     plot_determinedness_distribution(all_determinedness, base_name, output_folder)
+
+# Convert the stats list to a DataFrame
+stats_df = pd.DataFrame(stats_list)
+
+# Save the statistics to a CSV file
+stats_output_path = os.path.join(output_folder, 'all_datasets_statistics.csv')
+stats_df.to_csv(stats_output_path, index=False)
+
+print(f"Statistics for all datasets saved to {stats_output_path}")
+
