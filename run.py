@@ -5,8 +5,7 @@ import time
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-from dotsy import dicy, ency
+from dotsy import dicy
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
 import data
@@ -16,6 +15,7 @@ import models
 import models_baseline
 import models_condensed
 import stream
+from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
 import user_confirmation as ui
 
@@ -40,6 +40,12 @@ def loss_bc_logscaled(y_pred, y_true, epsilon=1e-10):
     denominator = torch.sum(torch.abs(y_pred) + torch.abs(y_true) / torch.log(torch.abs(y_true) + 1 + epsilon))
     return numerator / denominator
 
+def loss_bc_unbounded(y_pred, y_true, avg_richness, epsilon=1e-10):
+    # performs the normalization per element, such that if y_pred has an extra elemen, it adds an entire 1 to the loss. This avoids the "free lunch" of adding on extra elements with small value.
+    batch_loss = torch.sum(torch.div(torch.abs(y_pred - y_true), torch.abs(y_pred) + torch.abs(y_true) + epsilon))
+    batch_loss = batch_loss / avg_richness
+    return batch_loss / y_pred.shape[0]
+
 def distribution_error(x):  # penalties for invalid distributions
     a = 1.0
     b = 1.0
@@ -50,48 +56,6 @@ def distribution_error(x):  # penalties for invalid distributions
 
 def ceildiv(a, b):
     return -(a // -b)
-
-
-# TODO: switch most of this functionality to dict. Optimum just needs to accept a key name and info about how to evaluate that key, then in each step it gets the dict as an argument. It just conditionally copies the dict's contents into its internal dict.
-# Can the internal dict copy be empty during construction, and get filled during the first update call? That way we don't have to worry about default values.
-# Can we make this an Ency for convenience? (and to finally test Ency)
-class Optimum(ency):
-    def __init__(self, metric, metric_type='min', dict=None):
-        self.metric_name = metric
-        self.metric_type = metric_type
-        
-        if dict is not None:
-            self.dict = dict.copy()
-        else:
-            self.dict = {}
-
-        if metric_type == 'min':
-            self.best_metric = float('inf')
-        elif metric_type == 'max':
-            self.best_metric = -float('inf')
-            
-        super().__init__(["dict"])  # initialize data for ency dot-access
-
-    def track_best(self, dict):
-        if self.metric_name is None or self.metric_name not in self.dict:
-            best = True
-        else:
-            current_metric = dict[self.metric_name]
-            last_metric = self.dict[self.metric_name]
-            if current_metric is None:
-                best = False
-            elif last_metric is None:
-                best = True
-            else:
-                if self.metric_type == 'min':
-                    best = current_metric < last_metric
-                else:
-                    best = current_metric > last_metric
-
-        if best:
-            self.dict = dict.copy()
-            
-        return best
 
 
 def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device):
@@ -400,6 +364,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     # track stats at various definitions of the "best" epoch
     val_opt = Optimum('val_loss', 'min')
     trn_opt = Optimum('trn_loss', 'min')
+    valscore_opt = Optimum('val_score', 'min')
+    trnscore_opt = Optimum('trn_score', 'min')
     last_opt = Optimum(metric=None) # metric None to update it every time. metric="epoch" would do the same
     
     old_lr = scheduler.get_last_lr()
@@ -472,15 +438,11 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         
         # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
         dict = {"epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val, "val_score": score_val, "lr": old_lr, "time": elapsed_time, "gpu_memory": gpu_memory_reserved, "metric": p_val}
-        # track best validation
+        # track various optima
         val_opt.track_best(dict)
-        # if val_opt.track_best(manager.epoch, l_trn, l_val, old_lr, elapsed_time):
-        #     torch.save(model.state_dict(), filepath_out_model)
-
-        # track best training
+        valscore_opt.track_best(dict)
         trn_opt.track_best(dict)
-        
-        # track newest
+        trnscore_opt.track_best(dict)
         last_opt.track_best(dict)
         
         old_lr = new_lr
@@ -492,7 +454,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
     # TODO: could also try to save the source code, but would need to copy it at time of execution and then rename it if it gets the best score.
     
-    return val_opt, trn_opt, last_opt
+    return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt
     
 
 
@@ -503,16 +465,11 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     
     LR_start_factor = 0.1
     
-    val_losses = []
-    val_scores = []
-    val_trn_losses = []
-    val_epochs = []
-    val_times = []
-    trn_losses = []
-    trn_scores = []
-    trn_val_losses = []
-    trn_epochs = []
-    trn_times = []
+    val_loss_optims = []
+    val_score_optims = []
+    trn_loss_optims = []
+    trn_score_optims = []
+    final_optims = []
     for fold_num, data_fold in enumerate(data_folded):
         model = model_constr(model_args).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
@@ -531,7 +488,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val_opt, trn_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
+        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
                 x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1)
         
         # print output of model on a batch of test examples
@@ -573,6 +530,15 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
             # Export to CSV
             df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
         
+
+        
+        val_loss_optims.append(val_opt)
+        val_score_optims.append(valscore_opt)
+        trn_loss_optims.append(trn_opt)
+        trn_score_optims.append(trnscore_opt)
+        final_optims.append(last_opt)
+        
+        # To Do: refactor this, we don't need all these variables
         val_loss = val_opt.val_loss
         val_score = val_opt.val_score
         val_trn_loss = val_opt.trn_loss
@@ -583,17 +549,6 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         trn_val_loss = trn_opt.val_loss
         trn_epoch = trn_opt.epoch
         trn_time = trn_opt.time
-        
-        val_losses.append(val_loss)
-        val_scores.append(val_score)
-        val_epochs.append(val_epoch)
-        val_trn_losses.append(val_trn_loss)
-        val_times.append(val_time)
-        trn_losses.append(trn_loss)
-        trn_scores.append(trn_score)
-        trn_epochs.append(trn_epoch)
-        trn_val_losses.append(trn_val_loss)
-        trn_times.append(trn_time)
         
         stream.stream_results(filepath_out_fold, verbosity > 0,
             "fold", fold_num+1,
@@ -610,12 +565,12 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
             prefix="\n========================================FOLD=========================================\n",
             suffix="\n=====================================================================================\n")
         
-    return val_losses, val_scores, val_epochs, val_times, val_trn_losses, trn_losses, trn_scores, trn_epochs, trn_times, trn_val_losses
+    return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims
 
 
-def pessimistic_summary(fold_losses):
-    model_score = np.max([np.mean(fold_losses), np.median(fold_losses)])
-    return model_score
+def unrolldict(d):
+    unrolled_items = list(itertools.chain(*(d.items())))
+    return unrolled_items
 
 
 def main():
@@ -626,10 +581,10 @@ def main():
     
     # Data
     
-    dataname = "P"
+    # dataname = "P"
     # dataname = "waimea"
     # dataname = "waimea-condensed"
-    # dataname = "cNODE-paper-ocean"
+    dataname = "cNODE-paper-ocean"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -664,7 +619,7 @@ def main():
     hp.early_stop = True
     
     # optimization hyperparameters
-    hp.minibatch_examples = 1
+    hp.minibatch_examples = 16
     hp.accumulated_minibatches = 1
     hp.LR = 0.0316
     hp.WD = 0.01
@@ -730,7 +685,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
@@ -757,7 +712,8 @@ def main():
     
     
     # specify loss function
-    loss_fn = loss_bc
+    avg_richness = x.count_nonzero()/x.size(0)
+    loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
     score_fn = loss_bc
     # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
     
@@ -840,10 +796,10 @@ def main():
         hp.WD = 0.0
         hp.LR = 0.15
         # find optimal LR
-        hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-            model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
-            device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
-        print(f"LR:{hp.LR}, WD:{hp.WD}")
+        # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+        #     model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+        #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
+        # print(f"LR:{hp.LR}, WD:{hp.WD}")
         
         # TODO: remove, hardcoded values for cNODE2 (steepest point found in LRFinder)
         
@@ -924,55 +880,42 @@ def main():
             print(f"{key}: {value}")
         
         # train and test the model across multiple folds
-        val_losses, val_scores, val_epochs, val_times, val_trn_losses, trn_losses, trn_scores, trn_epochs, trn_times, trn_val_losses = crossvalidate_model(
+        val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=0
         )
+
+        # print all folds
+        print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num,opt in enumerate(val_loss_optims)]}\n')
+        print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num,opt in enumerate(val_score_optims)]}\n')
+        print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num,opt in enumerate(trn_loss_optims)]}\n')
+        print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num,opt in enumerate(trn_score_optims)]}\n')
         
+        # calculate fold summaries
+        avg_val_loss_optim = summarize(val_loss_optims)
+        avg_val_score_optim = summarize(val_score_optims)
+        avg_trn_loss_optim = summarize(trn_loss_optims)
+        avg_trn_score_optim = summarize(trn_score_optims)
         
+        # print summaries
+        print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
+        print(f'Avg Val Score optimum: {avg_val_score_optim}')
+        print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
+        print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
         
-        print(f"Val Losses: {val_losses}")
-        print(f"Val Scores: {val_scores}")
-        print(f"Epochs: {val_epochs}")
-        print(f"Durations: {val_times}")
-        print(f"Trn Losses: {trn_losses}")
-        print(f"Trn Scores: {trn_scores}")
-        
-        # summary score for each result vector
-        model_score = pessimistic_summary(val_scores)
-        model_loss = pessimistic_summary(val_losses)
-        model_epoch = pessimistic_summary(val_epochs)
-        model_time = pessimistic_summary(val_times)
-        model_trn_loss = pessimistic_summary(trn_losses)
-        model_trn_score = pessimistic_summary(trn_scores)
-        
-        print(f"Avg Val Scores: {model_score}")
-        print(f"Avg Val Losses: {model_loss}")
-        print(f"Avg Epochs: {model_epoch}")
-        print(f"Avg Durations: {model_time}")
-        print(f"Avg Trn Losses: {model_trn_loss}")
-        print(f"Avg Trn Scores: {model_trn_score}")
-        
-        for i in range(len(val_losses)):
+        # write folds to log file
+        for i in range(len(val_loss_optims)):
             stream.stream_scores(filepath_out_expt, True,
                 "model", model_name,
                 "model parameters", num_params,
-                "Validation Score", val_scores[i],
-                "Validation Loss", val_losses[i],
-                "Val @ Epoch", val_epochs[i],
-                "Val @ Time", val_times[i],
-                "Val @ Trn Loss", val_trn_losses[i],
-                "Train Score", trn_scores[i],
-                "Train Loss", trn_losses[i],
-                "Trn @ Epoch", trn_epochs[i],
-                "Trn @ Time", trn_times[i],
-                "Trn @ Val Loss", trn_val_losses[i],
+                "fold", i,
                 "k-folds", kfolds,
                 "timesteps", ode_timesteps,
-                *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
-                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                suffix="\n=========================================================================================================================\n")
+                                 *unrolldict(hp),  # unroll the hyperparams dictionary
+                                 *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i], trn_score_optims[i]),
+                                 prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                 suffix="\n=========================================================================================================================\n")
 
         
         # except Exception as e:
