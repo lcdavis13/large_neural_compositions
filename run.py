@@ -181,6 +181,19 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
+# backup model parameters
+def backup_parameters(model):
+    return {name: param.clone() for name, param in model.state_dict().items()}
+
+# perform weighted averaging of parameters
+def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
+    averaged_params = {
+        key: alpha * paramsA[key] + (1 - alpha) * paramsB[key]
+        for key in paramsA
+    }
+    model.load_state_dict(averaged_params)
+
+
 def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, initial_lr, verbosity=1, seed=None, run_validation=False):    # Set the seed for reproducibility
     # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
     
@@ -358,7 +371,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
-               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1):
+               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rewind=0.0):
     assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
     
     # track stats at various definitions of the "best" epoch
@@ -399,9 +412,13 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     start_time = time.time()
     
     while True:
+        backup = backup_parameters(model)
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
             fold, manager.epoch, model_name, dataname, loss_fn, score_fn, distr_error_fn, device, filepath_out_incremental, lr_plot="Learning Rate", verbosity=verbosity - 1)
+        if reptile_rewind > 0.0:
+            weighted_average_parameters(model, backup, model.state_dict(), alpha=reptile_rewind)
+        
         l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
         l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
         
@@ -459,7 +476,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds, min_epochs, max_epochs,
-                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1):
+                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0):
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
@@ -489,7 +506,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
-                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1)
+                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rewind=reptile_rewind)
         
         # print output of model on a batch of test examples
         DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
@@ -636,17 +653,17 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        # 'baseline-1const': lambda args: models_baseline.SingleConst(),
-        # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
+        'baseline-1const': lambda args: models_baseline.SingleConst(),
+        'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
         'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
-        # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
-        # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
-        # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
-        # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
-        # 'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
-        # 'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
-        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
+        'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
+        'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
+        'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
+        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
         # LRRS range: 1e-2...1e0.5
         # WD range: 1e-6...1e0
         # LR:0.5994842503189424, WD:0.33
@@ -699,7 +716,7 @@ def main():
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
-        # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
+        'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
         # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -883,7 +900,8 @@ def main():
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
-            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=0
+            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=0,
+            reptile_rewind=0.9
         )
 
         # print all folds
