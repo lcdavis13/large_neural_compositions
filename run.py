@@ -1,3 +1,4 @@
+import copy
 import itertools
 import math
 import time
@@ -371,7 +372,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
-               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rewind=0.0):
+               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rate=0.0):
     assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
     
     # track stats at various definitions of the "best" epoch
@@ -389,13 +390,16 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     # initial validation benchmark
     l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+    l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn,
+                                             distr_error_fn, device)
+    
     stream.stream_results(filepath_out_epoch, verbosity > 0,
         "fold", fold + 1,
         "epoch", 0,
         "training examples", 0,
-        "Avg Training Loss", -1.0,
-        "Avg DKI Trn Loss", -1.0,
-        "Avg Training Distr Error", -1.0,
+        "Avg Training Loss", l_trn,
+        "Avg DKI Trn Loss", score_trn,
+        "Avg Training Distr Error", p_trn,
         "Avg Validation Loss", l_val,
         "Avg DKI Val Loss", score_val,
         "Avg Validation Distr Error", p_val,
@@ -404,25 +408,42 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         "GPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
-    plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", 0, None, l_val, add_point=False)
-    plotstream.plot_loss(f"score {dataname}", f"{model_name} fold {fold}", 0, None, score_val, add_point=False)
+    plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", 0, l_trn, l_val, add_point=False)
+    plotstream.plot_loss(f"score {dataname}", f"{model_name} fold {fold}", 0, score_trn, score_val, add_point=False)
     # plotstream.plot(dataname, "epoch", "loss", [f"{model_name} fold {fold} - Val", f"{model_name} fold {fold} - Trn", f"{model_name} fold {fold} - DKI Val", f"{model_name} fold {fold} - DKI Trn"], 0, [l_val, None, score_val, None], add_point=False)
     
     train_examples_seen = 0
     start_time = time.time()
     
+    if reptile_rate > 0.0:
+        # Create a copy of the model to serve as the meta-model
+        meta_model = copy.deepcopy(model)
+        outer_optimizer = type(optimizer)(meta_model.parameters())
+        outer_optimizer.load_state_dict(optimizer.state_dict())
+        outer_optimizer.lr = reptile_rate
+    
     while True:
-        backup = backup_parameters(model)
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
             accumulated_minibatches, optimizer, scheduler, scaler, t, outputs_per_epoch, train_examples_seen,
             fold, manager.epoch, model_name, dataname, loss_fn, score_fn, distr_error_fn, device, filepath_out_incremental, lr_plot="Learning Rate", verbosity=verbosity - 1)
-        if reptile_rewind > 0.0:
-            weighted_average_parameters(model, backup, model.state_dict(), alpha=reptile_rewind)
+        if reptile_rate > 0.0:
+            # Meta-update logic
+            with torch.no_grad():
+                # Apply the difference as pseudo-gradients to the outer optimizer
+                meta_weights = {name: param.clone() for name, param in meta_model.state_dict().items()}
+                for name, param in meta_model.named_parameters():
+                    param.grad = (meta_weights[name] - model.state_dict()[name])
+                
+                # Use the outer optimizer to step with these gradients
+                outer_optimizer.step()
+                
+                # Synchronize the inner model with the updated meta-model weights
+                model.load_state_dict(meta_model.state_dict())
         
         l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
         l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
         
-        # Update learning rate based on validation loss
+        # Update learning rate based on loss
         scheduler.epoch_step(l_trn)
         new_lr = scheduler.get_last_lr()
         lr_changed = not np.isclose(new_lr, old_lr)
@@ -480,7 +501,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
-    LR_start_factor = 0.1
+    # LR_start_factor = 0.1 # OneCycle
+    LR_start_factor = 1.0 # everything else
     
     val_loss_optims = []
     val_score_optims = []
@@ -490,62 +512,63 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     for fold_num, data_fold in enumerate(data_folded):
         model = model_constr(model_args).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
+        # optimizer = torch.optim.SGD(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
         manager = epoch_managers.FixedManager(max_epochs=min_epochs)
         # manager = epoch_managers.ConvergenceManager(memory=0.1, threshold=0.001, mode="const", min_epochs=min_epochs, max_epochs=max_epochs)
         
         x_train, y_train, x_valid, y_valid = data_fold
         
         steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples * accumulated_minibatches)
-        # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience = patience // 2, cooldown = patience, threshold_mode='rel', threshold=0.01)
-        base_scheduler = OneCycleLR(
-            optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
-            final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
+        base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience = patience // 2, cooldown = patience, threshold_mode='rel', threshold=0.01)
+        # base_scheduler = OneCycleLR(
+        #     optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
+        #     final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR*LR_start_factor)
         
         
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
-                x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rewind=reptile_rewind)
+                                                                            x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rate=reptile_rewind)
         
-        # print output of model on a batch of test examples
-        DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
-        DEBUG_OUT_NUM = 4
-        DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_output_vs_true.csv"
-        if DEBUG_OUTPUT and fold_num == 0:
-            model.eval()
-            with torch.no_grad():
-                # Get the model output for the first minibatch
-                output = model(timesteps, x_valid[:DEBUG_OUT_NUM].to(device))
-                
-                # Get the corresponding y_valid batch
-                y_valid_batch = y_valid[:DEBUG_OUT_NUM].to(device)
-            
-                print(f"Example output of model {model_name} on first test batch")
-                
-                csv_data = []
-                # Iterate row by row
-                for i in range(DEBUG_OUT_NUM):
-                    output_row = output[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
-                    y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy
-                    
-                    # Add output and y_valid as alternating rows
-                    csv_data.append(list(output_row))  # Append the output row
-                    csv_data.append(list(y_valid_row))  # Append the corresponding y_valid row
-                    
-                    # For console printing
-                    print(f"Row {i}:")
-                    print("Output:")
-                    print(output_row)
-                    print("y_valid:")
-                    print(y_valid_row)
-                    print('-' * 50)  # Separator between rows
-                
-                # Create a DataFrame for exporting to CSV
-                df = pd.DataFrame(csv_data)
-            
-            # Export to CSV
-            df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
+        # # print output of model on a batch of test examples
+        # DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
+        # DEBUG_OUT_NUM = 4
+        # DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_output_vs_true.csv"
+        # if DEBUG_OUTPUT and fold_num == 0:
+        #     model.eval()
+        #     with torch.no_grad():
+        #         # Get the model output for the first minibatch
+        #         output = model(timesteps, x_valid[:DEBUG_OUT_NUM].to(device))
+        #
+        #         # Get the corresponding y_valid batch
+        #         y_valid_batch = y_valid[:DEBUG_OUT_NUM].to(device)
+        #
+        #         print(f"Example output of model {model_name} on first test batch")
+        #
+        #         csv_data = []
+        #         # Iterate row by row
+        #         for i in range(DEBUG_OUT_NUM):
+        #             output_row = output[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
+        #             y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy
+        #
+        #             # Add output and y_valid as alternating rows
+        #             csv_data.append(list(output_row))  # Append the output row
+        #             csv_data.append(list(y_valid_row))  # Append the corresponding y_valid row
+        #
+        #             # For console printing
+        #             print(f"Row {i}:")
+        #             print("Output:")
+        #             print(output_row)
+        #             print("y_valid:")
+        #             print(y_valid_row)
+        #             print('-' * 50)  # Separator between rows
+        #
+        #         # Create a DataFrame for exporting to CSV
+        #         df = pd.DataFrame(csv_data)
+        #
+        #     # Export to CSV
+        #     df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
         
 
         
@@ -611,8 +634,8 @@ def main():
     # dataname = "dki-real"
     
     # data folding params
-    kfolds = 7
-    DEBUG_SINGLE_FOLD = True
+    kfolds = -1 # -1 for leave-one-out, > 1 for k-folds
+    DEBUG_SINGLE_FOLD = False
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
@@ -625,21 +648,22 @@ def main():
     
     
     print('dataset:', filepath_train)
+    print(f'data shape: {x.shape}')
     print(f'training data shape: {data_folded[0][0].shape}')
     print(f'validation data shape: {data_folded[0][2].shape}')
     
     # experiment hyperparameters
     hp = dicy()
-    hp.min_epochs = 16
-    hp.max_epochs = 16
-    hp.patience = 1
+    hp.min_epochs = 500
+    hp.max_epochs = 500
+    hp.patience = 1000
     hp.early_stop = True
     
     # optimization hyperparameters
-    hp.minibatch_examples = 16
+    hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.0316
-    hp.WD = 0.01
+    hp.LR = 0.01
+    hp.WD = 0.0
 
     # model shape hyperparameters
     _, hp.data_dim = x.shape
@@ -653,17 +677,18 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'baseline-1const': lambda args: models_baseline.SingleConst(),
-        'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
-        'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
-        'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
-        'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
-        'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
-        'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
-        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
-        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
+        # 'baseline-1const': lambda args: models_baseline.SingleConst(),
+        # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
+        # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
+        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
+        # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
+        # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
+        # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
+        # 'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
+        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
+        # 'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
+        # 'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(hp.data_dim),
         # LRRS range: 1e-2...1e0.5
         # WD range: 1e-6...1e0
         # LR:0.5994842503189424, WD:0.33
@@ -716,7 +741,7 @@ def main():
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
-        'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
+        # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
         # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -729,8 +754,9 @@ def main():
     
     
     # specify loss function
-    avg_richness = x.count_nonzero()/x.size(0)
-    loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
+    loss_fn = loss_bc
+    # avg_richness = x.count_nonzero()/x.size(0)
+    # loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
     score_fn = loss_bc
     # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
     
@@ -810,8 +836,6 @@ def main():
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
-        hp.WD = 0.0
-        hp.LR = 0.15
         # find optimal LR
         # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
         #     model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
@@ -822,72 +846,82 @@ def main():
         
 
         
-        # OCEAN
-        if dataname == "cNODE-paper-ocean" and hp.minibatch_examples == 16:
-        
-            # # transformer big:
-            # hp.WD = 3.2
-            # hp.LR = 0.01
-            # # hp.WD = 0.1
-            # # hp.LR = 0.001
-            #
-            # # # cNODE2:
-            # # hp.WD = 3.2
-            # # hp.LR = 0.032
-            
-            # cNODE1:`
-            if model_name == "cNODE1":
-                hp.LR = 0.1
-                hp.WD = 0.1
-            
-            # # baseline-SLPReplicator:
-            # hp.LR = 2.0
-            # hp.WD = 0.01
-            
-            # if model_name == "baseline-const":
-            #     hp.LR = 0.2
-            #     hp.WD = 0.32
-            #
-            # if model_name == "baseline-constShaped":
-            #     hp.LR = 10
-            #     hp.WD = 0.001
-            
-            if model_name == "baseline-const":
-                hp.LR = 0.02
-                hp.WD = 0.32
-                
-            if model_name == "baseline-constShaped":
-                hp.LR = 1
-                hp.WD = 0.001
-            
-            if model_name == "baseline-cNODE0-1step":
-                hp.LR = 0.5
-                hp.WD = 0.0
-                
-            if model_name == "baseline-cNODE1-1step":
-                hp.LR = 1.0
-                hp.WD = 0.0
-            
-        if dataname == "p" and hp.minibatch_examples == 16:
-            ## synth data batch size 16
-    
-            # # baseline-SLPReplicator:
-            if model_name == "baseline-SLPReplicator":
-                hp.WD = 0.1
-                hp.LR = 0.032
-            # hp.WD = 0.1
-            # hp.LR = 0.032
-            
-            # # cNODE2:
-            # if model_name == "cNODE2":
-            #     hp.WD = 0.33
-            #     hp.LR = 0.0002
-    
-            # # transformer big:
-            # hp.WD = 0.032
-            # hp.LR = 0.001
-            # # hp.WD = 0.01
-            # # hp.LR = 0.00001
+        # # OCEAN
+        # if dataname == "cNODE-paper-ocean" and hp.minibatch_examples == 16:
+        #
+        #     # # transformer big:
+        #     # hp.WD = 3.2
+        #     # hp.LR = 0.01
+        #     # # hp.WD = 0.1
+        #     # # hp.LR = 0.001
+        #     #
+        #     # # # cNODE2:
+        #     # # hp.WD = 3.2
+        #     # # hp.LR = 0.032
+        #
+        #     # cNODE1:`
+        #     if model_name == "cNODE1":
+        #         # hp.LR = 0.1
+        #         # hp.WD = 0.1
+        #         hp.LR = 0.01 # for const LR instead of OneCycle
+        #         hp.WD = 0.0
+        #
+        #
+        #     if model_name == "baseline-SLP-ODE":
+        #         hp.LR = 0.001 # for const LR instead of OneCycle
+        #         hp.WD = 0.0
+        #
+        #     # # baseline-SLPReplicator:
+        #     # hp.LR = 2.0
+        #     # hp.WD = 0.01
+        #
+        #     # if model_name == "baseline-const":
+        #     #     hp.LR = 0.2
+        #     #     hp.WD = 0.32
+        #     #
+        #     # if model_name == "baseline-constShaped":
+        #     #     hp.LR = 10
+        #     #     hp.WD = 0.001
+        #
+        #     if model_name == "baseline-const":
+        #         hp.LR = 0.02
+        #         hp.WD = 0.32
+        #
+        #     if model_name == "baseline-constShaped":
+        #         # hp.LR = 1
+        #         # hp.WD = 0.01
+        #
+        #         hp.LR = 0.01 # for const LR instead of OneCycle
+        #         hp.WD = 0.0
+        #
+        #     if model_name == "baseline-cNODE0-1step":
+        #         hp.LR = 0.5
+        #         hp.WD = 0.0
+        #
+        #     if model_name == "baseline-cNODE1-1step":
+        #         hp.LR = 1.0
+        #         hp.WD = 0.0
+        #
+        # if dataname == "p" and hp.minibatch_examples == 16:
+        #     ## synth data batch size 16
+        #
+        #     # # baseline-SLPReplicator:
+        #     if model_name == "baseline-SLPReplicator":
+        #         hp.WD = 0.1
+        #         hp.LR = 0.032
+        #     # hp.WD = 0.1
+        #     # hp.LR = 0.032
+        #
+        #     # # cNODE2:
+        #     # if model_name == "cNODE2":
+        #     #     hp.WD = 0.33
+        #     #     hp.LR = 0.0002
+        #
+        #     # # transformer big:
+        #     # hp.WD = 0.032
+        #     # hp.LR = 0.001
+        #     # # hp.WD = 0.01
+        #     # # hp.LR = 0.00001
         
         
         # hp = ui.ask(hp, keys=["LR", "WD"])
@@ -900,8 +934,8 @@ def main():
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
-            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=0,
-            reptile_rewind=0.9
+            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+            reptile_rewind=0.975
         )
 
         # print all folds

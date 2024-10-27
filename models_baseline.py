@@ -148,8 +148,29 @@ class cNODE1_singlestep(nn.Module):
     def forward(self, t, x):
         dxdt = self.func(t, x)
         return x + dxdt
-    
 
+
+class ODEFunc_SLPODE(nn.Module):
+    # use odeint to train a single layer perceptron's fixed point
+    def __init__(self, N):
+        super().__init__()
+        self.f = nn.Linear(N, N)
+    
+    def forward(self, t, x):
+        fx = self.f(x)  # B x N
+        
+        return fx  # B x N
+
+
+class SLPODE(nn.Module):
+    # use odeint to train a single layer perceptron's fixed point
+    def __init__(self, N):
+        super().__init__()
+        self.func = ODEFunc_SLPODE(N)
+    
+    def forward(self, t, x):
+        y = odeint(self.func, x, t)[-1]
+        return y
 
 
 class ODEFunc_cNODE0(nn.Module):
