@@ -135,7 +135,11 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
 
-        scaler.scale(loss).backward()
+        scaled_loss = scaler.scale(loss)
+        if scaled_loss.requires_grad and scaled_loss.grad_fn is not None:
+            scaled_loss.backward()
+        else:
+            print(f"GRADIENT ERROR: Loss at epoch {epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
 
         distr_error = distr_error_fn(y_pred)
         actual_penalty = distr_error.item() * mb_examples

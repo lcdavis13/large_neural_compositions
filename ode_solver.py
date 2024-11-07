@@ -30,6 +30,10 @@ def odeint(func, y0, t):
         return torchdiffeq_odeint(func, y0, t)
     
     elif solver == "torchode" or solver == "torchode_memsafe":
+        # Attempting to solve a bug where after hundreds of epochs it decides to not track gradients anymore
+        if not y0.requires_grad:
+            y0 = y0.clone().detach().requires_grad_(True)
+        
         # Using torchode with equivalent settings
         term = to.ODETerm(func)
         step_method = to.Tsit5(term=term)  # Tsit5 as step method
@@ -54,7 +58,12 @@ def odeint(func, y0, t):
         sol = adjoint.solve(problem)
         
         # Return the solution in a format compatible with torchdiffeq
-        return sol.ys.transpose(0, 1)
+        sol_ys = sol.ys.transpose(0, 1)
+        
+        # Attempting to solve a bug where after hundreds of epochs it decides to not track gradients anymore
+        if not sol_ys.requires_grad:
+            sol_ys = sol_ys.clone().detach().requires_grad_(True)
+        return sol_ys
     
     else:
         raise ValueError(
