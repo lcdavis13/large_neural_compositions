@@ -1,3 +1,10 @@
+import os
+# Set a default value if the environment variable is not specified
+# os.environ.setdefault("SOLVER", "torchdiffeq")
+# os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
+os.environ.setdefault("SOLVER", "torchode")
+# os.environ.setdefault("SOLVER", "torchode_memsafe")
+
 import copy
 import itertools
 import math
@@ -372,7 +379,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
-               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rate=0.0):
+               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rate=0.0, reeval_train=False):
     assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
     
     # track stats at various definitions of the "best" epoch
@@ -441,7 +448,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                 model.load_state_dict(meta_model.state_dict())
         
         l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
-        l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+        if reeval_train:
+            l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+        else:
+            score_trn = -1.0
         
         # Update learning rate based on loss
         scheduler.epoch_step(l_trn)
@@ -497,7 +507,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds, min_epochs, max_epochs,
-                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0):
+                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False):
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
@@ -529,7 +539,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
-                                                                            x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rate=reptile_rewind)
+                                                                            x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rate=reptile_rewind, reeval_train=reeval_train)
         
         # # print output of model on a batch of test examples
         # DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
@@ -640,7 +650,8 @@ def main():
     # load data
     filepath_train = f'data/{dataname}_train.csv'
     x, y = data.load_data(filepath_train, device)
-    x, y = data.shuffle_data(x, y)
+    # x, y = data.shuffle_data(x, y)  # UNCOMMENT - only using this for LOO tracking which example is which fold
+    # x,y = x[1:], y[1:] # FOR TESTING ONLY
     data_folded = data.fold_data(x, y, kfolds)
     if DEBUG_SINGLE_FOLD:
         data_folded = [data_folded[0]]
@@ -662,7 +673,7 @@ def main():
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.01
+    hp.LR = 0.02
     hp.WD = 0.0
 
     # model shape hyperparameters
@@ -935,7 +946,7 @@ def main():
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-            reptile_rewind=0.975
+            reptile_rewind=0.975, reeval_train=False
         )
 
         # print all folds
@@ -950,7 +961,7 @@ def main():
         avg_trn_loss_optim = summarize(trn_loss_optims)
         avg_trn_score_optim = summarize(trn_score_optims)
         
-        # print summaries
+        # print summariesrun.py
         print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
         print(f'Avg Val Score optimum: {avg_val_score_optim}')
         print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')

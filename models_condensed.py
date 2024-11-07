@@ -1,9 +1,7 @@
 import math
-
 import torch
 import torch.nn as nn
-from torchdiffeq import odeint
-# from torchdiffeq import odeint_adjoint as odeint  # tiny memory footprint but it is intractible for large models such as cNODE2 with Waimea data
+from ode_solver import odeint
 import models
 
 
