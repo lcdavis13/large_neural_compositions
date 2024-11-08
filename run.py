@@ -651,20 +651,25 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
+    
+    # data folding params
+    kfolds = -1 # -1 for leave-one-out, > 1 for k-folds
+    
     # whichfold = -1
     # whichfold = 1
     whichfold = -1
     
+    
     # command-line arguments
     parser = argparse.ArgumentParser(description='cnode')
     parser.add_argument('--dataname', default=dataname, help='dataset name')
+    parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
     parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
     args = parser.parse_args()
     dataname = args.dataname
     whichfold = int(args.whichfold)
+    kfolds = int(args.kfolds)
     
-    # data folding params
-    kfolds = -1 # -1 for leave-one-out, > 1 for k-folds
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
