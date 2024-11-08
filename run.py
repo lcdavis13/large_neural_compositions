@@ -653,7 +653,7 @@ def main():
     
     # whichfold = -1
     # whichfold = 1
-    whichfold = 2
+    whichfold = -1
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='cnode')
