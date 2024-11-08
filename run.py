@@ -1,8 +1,9 @@
+import argparse
 import os
 # Set a default value if the environment variable is not specified
-# os.environ.setdefault("SOLVER", "torchdiffeq")
+os.environ.setdefault("SOLVER", "torchdiffeq")
 # os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
-os.environ.setdefault("SOLVER", "torchode")
+# os.environ.setdefault("SOLVER", "torchode")
 # os.environ.setdefault("SOLVER", "torchode_memsafe")
 
 import copy
@@ -179,6 +180,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             stream_examples = 0
 
         if ((mb + 1) % accumulated_minibatches == 0) or (mb == minibatches - 1):
+            
             scaler.step(optimizer)
             scaler.update()
             scheduler.batch_step() # TODO: Add accum_loss metric in case I ever want to do ReduceLROnPlateau with batch_step mode
@@ -209,7 +211,7 @@ def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
 def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, initial_lr, verbosity=1, seed=None, run_validation=False):    # Set the seed for reproducibility
     # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
     
-    assert(data.check_leakage([(x, y, x_valid, y_valid)]))
+    # assert(data.check_leakage([(x, y, x_valid, y_valid)]))
     
     if seed is not None:
         np.random.seed(seed)
@@ -384,7 +386,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
                model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rate=0.0, reeval_train=False):
-    assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
+    # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
     
     # track stats at various definitions of the "best" epoch
     val_opt = Optimum('val_loss', 'min')
@@ -511,7 +513,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds, min_epochs, max_epochs,
-                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False):
+                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False, whichfold=-1):
     
     filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
     
@@ -524,6 +526,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     trn_score_optims = []
     final_optims = []
     for fold_num, data_fold in enumerate(data_folded):
+        if whichfold >= 0:
+            fold_num = whichfold
         model = model_constr(model_args).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
         # optimizer = torch.optim.SGD(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
@@ -647,9 +651,20 @@ def main():
     # dataname = "dki-synth"
     # dataname = "dki-real"
     
+    # whichfold = -1
+    # whichfold = 1
+    whichfold = 2
+    
+    # command-line arguments
+    parser = argparse.ArgumentParser(description='cnode')
+    parser.add_argument('--dataname', default=dataname, help='dataset name')
+    parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
+    args = parser.parse_args()
+    dataname = args.dataname
+    whichfold = int(args.whichfold)
+    
     # data folding params
     kfolds = -1 # -1 for leave-one-out, > 1 for k-folds
-    DEBUG_SINGLE_FOLD = False
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
@@ -657,8 +672,7 @@ def main():
     # x, y = data.shuffle_data(x, y)  # UNCOMMENT - only using this for LOO tracking which example is which fold
     # x,y = x[1:], y[1:] # FOR TESTING ONLY
     data_folded = data.fold_data(x, y, kfolds)
-    if DEBUG_SINGLE_FOLD:
-        data_folded = [data_folded[0]]
+    data_folded = [data_folded[whichfold]] if whichfold >= 0 else data_folded # only run a single fold based on args
     assert(data.check_leakage(data_folded))
     
     
@@ -950,7 +964,7 @@ def main():
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-            reptile_rewind=0.975, reeval_train=False
+            reptile_rewind=0.975, reeval_train=False, whichfold=whichfold
         )
 
         # print all folds
@@ -976,7 +990,7 @@ def main():
             stream.stream_scores(filepath_out_expt, True,
                 "model", model_name,
                 "model parameters", num_params,
-                "fold", i,
+                "fold", i if whichfold < 0 else whichfold,
                 "k-folds", kfolds,
                 "timesteps", ode_timesteps,
                                  *unrolldict(hp),  # unroll the hyperparams dictionary

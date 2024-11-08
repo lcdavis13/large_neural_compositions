@@ -87,7 +87,7 @@ def plot_means_and_medians(datasets, names, zoom_window=0.0, styles=None):
     # Configure the first plot (normal view)
     plt.xlabel('Epoch')
     plt.ylabel('Bray-Curtis Dissimilarity')
-    plt.title('cNODE.jl-Ocean Loss Curves')
+    plt.title('cNODE.py-Ocean Loss Curves')
     plt.legend()
 
     if zoom_window >= 0.0:
@@ -111,7 +111,7 @@ def plot_means_and_medians(datasets, names, zoom_window=0.0, styles=None):
         plt.ylim(0, y_max)
         plt.xlabel('Epoch')
         plt.ylabel('Bray-Curtis Dissimilarity')
-        plt.title('cNODE.jl-Ocean Loss Curves (zoomed)')
+        plt.title('cNODE.py-Ocean Loss Curves (zoomed)')
         plt.legend()
 
     plt.show()
