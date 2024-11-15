@@ -1,14 +1,6 @@
 import csv
-import itertools
 import os
-import time
-
-import numpy as np
 import pandas as pd
-
-import matplotlib
-matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
 
 
 def stream_results(filename, print_console, *args, prefix="", suffix=""):

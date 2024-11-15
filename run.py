@@ -27,6 +27,7 @@ import stream
 from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
 import user_confirmation as ui
+import psutil
 
 
 def loss_bc_dki(y_pred, y_true):
@@ -159,7 +160,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             end_time = time.time()
             examples_per_second = stream_examples / max(end_time - prev_time, 0.0001)  # TODO: Find a better way to handle div by zero, or at least a more appropriate nonzero value
             stream.stream_results(filepath_out_incremental, verbosity > 0,
-               "fold", fold+1,
+               "fold", fold,
                 "epoch", epoch_num+1,
                 "minibatch", mb+1,
                 "total examples seen", prev_examples + new_examples,
@@ -397,9 +398,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     old_lr = scheduler.get_last_lr()
     
-    filepath_out_epoch = f'results/logs/{model_name}_{dataname}_epochs.csv'
+    filepath_out_epoch = f'results/logs/{model_name}_{dataname}_fold{fold}_epochs.csv'
     # filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
-    filepath_out_incremental = f'results/logs/{model_name}_{dataname}_incremental.csv'
+    filepath_out_incremental = f'results/logs/{model_name}_{dataname}_fold{fold}_incremental.csv'
     
     # initial validation benchmark
     l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
@@ -407,7 +408,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                                              distr_error_fn, device)
     
     stream.stream_results(filepath_out_epoch, verbosity > 0,
-        "fold", fold + 1,
+        "fold", fold,
         "epoch", 0,
         "training examples", 0,
         "Avg Training Loss", l_trn,
@@ -419,6 +420,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         "Learning Rate", old_lr,
         "Elapsed Time", 0.0,
         "GPU Footprint (MB)", -1.0,
+        "CPU Footprint (MB)", -1.0,
         prefix="================PRE-VALIDATION===============\n",
         suffix="\n=============================================\n")
     plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", 0, l_trn, l_val, add_point=False)
@@ -468,9 +470,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         current_time = time.time()
         elapsed_time = current_time - start_time
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
+        cpu_memory_reserved = psutil.Process().memory_info().vms
         
         stream.stream_results(filepath_out_epoch, verbosity > 0,
-            "fold", fold + 1,
+            "fold", fold,
             "epoch", manager.epoch + 1,
             "training examples", train_examples_seen,
             "Avg Training Loss", l_trn,
@@ -482,6 +485,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             "Learning Rate", old_lr, # should I track average LR in the epoch? Max and min LR?
             "Elapsed Time", elapsed_time,
             "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
+            "CPU Footprint (MB)", cpu_memory_reserved / (1024 ** 2),
             prefix="==================VALIDATION=================\n",
             suffix="\n=============================================\n")
         plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val, add_point=add_point)
@@ -655,20 +659,24 @@ def main():
     # data folding params
     kfolds = -1 # -1 for leave-one-out, > 1 for k-folds
     
-    # whichfold = -1
-    # whichfold = 1
     whichfold = -1
+    # whichfold = 1
     
     
     # command-line arguments
-    parser = argparse.ArgumentParser(description='cnode')
+    parser = argparse.ArgumentParser(description='run')
     parser.add_argument('--dataname', default=dataname, help='dataset name')
     parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
     parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
+    parser.add_argument("--jobid", default="0", help="job id")
+    parser.add_argument("--headless", action="store_true", help="run without plotting")
     args = parser.parse_args()
     dataname = args.dataname
     whichfold = int(args.whichfold)
     kfolds = int(args.kfolds)
+    
+    if args.headless:
+        plotstream.set_headless()
     
     
     # load data
@@ -696,7 +704,7 @@ def main():
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.02
+    hp.LR = 0.01
     hp.WD = 0.0
 
     # model shape hyperparameters
@@ -968,8 +976,8 @@ def main():
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
-            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-            reptile_rewind=0.975, reeval_train=False, whichfold=whichfold
+            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
+            reptile_rewind=0.95, reeval_train=False, whichfold=whichfold
         )
 
         # print all folds

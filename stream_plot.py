@@ -19,6 +19,7 @@ class PlotStreamer:
         return cls._instance
     
     def _initialize(self):
+        self.headless = False
         self.figs = {}
         self.label_styles = {}
         self.color_cycle_positions = {}  # Dictionary to track color cycle position per plot
@@ -28,6 +29,8 @@ class PlotStreamer:
     
     def plot(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False, x_log=False, y_log=False,
              hline=None, vline=None):
+        if self.headless:
+            return
         """
         Add plotting instructions to the queue, including optional horizontal and vertical lines.
 
@@ -47,6 +50,8 @@ class PlotStreamer:
         self.queue.put((title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline, vline))
     
     def _plotting_loop(self):
+        if self.headless:
+            return
         while True:
             batch_data = []
             try:
@@ -73,6 +78,8 @@ class PlotStreamer:
     
     def _update_data(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline,
                      vline):
+        if self.headless:
+            return
         """
         Update data for the plots, including optional horizontal and vertical lines.
         """
@@ -164,10 +171,14 @@ class PlotStreamer:
             ax.set_yscale('log')
     
     def _draw_plots(self):
+        if self.headless:
+            return
         """Draw the plots after processing all queued data."""
         plt.draw()
     
     def wait_for_plot_exit(self):
+        if self.headless:
+            return
         """Block the main thread until all plot windows are closed."""
         while plt.get_fignums():  # Check if any figures are open
             time.sleep(0.1)
@@ -222,6 +233,12 @@ class PlotStreamer:
         """
         self.plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log,
                   y_log=y_log)
+        
+    def set_headless(self):
+        """
+        Set the backend to headless (non-interactive) for running on servers.
+        """
+        self.headless = True
 
 
 # Create a global instance of the PlotManager
