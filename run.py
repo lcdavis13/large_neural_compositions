@@ -696,15 +696,15 @@ def main():
     
     # experiment hyperparameters
     hp = dicy()
-    hp.min_epochs = 500
-    hp.max_epochs = 500
-    hp.patience = 1000
+    hp.min_epochs = 1000
+    hp.max_epochs = 1000
+    hp.patience = 1100
     hp.early_stop = True
     
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.01
+    hp.LR = 0.02
     hp.WD = 0.0
 
     # model shape hyperparameters
@@ -977,7 +977,7 @@ def main():
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
-            reptile_rewind=0.95, reeval_train=False, whichfold=whichfold
+            reptile_rewind=0.975, reeval_train=False, whichfold=whichfold
         )
 
         # print all folds
