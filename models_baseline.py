@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+
+import models
 from ode_solver import odeint
 
 
@@ -138,7 +140,7 @@ class cNODE1_singlestep(nn.Module):
     
     def __init__(self, N):
         super().__init__()
-        self.func = ODEFunc_cNODE0(N)
+        self.func = models.ODEFunc_cNODE1(N)
     
     def forward(self, t, x):
         dxdt = self.func(t, x)

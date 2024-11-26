@@ -16,6 +16,7 @@ import pandas as pd
 import torch
 from dotsy import dicy
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
+import torch.nn as nn
 
 import data
 import epoch_managers
@@ -386,7 +387,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 
 def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train, x_valid, y_valid, t,
-               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rate=0.0, reeval_train=False):
+               model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1, reptile_rate=0.0, reeval_train=False, jobstring=""):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
     
     # track stats at various definitions of the "best" epoch
@@ -398,9 +399,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     old_lr = scheduler.get_last_lr()
     
-    filepath_out_epoch = f'results/logs/{model_name}_{dataname}_fold{fold}_epochs.csv'
+    filepath_out_epoch = f'results/logs/{model_name}_{dataname}{jobstring}_fold{fold}_epochs.csv'
     # filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
-    filepath_out_incremental = f'results/logs/{model_name}_{dataname}_fold{fold}_incremental.csv'
+    filepath_out_incremental = f'results/logs/{model_name}_{dataname}{jobstring}_fold{fold}_incremental.csv'
     
     # initial validation benchmark
     l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
@@ -517,9 +518,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds, min_epochs, max_epochs,
-                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False, whichfold=-1):
-    
-    filepath_out_fold = f'results/logs/{model_name}_{dataname}_folds.csv'
+                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False, whichfold=-1, jobstring=""):
+    filepath_out_fold = f'results/logs/{model_name}_{dataname}{jobstring}_folds.csv'
     
     # LR_start_factor = 0.1 # OneCycle
     LR_start_factor = 1.0 # everything else
@@ -551,7 +551,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt = run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train, y_train,
-                                                                            x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rate=reptile_rewind, reeval_train=reeval_train)
+                                                                            x_valid, y_valid, timesteps, model_name, dataname, fold_num, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=verbosity - 1, reptile_rate=reptile_rewind, reeval_train=reeval_train, jobstring=jobstring)
         
         # # print output of model on a batch of test examples
         # DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
@@ -660,7 +660,9 @@ def main():
     kfolds = -1 # -1 for leave-one-out, > 1 for k-folds
     
     whichfold = -1
-    # whichfold = 1
+    # whichfold =
+    
+    jobid = -1 # -1 for no job id
     
     
     # command-line arguments
@@ -668,12 +670,15 @@ def main():
     parser.add_argument('--dataname', default=dataname, help='dataset name')
     parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
     parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
-    parser.add_argument("--jobid", default="0", help="job id")
+    parser.add_argument("--jobid", default=jobid, help="job id")
     parser.add_argument("--headless", action="store_true", help="run without plotting")
     args = parser.parse_args()
     dataname = args.dataname
     whichfold = int(args.whichfold)
     kfolds = int(args.kfolds)
+    
+    jobid = int(args.jobid.split('_')[0])
+    jobstring = f"_job{jobid}" if jobid >= 0 else ""
     
     if args.headless:
         plotstream.set_headless()
@@ -735,9 +740,12 @@ def main():
         # WD range: 1e-6...1e0
         # LR:0.5994842503189424, WD:0.33
         # LR:0.8799225435691093, WD:0.33
-        # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, 1),
-        #     nn.Linear(1, hp.data_dim))),
+        'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+            nn.Linear(hp.data_dim, 1),
+            nn.Linear(1, hp.data_dim))),
+        'baseline-cNODE2-width4': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
+            nn.Linear(hp.data_dim, 4),
+            nn.Linear(4, hp.data_dim))),
         #
         # 'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
         #     nn.Linear(hp.data_dim, args["hidden_dim"]),
@@ -859,7 +867,7 @@ def main():
     # trivial_loss2 = validate_epoch(trivial_model2, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)[0]
     # plotstream.plot_horizontal_line(dataname, trivial_loss2, f"Trivial (zeros)")
     
-    filepath_out_expt = f'results/{dataname}_experiments.csv'
+    filepath_out_expt = f'results/{dataname}{jobstring}_experiments.csv'
     seed = int(time.time()) # currently only used to set the data shuffle seed in find_LR
     print(f"Seed: {seed}")
     for model_name, model_constr in models_to_test.items():
@@ -977,7 +985,7 @@ def main():
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
-            reptile_rewind=0.975, reeval_train=False, whichfold=whichfold
+            reptile_rewind=0.975, reeval_train=False, whichfold=whichfold, jobstring=jobstring
         )
 
         # print all folds
