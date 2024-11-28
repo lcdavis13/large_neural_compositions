@@ -426,9 +426,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     old_lr = scheduler.get_last_lr()
     
-    filepath_out_epoch = f'results/logs/{model_name}_{dataname}{jobstring}_fold{fold}_epochs.csv'
+    filepath_out_epoch = f'results/epochs/{model_name}_{dataname}{jobstring}_fold{fold}_epochs.csv'
     # filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
-    filepath_out_incremental = f'results/logs/{model_name}_{dataname}{jobstring}_fold{fold}_incremental.csv'
+    filepath_out_incremental = f'results/incr/{model_name}_{dataname}{jobstring}_fold{fold}_incremental.csv'
     
     # initial validation benchmark
     l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn,
@@ -558,7 +558,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                         minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
                         whichfold=-1, jobstring=""):
-    filepath_out_fold = f'results/logs/{model_name}_{dataname}{jobstring}_folds.csv'
+    filepath_out_fold = f'results/folds/{model_name}_{dataname}{jobstring}_folds.csv'
     
     # LR_start_factor = 0.1 # OneCycle
     LR_start_factor = 1.0  # everything else
@@ -909,7 +909,7 @@ def main():
     # trivial_loss2 = validate_epoch(trivial_model2, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)[0]
     # plotstream.plot_horizontal_line(dataname, trivial_loss2, f"Trivial (zeros)")
     
-    filepath_out_expt = f'results/{dataname}{jobstring}_experiments.csv'
+    filepath_out_expt = f'results/expt/{dataname}{jobstring}_experiments.csv'
     seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
     print(f"Seed: {seed}")
     for model_name, model_constr in models_to_test.items():

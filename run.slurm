@@ -4,8 +4,8 @@
 #SBATCH --partition=gpu
 
 #SBATCH --array=0-4                # Array range
-#SBATCH --output=slurm_%A/%A_%a.out    # Output files in job-specific folder
-#SBATCH --error=slurm_%A/%A_%a.err     # Error files in job-specific
+#SBATCH --output=slurm_out/%A/%A_%a.out    # Output files in job-specific folder
+#SBATCH --error=slurm_out/%A/%A_%a.err     # Error files in job-specific
 
 ##SBATCH --nodelist=gpu-0008
 #SBATCH --gres=gpu:1
@@ -16,10 +16,6 @@
 #SBATCH --job-name=cnode
 ##SBATCH --mail-type=FAIL
 ##SBATCH --mail-user=myemail@hawaii.edufolder
-
-# # make directory for results
-# mkdir -p slurm_${SLURM_ARRAY_JOB_ID}
-
 
 echo This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID running on $HOSTNAME
 
