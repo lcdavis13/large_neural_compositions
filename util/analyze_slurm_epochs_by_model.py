@@ -43,22 +43,22 @@ def early_stopping_function(single_run_df):
     # return single_run_df.loc[single_run_df['Avg Validation Loss'].idxmin(), 'epoch']
     return single_run_df['epoch'].max()
 
-def process_data(df, filter_function=None, early_stopping_function=None):
+def process_data(df, filter_fn=None, early_stopping_fn=None):
     """
     Process the data: apply filtering and early stopping.
     Both functions operate on a single run at a time.
     """
-    if filter_function is None:
-        filter_function = filter_function
-    if early_stopping_function is None:
-        early_stopping_function = early_stopping_function
+    if filter_fn is None:
+        filter_fn = filter_fn
+    if early_stopping_fn is None:
+        early_stopping_fn = early_stopping_fn
 
     processed_dfs = []
     for (model, fold, source_file), group in df.groupby(['model', 'fold', 'source_file']):
         # Apply filter function to the single run
-        if filter_function(group):
+        if filter_fn(group):
             # Apply early stopping to the single run
-            early_stop_epoch = early_stopping_function(group)
+            early_stop_epoch = early_stopping_fn(group)
             # Adjust the losses after the early stopping epoch
             group.loc[group['epoch'] > early_stop_epoch, 'Avg Validation Loss'] = \
                 group.loc[group['epoch'] == early_stop_epoch, 'Avg Validation Loss'].values[0]
@@ -66,7 +66,7 @@ def process_data(df, filter_function=None, early_stopping_function=None):
 
     return pd.concat(processed_dfs, ignore_index=True)
 
-def plot_combined_training_curves(df):
+def plot_combined_training_curves(df, ylim=1.0):
     """Plot mean and median training curves for all models with matching colors."""
     unique_models = df['model'].unique()
     color_map = cm.get_cmap('tab20', len(unique_models))  # Use a colormap with distinct colors
@@ -86,11 +86,13 @@ def plot_combined_training_curves(df):
     plt.ylabel('Avg Validation Loss')
     plt.legend()
     plt.grid(True)
+    plt.ylim(0, ylim)
     plt.show()
 
 # Example usage
-folder_path = "../results/from_koa_11-26_customLR/epochs_merged"
-# folder_path = "../results/from_koa_11-26_customLR/epochs"
+# folder_path = "../results/from_koa_11-26_customLR/epochs_merged"
+folder_path = "../results/from_koa_11-26_customLR/epochs"
 raw_data = load_csv_files(folder_path)
-processed_data = process_data(raw_data)
-plot_combined_training_curves(processed_data)
+processed_data = process_data(raw_data, filter_function, early_stopping_function)
+plot_combined_training_curves(processed_data, 1.0)
+plot_combined_training_curves(processed_data, 0.2)

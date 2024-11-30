@@ -31,6 +31,8 @@ from stream_plot import plotstream
 import user_confirmation as ui
 import psutil
 
+import tracemalloc
+tracemalloc.start()
 
 def loss_bc_dki(y_pred, y_true):
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(
@@ -436,6 +438,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
     
+    gpu_memory_reserved = torch.cuda.memory_reserved(device)
+    _, cpuRam = tracemalloc.get_traced_memory()
     stream.stream_results(filepath_out_epoch, verbosity > 0,
                           "fold", fold,
                           "epoch", 0,
@@ -448,8 +452,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                           "Avg Validation Distr Error", p_val,
                           "Learning Rate", old_lr,
                           "Elapsed Time", 0.0,
-                          "GPU Footprint (MB)", -1.0,
-                          "CPU Footprint (MB)", -1.0,
+                          "VRAM (GB)", gpu_memory_reserved / (1024 ** 3),
+                          "Peak RAM (GB)", cpuRam  / (1024 ** 3),
                           prefix="================PRE-VALIDATION===============\n",
                           suffix="\n=============================================\n")
     plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", 0, l_trn, l_val, add_point=False)
@@ -504,7 +508,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         current_time = time.time()
         elapsed_time = current_time - start_time
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
-        cpu_memory_reserved = psutil.Process().memory_info().vms
+        _, cpuRam = tracemalloc.get_traced_memory()
         
         stream.stream_results(filepath_out_epoch, verbosity > 0,
                               "fold", fold,
@@ -518,8 +522,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                               "Avg Validation Distr Error", p_val,
                               "Learning Rate", old_lr,  # should I track average LR in the epoch? Max and min LR?
                               "Elapsed Time", elapsed_time,
-                              "GPU Footprint (MB)", gpu_memory_reserved / (1024 ** 2),
-                              "CPU Footprint (MB)", cpu_memory_reserved / (1024 ** 2),
+                              "VRAM (GB)", gpu_memory_reserved / (1024 ** 3),
+                              "Peak RAM (GB)", cpuRam / (1024 ** 3),
                               prefix="==================VALIDATION=================\n",
                               suffix="\n=============================================\n")
         plotstream.plot_loss(f"loss {dataname}", f"{model_name} fold {fold}", manager.epoch + 1, l_trn, l_val,
@@ -750,7 +754,7 @@ def main():
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.02
+    hp.LR = 0.002
     hp.WD = 0.0
     
     # model shape hyperparameters
@@ -832,8 +836,11 @@ def main():
         # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
         # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
+        # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
         # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
-        'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
+        # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
+        'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
+        'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
