@@ -66,8 +66,11 @@ def process_data(df, filter_fn=None, early_stopping_fn=None):
 
     return pd.concat(processed_dfs, ignore_index=True)
 
-def plot_combined_training_curves(df, ylim=1.0):
-    """Plot mean and median training curves for all models with matching colors."""
+def plot_combined_training_curves(df, ylim=1.0, show_training_loss=False, show_median=True):
+    """
+    Plot mean and optionally median training curves for all models with matching colors.
+    Optionally include Training Loss if `show_training_loss` is True.
+    """
     unique_models = df['model'].unique()
     color_map = cm.get_cmap('tab20', len(unique_models))  # Use a colormap with distinct colors
     model_colors = {model: color_map(i) for i, model in enumerate(unique_models)}
@@ -75,24 +78,36 @@ def plot_combined_training_curves(df, ylim=1.0):
     plt.figure(figsize=(20, 12))
 
     for model, group in df.groupby('model'):
-        stats = group.groupby('epoch')['Avg Validation Loss'].agg(['mean', 'median'])
+        # Calculate statistics for Validation Loss
+        val_stats = group.groupby('epoch')['Avg Validation Loss'].agg(['mean', 'median'])
 
         color = model_colors[model]
-        plt.plot(stats.index, stats['mean'], color=color, label=f'{model} Mean')
-        plt.plot(stats.index, stats['median'], linestyle='--', color=color, label=f'{model} Median')
+        plt.plot(val_stats.index, val_stats['mean'], color=color, label=f'{model} Validation Loss Mean')
+
+        if show_median:
+            plt.plot(val_stats.index, val_stats['median'], linestyle='--', color=color, label=f'{model} Validation Loss Median')
+
+        # Optionally add Training Loss
+        if show_training_loss and 'Avg Training Loss' in group.columns:
+            train_stats = group.groupby('epoch')['Avg Training Loss'].agg(['mean', 'median'])
+            plt.plot(train_stats.index, train_stats['mean'], color=color, linestyle='-.', label=f'{model} Training Loss Mean')
+
+            if show_median:
+                plt.plot(train_stats.index, train_stats['median'], linestyle=':', color=color, label=f'{model} Training Loss Median')
 
     plt.title('Training Curves (Mean and Median) by Model')
     plt.xlabel('Epoch')
-    plt.ylabel('Avg Validation Loss')
+    plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
     plt.ylim(0, ylim)
     plt.show()
+
 
 # Example usage
 # folder_path = "../results/from_koa_11-26_customLR/epochs_merged"
 folder_path = "../results/from_koa_11-26_customLR/epochs"
 raw_data = load_csv_files(folder_path)
 processed_data = process_data(raw_data, filter_function, early_stopping_function)
-plot_combined_training_curves(processed_data, 1.0)
-plot_combined_training_curves(processed_data, 0.2)
+plot_combined_training_curves(processed_data, ylim=1.0, show_training_loss=True, show_median=True)
+plot_combined_training_curves(processed_data, ylim=0.2, show_training_loss=True, show_median=True)

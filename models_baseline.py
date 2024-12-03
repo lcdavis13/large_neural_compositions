@@ -109,6 +109,20 @@ class SingleLayerMultiplied(nn.Module):
         return y  # B x N
 
 
+class SingleLayerFiltered(nn.Module):
+    def __init__(self, N):
+        super().__init__()
+        self.f = nn.Linear(N, N)
+    
+    def forward(self, t, x):  # x' = x*f(x)
+        fx = self.f(x)  # B x N
+
+        ones = torch.zeros_like(x)
+        y = torch.mul(ones, fx)  # B x N
+        
+        return y  # B x N
+
+
 class SingleLayerSummed(nn.Module):
     def __init__(self, N):
         super().__init__()
@@ -131,6 +145,20 @@ class SingleLayerMultipliedSummed(nn.Module):
         fx = self.f(x)  # B x N
         
         y = torch.mul(x, fx)  # B x N
+        
+        return x + y  # B x N
+
+
+class SingleLayerFilteredSummed(nn.Module):
+    def __init__(self, N):
+        super().__init__()
+        self.f = nn.Linear(N, N)
+    
+    def forward(self, t, x): # x' = x + x*f(x)
+        fx = self.f(x)  # B x N
+        
+        ones = torch.zeros_like(x)
+        y = torch.mul(ones, fx)  # B x N
         
         return x + y  # B x N
 
