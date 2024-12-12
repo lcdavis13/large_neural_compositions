@@ -2,10 +2,11 @@ import argparse
 import os
 
 # Set a default value if the environment variable is not specified
-os.environ.setdefault("SOLVER", "torchdiffeq")
+# os.environ.setdefault("SOLVER", "torchdiffeq")
 # os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
 # os.environ.setdefault("SOLVER", "torchode")
 # os.environ.setdefault("SOLVER", "torchode_memsafe")
+os.environ.setdefault("SOLVER", "trapezoid")
 
 import copy
 import itertools
@@ -33,6 +34,24 @@ import psutil
 
 import tracemalloc
 tracemalloc.start()
+
+
+def eval_model(model, x, timesteps):
+    # evaluates models whether they require ODE timesteps or not
+    requires_timesteps = getattr(model, 'USES_ODEINT', False)
+    
+    if requires_timesteps and timesteps is not None:
+        # Call models that require the timesteps argument
+        y_list = model(timesteps, x)
+        y = y_list[-1]  # Final output is the last element
+        y_steps = y_list  # Debug outputs are the entire list
+    else:
+        # Call models that do not require the timesteps argument
+        y = model(x)
+        y_steps = None
+    
+    return y, y_steps
+
 
 def loss_bc_dki(y_pred, y_true):
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(
@@ -95,7 +114,8 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
         mb_examples = x.size(0)
         
         with torch.no_grad():
-            y_pred = model(t, x).to(device)
+            y_pred, _ = eval_model(model, x, t)
+            y_pred = y_pred.to(device)
             
             loss = loss_fn(y_pred, y)
             score = score_fn(y_pred, y)
@@ -143,7 +163,8 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             current_index = 0  # Reset index if end of dataset is reached
             x, y = data.shuffle_data(x, y)
         
-        y_pred = model(t, x).to(device)
+        y_pred, _ = eval_model(model, x, t)
+        y_pred = y_pred.to(device)
         
         loss = loss_fn(y_pred, y)
         actual_loss = loss.item() * mb_examples
@@ -277,7 +298,8 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
             current_index = 0
             x, y = data.shuffle_data(x, y)
         
-        y_pred = model(timesteps, x_batch).to(device)
+        y_pred, _ = eval_model(model, x_batch, timesteps)
+        y_pred = y_pred.to(device)
         loss = loss_fn(y_pred, y_batch) / accumulated_minibatches
         scaler.scale(loss).backward()
         
@@ -605,44 +627,56 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                                                                             reeval_train=reeval_train,
                                                                             jobstring=jobstring)
         
-        # # print output of model on a batch of test examples
-        # DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
-        # DEBUG_OUT_NUM = 4
-        # DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_output_vs_true.csv"
-        # if DEBUG_OUTPUT and fold_num == 0:
-        #     model.eval()
-        #     with torch.no_grad():
-        #         # Get the model output for the first minibatch
-        #         output = model(timesteps, x_valid[:DEBUG_OUT_NUM].to(device))
-        #
-        #         # Get the corresponding y_valid batch
-        #         y_valid_batch = y_valid[:DEBUG_OUT_NUM].to(device)
-        #
-        #         print(f"Example output of model {model_name} on first test batch")
-        #
-        #         csv_data = []
-        #         # Iterate row by row
-        #         for i in range(DEBUG_OUT_NUM):
-        #             output_row = output[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
-        #             y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy
-        #
-        #             # Add output and y_valid as alternating rows
-        #             csv_data.append(list(output_row))  # Append the output row
-        #             csv_data.append(list(y_valid_row))  # Append the corresponding y_valid row
-        #
-        #             # For console printing
-        #             print(f"Row {i}:")
-        #             print("Output:")
-        #             print(output_row)
-        #             print("y_valid:")
-        #             print(y_valid_row)
-        #             print('-' * 50)  # Separator between rows
-        #
-        #         # Create a DataFrame for exporting to CSV
-        #         df = pd.DataFrame(csv_data)
-        #
-        #     # Export to CSV
-        #     df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
+        # Print output of model on a batch of test examples
+        DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
+        DEBUG_OUT_NUM = 4
+        
+        if DEBUG_OUTPUT:
+            DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_{dataname}{jobstring}_fold{fold_num}_predictions.csv"
+            
+            model.eval()
+            with torch.no_grad():
+                # Get the model output for the first minibatch
+                output, debug_ys = eval_model(model, x_valid[:DEBUG_OUT_NUM].to(device), timesteps)
+                
+                # Get the corresponding y_valid batch
+                y_valid_batch = y_valid[:DEBUG_OUT_NUM].to(device)
+                
+                print(f"Example output of model {model_name} on first test batch")
+                
+                csv_data = []
+                # Iterate row by row
+                for i in range(DEBUG_OUT_NUM):
+                    y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
+                    
+                    # Add y_valid row with time = -1
+                    csv_data.append([-1] + list(y_valid_row))  # Add y_valid for this batch
+                    
+                    # For console printing
+                    print(f"Row {i}:")
+                    print("time: -1, y_valid:")
+                    print(y_valid_row)
+                    
+                    # Iterate through each timestep to append debug_ys for the current batch position
+                    for t_idx, timestep in enumerate(timesteps):
+                        debug_y_row = debug_ys[t_idx][
+                            i].cpu().numpy()  # Get debug_y for this timestep and batch item, move to CPU and convert to numpy
+                        
+                        # Add debug_ys row with the current timestep
+                        csv_data.append(
+                            [timestep.item()] + list(debug_y_row))  # Add debug_y for this batch at current timestep
+                        
+                        # For console printing
+                        print(f"time: {timestep.item()}, debug_y for batch {i}:")
+                        print(debug_y_row)
+                    
+                    print('-' * 50)  # Separator between batch items
+                
+                # Create a DataFrame for exporting to CSV
+                df = pd.DataFrame(csv_data)
+            
+            # Export to CSV
+            df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
         
         val_loss_optims.append(val_opt)
         val_score_optims.append(valscore_opt)
@@ -705,12 +739,12 @@ def main():
     # dataname = "dki-real"
     
     # data folding params
-    kfolds = -1  # -1 for leave-one-out, > 1 for k-folds
+    kfolds = 5  # -1 for leave-one-out, > 1 for k-folds
     
     whichfold = -1
     # whichfold =
     
-    jobid = -1  # -1 for no job id
+    jobid = "-1"  # -1 for no job id
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='run')
@@ -746,15 +780,15 @@ def main():
     
     # experiment hyperparameters
     hp = dicy()
-    hp.min_epochs = 1000
-    hp.max_epochs = 1000
+    hp.min_epochs = 300
+    hp.max_epochs = 300
     hp.patience = 1100
     hp.early_stop = True
     
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.002
+    hp.LR = 0.02
     hp.WD = 0.0
     
     # model shape hyperparameters
@@ -822,7 +856,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
@@ -839,8 +873,8 @@ def main():
         # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
         # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
         # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
-        'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
-        'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
+        # 'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
+        # 'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
@@ -863,9 +897,10 @@ def main():
     scaler = torch.cuda.amp.GradScaler()
     
     # time step "data"
-    ode_timesteps = 5  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
+    ode_timesteps = 15  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     ode_timemax = 1.0
-    timesteps = torch.arange(0.0, ode_timemax, ode_timemax / (ode_timesteps - 1)).to(device)
+    ode_stepsize = ode_timemax / ode_timesteps
+    timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
     
     # # START of hacky hyperparam search - remove
     # minibatch_examples_list = [1, 8, 16, 32]

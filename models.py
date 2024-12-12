@@ -23,11 +23,13 @@ class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
     
 class cNODE2(nn.Module):
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super(cNODE2, self).__init__()
         self.func = ODEFunc_cNODE2(N)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y
 
 
@@ -40,6 +42,9 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
         fx = self.fcc1(x)  # B x N
         
         xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        # print(f"shape of x: {x.shape}")
+        # print(f"shape of fx: {fx.shape}")
+        # print(f"shape of xT_fx: {xT_fx.shape}")
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
@@ -48,11 +53,13 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
 
 class cNODE1(nn.Module):
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super(cNODE1, self).__init__()
         self.func = ODEFunc_cNODE1(N)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y
 
 
@@ -63,6 +70,8 @@ class Embedded_cNODE2(nn.Module):
     # Without softmax layers and WITH added penalties for non-distributions, it performs slightly better and becomes closer to producing a distribution, but it's only a partial success.
     # From just theoretical perspective, the ODE expects a few-hot encoded species assemblage summing to 1. It doesn't make sense to discard the distribution information in the input before it ever reaches the ODE. We should instead use two channels - embedded IDs for each species, and a small dense list of their abundances.
     def __init__(self, N, M):
+        self.USES_ODEINT = True
+        
         super(Embedded_cNODE2, self).__init__()
         self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
         # self.softmax = nn.Softmax(dim=-1)
@@ -73,7 +82,7 @@ class Embedded_cNODE2(nn.Module):
     def forward(self, t, x):
         x = self.embed(x)
         # x = self.softmax(x)
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         y = self.unembed(y)
         # y = self.softmax(y)
         return y
@@ -96,11 +105,13 @@ class ODEFunc_cNODEGen_ConstructedFitness(nn.Module):  # cNODE2 with generalized
     
 class cNODEGen_ConstructedFitness(nn.Module):
     def __init__(self, f_constr):
+        self.USES_ODEINT = True
+        
         super(cNODEGen_ConstructedFitness, self).__init__()
         self.func = ODEFunc_cNODEGen_ConstructedFitness(f_constr)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1] #, rtol=1e-10, atol=1e-12)[-1] # can increase tolerance when model is too stiff (underflows)
+        y = odeint(self.func, x, t) #, rtol=1e-10, atol=1e-12)[-1] # can increase tolerance when model is too stiff (underflows)
         return y
 
 
@@ -120,11 +131,13 @@ class ODEFunc_cNODEGen_FnFitness(nn.Module):  # cNODE2 with generalized f(x), sp
     
 class cNODEGen_FnFitness(nn.Module):
     def __init__(self, f):
+        self.USES_ODEINT = True
+        
         super(cNODEGen_FnFitness, self).__init__()
         self.func = ODEFunc_cNODEGen_FnFitness(f)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y
 
 
@@ -145,6 +158,8 @@ class ODEFunc_cNODEGen_FnFitness_Args(nn.Module):  # cNODE2 with generalized f(x
     
 class cNODE2_FnFitness(nn.Module):
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super(cNODE2_FnFitness, self).__init__()
         f = nn.Sequential(
             nn.Linear(N, N),
@@ -153,7 +168,7 @@ class cNODE2_FnFitness(nn.Module):
         self.func = ODEFunc_cNODEGen_FnFitness(f)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y
 
 
@@ -161,7 +176,7 @@ class ODEFunc_cNODEGen_ExternalFitness(nn.Module):  # cNODE2 with generalized f(
     # Note that, while f(x0) can be a function of the initial vector x0, it cannot be a function of the evolving value x
     # as the ODE is evaluated, unlike normal implementations of cNODE.
     def __init__(self):
-        super(ODEFunc_cNODEGen_ExternalFitness, self).__init__()
+       super(ODEFunc_cNODEGen_ExternalFitness, self).__init__()
     
     def forward(self, t, x, fx0):
         xT_fx = torch.sum(x * fx0, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
@@ -173,6 +188,8 @@ class ODEFunc_cNODEGen_ExternalFitness(nn.Module):  # cNODE2 with generalized f(
 
 class cNODE2_ExternalFitness(nn.Module):
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super(cNODE2_ExternalFitness, self).__init__()
         self.func = ODEFunc_cNODEGen_ExternalFitness()
         self.fcc1 = nn.Linear(N, N)
@@ -181,7 +198,7 @@ class cNODE2_ExternalFitness(nn.Module):
     def forward(self, t, x):
         fx = self.fcc1(x)
         fx = self.fcc2(fx)
-        y = odeint(lambda x,t: self.func(x,t,fx), x, t)[-1]
+        y = odeint(lambda x,t: self.func(x,t,fx), x, t)
         return y
 
 
@@ -213,9 +230,11 @@ class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to 
 
 class cNODE2_DKI(nn.Module):
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super(cNODE2_DKI, self).__init__()
         self.func = ODEFunc_cNODE2_DKI(N)
 
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y

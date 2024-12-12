@@ -1,7 +1,6 @@
 # ode_solver.py
 
 import os
-import torch
 
 try:
     if os.getenv("SOLVER") == "torchdiffeq":
@@ -10,6 +9,8 @@ try:
         from torchdiffeq import odeint_adjoint as torchdiffeq_odeint
     elif os.getenv("SOLVER") in ["torchode", "torchode_memsafe"]:
         import torchode as to
+    elif os.getenv("SOLVER") == "trapezoid":
+        import trapezoid_odeint as trap
     else:
         raise ValueError("Invalid SOLVER environment variable")
 except ImportError as e:
@@ -65,6 +66,8 @@ def odeint(func, y0, t):
             sol_ys = sol_ys.clone().detach().requires_grad_(True)
         return sol_ys
     
+    elif solver == "trapezoid":
+        return trap.odeint(func, y0, t)
+    
     else:
-        raise ValueError(
-            "Invalid SOLVER environment variable.")
+        raise ValueError("Invalid SOLVER environment variable.")

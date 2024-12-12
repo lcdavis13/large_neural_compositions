@@ -25,17 +25,40 @@ def condense(x):
 
 
 def decondense(values, positions, size):
+    """
+    Decondenses the values into a larger tensor according to the specified positions.
+    This function supports multiple batch dimensions, with only the last dimension
+    being a non-batch dimension.
+
+    Args:
+        values (torch.Tensor): Tensor of values to be decondensed. Shape: (..., N)
+        positions (torch.Tensor): Tensor of positions where the values should be placed. Shape: (..., N)
+        size (int): The size of the last dimension of the output tensor.
+
+    Returns:
+        torch.Tensor: Decondensed tensor with shape (..., size).
+    """
     device = values.device
-    batch_size = values.size(0)
-    y = torch.zeros(batch_size, size, dtype=values.dtype, device=device)
+    batch_dims = values.shape[:-1]  # All dimensions except the last
+    batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
+    y_shape = (*batch_dims, size)  # Shape of the output tensor
+    y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
+    
+    # Reshape to flatten batch dimensions, treating them as a single batch
+    values_flat = values.reshape(batch_size, -1)
+    positions_flat = positions.reshape(batch_size, -1)
+    y_flat = y.reshape(batch_size, size)
     
     for i in range(batch_size):
-        valid_positions = positions[i]  # Compensate for the adjustment
+        valid_positions = positions_flat[i]  # Extract positions for this batch item
         valid_positions = valid_positions[valid_positions > 0]  # Remove any zero positions
-        valid_positions -= 1  # Adjust positions back to zero-based indexing
+        valid_positions -= 1  # Adjust positions to be zero-indexed
         len_valid = len(valid_positions)
         
-        y[i][valid_positions[:len_valid]] = values[i][:len_valid]
+        y_flat[i][valid_positions[:len_valid]] = values_flat[i][:len_valid]  # Place the values at the valid positions
+    
+    # Reshape y back to original batch dimensions
+    y = y_flat.view(*y_shape)
     
     return y
 
@@ -107,6 +130,8 @@ class cAttention(nn.Module):
 
 class canODE_attentionNoValue(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
+        self.USES_ODEINT = True
+        
         super(canODE_attentionNoValue, self).__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
@@ -119,7 +144,7 @@ class canODE_attentionNoValue(nn.Module): # compositional attention nODE
         # modify v
         id_embed = self.embed(pos)
         
-        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)[-1]
+        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -127,6 +152,8 @@ class canODE_attentionNoValue(nn.Module): # compositional attention nODE
 
 class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
+        self.USES_ODEINT = True
+        
         super(canODE_attentionNoValue_static, self).__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
@@ -149,7 +176,7 @@ class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
         # Without softmax and without v, the dot product of Q+K can be either positive or negative, increasing or decreasing fitness.
         # But multihead attention could solve that in a more flexible way.
         
-        y = odeint(lambda xo,to: self.func(xo,to,fx), val, t)[-1]
+        y = odeint(lambda xo,to: self.func(xo,to,fx), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -157,6 +184,8 @@ class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
 
 class canODE_attention(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
+        self.USES_ODEINT = True
+        
         super(canODE_attention, self).__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
@@ -169,7 +198,7 @@ class canODE_attention(nn.Module): # compositional attention nODE
         # modify v
         id_embed = self.embed(pos)
         
-        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)[-1]
+        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -177,6 +206,8 @@ class canODE_attention(nn.Module): # compositional attention nODE
 
 class canODE_attention_static(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
+        self.USES_ODEINT = True
+        
         super(canODE_attention_static, self).__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
@@ -195,7 +226,7 @@ class canODE_attention_static(nn.Module): # compositional attention nODE
         k = self.w_k(id_embed)
         v = self.w_v(id_embed)
         fx = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0).squeeze()  # TODO: try dropout on this and other models
-        y = odeint(lambda xo,to: self.func(xo,to,fx), val, t)[-1]
+        y = odeint(lambda xo,to: self.func(xo,to,fx), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -218,6 +249,8 @@ class cAttentionMultihead(nn.Module):
 
 class canODE_attentionMultihead(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads):
+        self.USES_ODEINT = True
+        
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super(canODE_attentionMultihead, self).__init__()
         self.data_dim = data_dim
@@ -231,7 +264,7 @@ class canODE_attentionMultihead(nn.Module): # compositional attention nODE
         # modify v
         id_embed = self.embed(pos)
         
-        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)[-1]
+        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -239,6 +272,8 @@ class canODE_attentionMultihead(nn.Module): # compositional attention nODE
 
 class canODE_attentionMultihead_static(nn.Module):  # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads):
+        self.USES_ODEINT = True
+        
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super(canODE_attentionMultihead_static, self).__init__()
         self.data_dim = data_dim
@@ -257,7 +292,7 @@ class canODE_attentionMultihead_static(nn.Module):  # compositional attention nO
         mha = self.attend(id_embed, id_embed, id_embed, need_weights=False)[0]
         fx = self.decode(mha).squeeze();
         
-        y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)[-1]
+        y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -283,6 +318,8 @@ class cAttentionTransformer(nn.Module):
 
 class canODE_transformer(nn.Module):  # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4):
+        self.USES_ODEINT = True
+        
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super(canODE_transformer, self).__init__()
         self.data_dim = data_dim
@@ -296,7 +333,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
         # modify v
         id_embed = self.embed(pos)
         
-        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)[-1]
+        y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y
@@ -304,6 +341,8 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
 
 class canODE_transformer_static(nn.Module):  # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4):
+        self.USES_ODEINT = True
+        
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super(canODE_transformer_static, self).__init__()
         self.data_dim = data_dim
@@ -324,7 +363,7 @@ class canODE_transformer_static(nn.Module):  # compositional attention nODE
         h = self.transformer(id_embed)
         fx = self.decode(h).squeeze();
         
-        y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)[-1]
+        y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)
         
         y = decondense(y, pos, self.data_dim)
         return y

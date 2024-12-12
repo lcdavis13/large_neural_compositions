@@ -10,7 +10,7 @@ class ReturnInput(nn.Module):
     def __init__(self):
         super().__init__()
     
-    def forward(self, t, x):
+    def forward(self, x):
         return x
 
 class SingleConst(nn.Module):
@@ -19,7 +19,7 @@ class SingleConst(nn.Module):
         super().__init__()
         self.f = nn.Parameter(torch.randn(1))
     
-    def forward(self, t, x):
+    def forward(self, x):
         return self.f.expand(x.shape)
 
 
@@ -29,7 +29,7 @@ class SingleConstFilteredNormalized(nn.Module):
         super().__init__()
         self.f = nn.Parameter(torch.randn(1))
     
-    def forward(self, t, x):
+    def forward(self, x):
         f = self.f.expand(x.shape)
         
         # Apply mask: we need to do this for each batch element separately
@@ -52,7 +52,7 @@ class ConstOutput(nn.Module):
         super().__init__()
         self.f = nn.Parameter(torch.randn(N))
     
-    def forward(self, t, x):
+    def forward(self, x):
         # x is assumed to be batched with shape (batch_size, input_dim)
         batch_size = x.shape[0]
         f_repeated = self.f.unsqueeze(0).expand(batch_size, -1)  # Repeat f for each batch element
@@ -65,7 +65,7 @@ class ConstOutputFilteredNormalized(nn.Module):
         super().__init__()
         self.f = nn.Parameter(torch.randn(N))
     
-    def forward(self, t, x):
+    def forward(self, x):
         # x is assumed to be batched with shape (batch_size, input_dim)
         batch_size = x.shape[0]
         input_dim = x.shape[1]
@@ -92,7 +92,7 @@ class SingleLayerPerceptron(nn.Module):
         super().__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x):
+    def forward(self, x):
         return self.f(x)
 
 
@@ -101,7 +101,7 @@ class SingleLayerMultiplied(nn.Module):
         super().__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x): # x' = x*f(x)
+    def forward(self, x): # x' = x*f(x)
         fx = self.f(x)  # B x N
         
         y = torch.mul(x, fx)  # B x N
@@ -114,7 +114,7 @@ class SingleLayerFiltered(nn.Module):
         super().__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x):  # x' = x*f(x)
+    def forward(self, x):  # x' = x*f(x)
         fx = self.f(x)  # B x N
 
         ones = torch.zeros_like(x)
@@ -128,7 +128,7 @@ class SingleLayerSummed(nn.Module):
         super().__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x): # x' = x + f(x)
+    def forward(self, x): # x' = x + f(x)
         fx = self.f(x)  # B x N
         
         y = x + fx  # B x N
@@ -141,7 +141,7 @@ class SingleLayerMultipliedSummed(nn.Module):
         super().__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x): # x' = x + x*f(x)
+    def forward(self, x): # x' = x + x*f(x)
         fx = self.f(x)  # B x N
         
         y = torch.mul(x, fx)  # B x N
@@ -154,7 +154,7 @@ class SingleLayerFilteredSummed(nn.Module):
         super().__init__()
         self.f = nn.Linear(N, N)
     
-    def forward(self, t, x): # x' = x + x*f(x)
+    def forward(self, x): # x' = x + x*f(x)
         fx = self.f(x)  # B x N
         
         ones = torch.zeros_like(x)
@@ -170,13 +170,12 @@ class cNODE1_singlestep(nn.Module):
         super().__init__()
         self.func = models.ODEFunc_cNODE1(N)
     
-    def forward(self, t, x):
-        dxdt = self.func(t, x)
+    def forward(self, x):
+        dxdt = self.func([0.0], x)
         return x + dxdt
 
 
 class ODEFunc_SLPODE(nn.Module):
-    # use odeint to train a single layer perceptron's fixed point
     def __init__(self, N):
         super().__init__()
         self.f = nn.Linear(N, N)
@@ -190,11 +189,13 @@ class ODEFunc_SLPODE(nn.Module):
 class SLPODE(nn.Module):
     # use odeint to train a single layer perceptron's fixed point
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super().__init__()
         self.func = ODEFunc_SLPODE(N)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y
 
 
@@ -217,6 +218,8 @@ class ODEFunc_cNODE0(nn.Module):
 class cNODE0(nn.Module):
     # cNODE where "F(x)" does not depend on x. In other words, it learns a fixed fitness value for each species regardless of which species are actually present.
     def __init__(self, N):
+        self.USES_ODEINT = True
+        
         super().__init__()
         self.func = ODEFunc_cNODE0(N)
     
@@ -231,6 +234,6 @@ class cNODE0_singlestep(nn.Module):
         super().__init__()
         self.func = ODEFunc_cNODE0(N)
     
-    def forward(self, t, x):
-        dxdt = self.func(t, x)
+    def forward(self, x):
+        dxdt = self.func([0.0], x)
         return x + dxdt
