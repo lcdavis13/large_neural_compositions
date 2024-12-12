@@ -780,6 +780,9 @@ def main():
     
     # experiment hyperparameters
     hp = dicy()
+    
+    hp.solver = os.getenv("SOLVER")
+    
     hp.min_epochs = 300
     hp.max_epochs = 300
     hp.patience = 1100
