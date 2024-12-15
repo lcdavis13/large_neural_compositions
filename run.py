@@ -48,7 +48,7 @@ def eval_model(model, x, timesteps):
     else:
         # Call models that do not require the timesteps argument
         y = model(x)
-        y_steps = None
+        y_steps = y.unsqueeze(0)
     
     return y, y_steps
 
@@ -640,7 +640,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                 output, debug_ys = eval_model(model, x_valid[:DEBUG_OUT_NUM].to(device), timesteps)
                 
                 # Get the corresponding y_valid batch
-                y_valid_batch = y_valid[:DEBUG_OUT_NUM].to(device)
+                y_valid_batch = y_valid[0:DEBUG_OUT_NUM].to(device)
                 
                 print(f"Example output of model {model_name} on first test batch")
                 
@@ -649,8 +649,6 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                 for i in range(DEBUG_OUT_NUM):
                     y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
                     
-                    # Add y_valid row with time = -1
-                    csv_data.append([-1] + list(y_valid_row))  # Add y_valid for this batch
                     
                     # For console printing
                     print(f"Row {i}:")
@@ -658,9 +656,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                     print(y_valid_row)
                     
                     # Iterate through each timestep to append debug_ys for the current batch position
-                    for t_idx, timestep in enumerate(timesteps):
-                        debug_y_row = debug_ys[t_idx][
-                            i].cpu().numpy()  # Get debug_y for this timestep and batch item, move to CPU and convert to numpy
+                    for t_idx, debug_y_row in enumerate(debug_ys[:, i].cpu().numpy()):
+                        timestep = timesteps[t_idx]
                         
                         # Add debug_ys row with the current timestep
                         csv_data.append(
@@ -669,6 +666,9 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                         # For console printing
                         print(f"time: {timestep.item()}, debug_y for batch {i}:")
                         print(debug_y_row)
+
+                    # Add correct answer at the end with time = -1
+                    csv_data.append([-1] + list(y_valid_row))  # Add y_valid for this batch
                     
                     print('-' * 50)  # Separator between batch items
                 
@@ -729,7 +729,8 @@ def main():
     # dataname = "P"
     # dataname = "waimea"
     # dataname = "waimea-condensed"
-    dataname = "cNODE-paper-ocean"
+    # dataname = "cNODE-paper-ocean"
+    dataname = "cNODE-paper-ocean-std"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -783,15 +784,17 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 300
-    hp.max_epochs = 300
+    hp.min_epochs = 5
+    hp.max_epochs = 5
     hp.patience = 1100
     hp.early_stop = True
+    
+    hp.ode_timesteps = 30
     
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.02
+    hp.LR = 0.2
     hp.WD = 0.0
     
     # model shape hyperparameters
@@ -806,6 +809,7 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
+        'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(hp.data_dim),
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
@@ -900,9 +904,8 @@ def main():
     scaler = torch.cuda.amp.GradScaler()
     
     # time step "data"
-    ode_timesteps = 15  # must be at least 2. TODO: run this through hyperparameter opt to verify that it doesn't impact performance
     ode_timemax = 1.0
-    ode_stepsize = ode_timemax / ode_timesteps
+    ode_stepsize = ode_timemax / hp.ode_timesteps
     timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
     
     # # START of hacky hyperparam search - remove
@@ -948,6 +951,7 @@ def main():
     trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, x, y, hp.minibatch_examples,
                                                                        timesteps, loss_fn, score_fn, distr_error_fn,
                                                                        device)
+    print(f"\n\nTRIVIAL MODEL loss: {trivial_loss}, score: {trivial_score}\n\n")
     plotstream.plot_horizontal_line(f"loss {dataname}", trivial_loss, f"Trivial (in=out)")
     plotstream.plot_horizontal_line(f"score {dataname}", trivial_score, f"Trivial (in=out)")
     # trivial_model2 = models_baseline.ReturnZeros()
@@ -1098,7 +1102,6 @@ def main():
                                  "model parameters", num_params,
                                  "fold", i if whichfold < 0 else whichfold,
                                  "k-folds", kfolds,
-                                 "timesteps", ode_timesteps,
                                  "device", device,
                                  *unrolldict(hp),  # unroll the hyperparams dictionary
                                  *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],

@@ -2,10 +2,15 @@ import numpy as np
 import torch
 from sklearn.model_selection import KFold
 
-def process_data(y):
+def add_noise(data, noise_level=0.01):
+    """Adds Gaussian noise to the data."""
+    noise = np.random.normal(0, noise_level, data.shape).astype(np.float32)
+    return data + noise
+
+def process_data(y0):
     # produces X (assemblage) from Y (composition), normalizes the composition to sum to 1, and transposes the data
-    y0 = y.copy()
-    x = y.copy()
+    y = y0.copy()
+    x = y0.copy()
     x[x > 0] = 1
     y = y / y.sum(axis=0)[np.newaxis, :]
     x = x / x.sum(axis=0)[np.newaxis, :]
@@ -70,17 +75,22 @@ def check_leakage(folded_data):
     return True
 
 
-def get_batch(x, y, mb_size, current_index):
+def get_batch(x, y, mb_size, current_index, augment_x=False, augment_y=False, noise_level_x=0.01, noise_level_y=0.01):
+    """Returns a batch of data of size `mb_size` starting from `current_index`, with optional noise augmentation for x and y."""
     end_index = current_index + mb_size
     if end_index > x.size(0):
         end_index = x.size(0)
+    
     batch_indices = torch.arange(current_index, end_index, dtype=torch.long)
     x_batch = x[batch_indices, :]
     y_batch = y[batch_indices, :]
-    # print(f'x {x_batch.shape}')
-    # print(f'x {x_batch[0, :]}')
-    # print(f'y {y_batch.shape}')
-    # print(f'y {y_batch[0, :]}')
+    
+    if augment_x:
+        x_batch = add_noise(x_batch, noise_level_x)
+        
+    if augment_y:
+        y_batch = add_noise(y_batch, noise_level_y)
+    
     return x_batch, y_batch, end_index
 
 
