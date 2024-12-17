@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from scipy.stats import beta
 import pandas as pd  # Import pandas to read CSV
 
@@ -48,12 +49,12 @@ except Exception as e:
     
 # min_mean, max_mean = 0.025, (1.0-0.025)  # for fixed plots
 
-stepnum = 10
+stepnum = 6
 stepsize = (max_mean - min_mean) / (stepnum)
 
 # Parameters
 mean_values = np.arange(min_mean, max_mean + 0.1*stepsize, stepsize)  # Use bounds from the CSV file
-peak_stddev = 0.05
+peak_stddev = 0.075
 
 # Prepare plot
 plt.figure(figsize=(12, 8))
@@ -68,21 +69,78 @@ for x_mean in mean_values:
     beta_param = (1 - x_mean) * k
     pdf = beta.pdf(x, alpha, beta_param)
     plt.plot(x, pdf, label=f'mean = {x_mean}')#, α = {alpha:.1f}, β = {beta_param:.1f}')
+    
+plt.show()
+
+plt.figure(figsize=(12, 8))
+
+import torch
 
 
-# Sample Beta distribution (currently unused, but demonstrates how to sample)
-def sample_beta_distribution(mean_values, peak_stddev, num_samples=1000):
-    samples = []
-    for x_mean in mean_values:
-        stddev = math.sin(x_mean * math.pi) * peak_stddev
-        var = stddev ** 2
-        k = x_mean * (1.0 - x_mean) / var - 1.0
-        alpha = x_mean * k
-        beta_param = (1 - x_mean) * k
-        
-        # Sample points
-        samples.append(np.random.beta(alpha, beta_param, num_samples))
-    return samples
+def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tensor:
+    """
+    For each element in the input tensor, use it as the mean to sample a single point
+    from a parameterized Beta distribution.
+
+    Args:
+        mean_values (torch.Tensor): The input tensor of mean values.
+        peak_stddev (float): The peak standard deviation to control the variance of the Beta distribution.
+
+    Returns:
+        torch.Tensor: A tensor of the same shape as mean_values, containing sampled values from the Beta distribution.
+    """
+    # Ensure input is a torch tensor
+    if not isinstance(mean_values, torch.Tensor):
+        raise TypeError("mean_values must be a torch.Tensor")
+    
+    # Handle edge cases where mean_values are outside the range (0, 1)
+    sampled_values = torch.where(mean_values <= 0, torch.zeros_like(mean_values), mean_values)
+    sampled_values = torch.where(mean_values >= 1, torch.ones_like(mean_values), sampled_values)
+    
+    # Mask values that are within the range (0, 1)
+    valid_mask = (mean_values > 0) & (mean_values < 1)
+    
+    # Calculate the standard deviation for each valid mean value
+    stddev = torch.sin(mean_values * torch.pi) * peak_stddev
+    
+    # Calculate the variance
+    var = stddev ** 2
+    
+    # Calculate the Beta distribution parameters alpha and beta
+    k = mean_values * (1.0 - mean_values) / var - 1.0
+    alpha = mean_values * k
+    beta_param = (1 - mean_values) * k
+    
+    # Clamp alpha and beta to avoid numerical instability (e.g., negative or zero values)
+    alpha = torch.clamp(alpha, min=1e-6)
+    beta_param = torch.clamp(beta_param, min=1e-6)
+    
+    # Sample from the Beta distribution for each mean value that is within (0, 1)
+    sampled_values_within_range = torch.distributions.Beta(alpha, beta_param).sample()
+    
+    # Only update the sampled values for elements where 0 < mean < 1
+    sampled_values = torch.where(valid_mask, sampled_values_within_range, sampled_values)
+    
+    return sampled_values
+
+
+# Use resample_noisy to sample and plot histograms
+sampled_values = []
+for i in range(200):
+    sampled_values.append(resample_noisy(torch.tensor(mean_values), peak_stddev).numpy())
+print(np.shape(sampled_values))
+for i,m in enumerate(mean_values):
+    data = [s[i] for s in sampled_values]
+    mean = np.mean(data)
+    print(f"expected mean = {m}, mean of sampled values = {mean}")
+    print(f"max = {np.max(data)}, min = {np.min(data)}")
+    plt.hist(data, bins=20, density=False, alpha=0.5, label=f'mean = {m}')
+plt.show()
+
+# plot the first mean separately
+data = [s[0] for s in sampled_values]
+plt.hist(data, bins=20, density=False, alpha=0.5, label=f'mean = {mean_values[0]}')
+
 
 
 # Plot settings

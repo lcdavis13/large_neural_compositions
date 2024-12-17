@@ -156,7 +156,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
         
-        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index)  #
+        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index, augment_x=True, augment_y=True)  #
         mb_examples = x.size(0)
         
         if current_index >= total_samples:
@@ -293,7 +293,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     done = False
     while not done:
-        x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index)
+        x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index, augment_x=True, augment_y=True)
         if current_index >= total_samples:
             current_index = 0
             x, y = data.shuffle_data(x, y)
@@ -766,18 +766,18 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 500
-    hp.max_epochs = 500
+    hp.min_epochs = 200
+    hp.max_epochs = 200
     hp.patience = 1100
     hp.early_stop = True
     
     hp.ode_timesteps = 30
     
     # optimization hyperparameters
-    hp.minibatch_examples = 10
+    hp.minibatch_examples = 20
     hp.accumulated_minibatches = 1
-    hp.LR = 0.02
-    hp.reptile_lr = 0.025
+    hp.LR = 0.1
+    hp.reptile_lr = 0.1
     hp.WD = 0.0
     
     
@@ -874,7 +874,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
@@ -891,7 +891,7 @@ def main():
         # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
         # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
         # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
-        'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
+        # 'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
         # 'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
