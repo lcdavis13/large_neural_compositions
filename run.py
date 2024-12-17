@@ -450,9 +450,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     old_lr = scheduler.get_last_lr()
     
-    filepath_out_epoch = f'results/epochs/{model_name}_{dataname}{jobstring}_fold{fold}_epochs.csv'
+    filepath_out_epoch = f'results/epochs/{model_name}_{dataname}{jobstring}_epochs.csv'
     # filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
-    filepath_out_incremental = f'results/incr/{model_name}_{dataname}{jobstring}_fold{fold}_incremental.csv'
+    filepath_out_incremental = f'results/incr/{model_name}_{dataname}{jobstring}_incremental.csv'
     
     # initial validation benchmark
     l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn,
@@ -632,7 +632,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         DEBUG_OUT_NUM = 4
         
         if DEBUG_OUTPUT:
-            DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_{dataname}{jobstring}_fold{fold_num}_predictions.csv"
+            DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_{dataname}{jobstring}_predictions.csv"
             
             model.eval()
             with torch.no_grad():
@@ -743,27 +743,9 @@ def main():
     kfolds = 5  # -1 for leave-one-out, > 1 for k-folds
     
     whichfold = -1
-    # whichfold =
+    # whichfold = 0
     
     jobid = "-1"  # -1 for no job id
-    
-    # command-line arguments
-    parser = argparse.ArgumentParser(description='run')
-    parser.add_argument('--dataname', default=dataname, help='dataset name')
-    parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
-    parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
-    parser.add_argument("--jobid", default=jobid, help="job id")
-    parser.add_argument("--headless", action="store_true", help="run without plotting")
-    args = parser.parse_args()
-    dataname = args.dataname
-    whichfold = int(args.whichfold)
-    kfolds = int(args.kfolds)
-    
-    jobid = int(args.jobid.split('_')[0])
-    jobstring = f"_job{jobid}" if jobid >= 0 else ""
-    
-    if args.headless:
-        plotstream.set_headless()
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
@@ -784,8 +766,8 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 5
-    hp.max_epochs = 5
+    hp.min_epochs = 500
+    hp.max_epochs = 500
     hp.patience = 1100
     hp.early_stop = True
     
@@ -794,8 +776,38 @@ def main():
     # optimization hyperparameters
     hp.minibatch_examples = 10
     hp.accumulated_minibatches = 1
-    hp.LR = 0.2
+    hp.LR = 0.02
+    hp.reptile_lr = 0.025
     hp.WD = 0.0
+    
+    
+    
+    # command-line arguments
+    parser = argparse.ArgumentParser(description='run')
+    parser.add_argument('--dataname', default=dataname, help='dataset name')
+    parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
+    parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
+    parser.add_argument("--jobid", default=jobid, help="job id")
+    parser.add_argument("--headless", action="store_true", help="run without plotting")
+    parser.add_argument('--mb', default=hp.minibatch_examples, help='minibatch size')
+    parser.add_argument('--lr', default=hp.LR, help='learning rate')
+    parser.add_argument('--reptile_rate', default=hp.reptile_lr, help='reptile outer-loop learning rate')
+    
+    args = parser.parse_args()
+    dataname = args.dataname
+    whichfold = int(args.whichfold)
+    kfolds = int(args.kfolds)
+    hp.minibatch_examples = int(args.mb)
+    hp.LR = float(args.lr)
+    hp.reptile_lr = float(args.reptile_rate)
+    
+    jobid = int(args.jobid.split('_')[0])
+    jobstring = f"_job{jobid}" if jobid >= 0 else ""
+    
+    if args.headless:
+        plotstream.set_headless()
+    
+    
     
     # model shape hyperparameters
     _, hp.data_dim = x.shape
@@ -809,7 +821,6 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(hp.data_dim),
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
@@ -863,7 +874,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
@@ -880,7 +891,7 @@ def main():
         # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
         # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
         # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
-        # 'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
+        'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
         # 'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
         
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -1069,12 +1080,33 @@ def main():
         for key, value in hp.items():
             print(f"{key}: {value}")
         
+        # Just for the sake of logging experiments before cross validation...
+        optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
+                "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
+                "metric": -1.0}
+        val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
+        trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
+        val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
+        trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
+        stream.stream_scores(filepath_out_expt, True,
+                             "model", model_name,
+                             "model parameters", num_params,
+                             "fold", -1,
+                             "k-folds", kfolds,
+                             "device", device,
+                             *unrolldict(hp),  # unroll the hyperparams dictionary
+                             *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                           trn_score_optims[0]),
+                             prefix="\n=======================================================EXPERIMENT========================================================\n",
+                             suffix="\n=========================================================================================================================\n")
+        
+        
         # train and test the model across multiple folds
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
-            reptile_rewind=0.975, reeval_train=False, whichfold=whichfold, jobstring=jobstring
+            reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=False, whichfold=whichfold, jobstring=jobstring
         )
         
         # print all folds

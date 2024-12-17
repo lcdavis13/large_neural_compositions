@@ -39,6 +39,7 @@ def decondense(values, positions, size):
         torch.Tensor: Decondensed tensor with shape (..., size).
     """
     device = values.device
+    positions = positions.unsqueeze(0).expand(values.shape[0], -1, -1)
     batch_dims = values.shape[:-1]  # All dimensions except the last
     batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
     y_shape = (*batch_dims, size)  # Shape of the output tensor

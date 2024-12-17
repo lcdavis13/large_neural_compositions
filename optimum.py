@@ -52,8 +52,9 @@ class Optimum(ency):
         return result
 
 
-def pessimistic_summary(fold_losses):
-    model_score = np.max([np.mean(fold_losses), np.median(fold_losses)])
+def summarize_statistic(fold_losses):
+    model_score = np.mean(fold_losses)
+    #model_score = np.max([np.mean(fold_losses), np.median(fold_losses)])  # most pessimistic summary
     return model_score
 
 
@@ -76,7 +77,7 @@ def summarize(optimum_list):
         fold_losses = [opt.dict.get(key, None) for opt in optimum_list if opt.dict.get(key) is not None]
         
         if fold_losses:
-            summary_dict[key] = pessimistic_summary(fold_losses)
+            summary_dict[key] = summarize_statistic(fold_losses)
     
     # Create a new Optimum object with the summarized results
     return Optimum(metric, metric_type, summary_dict)
