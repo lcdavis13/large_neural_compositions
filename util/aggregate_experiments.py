@@ -98,6 +98,23 @@ def save_master_csv(master_df, output_path):
         output_path (str): The output file path for the CSV file.
     """
     try:
+        # Define the desired column order
+        column_order = [
+            'model', 'mean_val_loss', 'LR', 'reptile_lr', 'minibatch_examples', 'noise', 'WD', 'mean_val_loss @ epoch', 'mean_val_loss @ time',
+            'mean_val_loss @ trn_loss', 'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
+        ]
+        
+        # Reorder columns if they exist in the DataFrame
+        existing_columns = [col for col in column_order if col in master_df.columns]
+        remaining_columns = [col for col in master_df.columns if col not in existing_columns]
+        ordered_columns = existing_columns + remaining_columns
+        
+        master_df = master_df[ordered_columns]
+        
+        # Sort by 'val_loss' in ascending order
+        if 'mean_val_loss' in master_df.columns:
+            master_df = master_df.sort_values(by='mean_val_loss', ascending=True)
+        
         master_df.to_csv(output_path, index=False)
         print(f"Master CSV file saved successfully at {output_path}")
     except Exception as e:
@@ -105,7 +122,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "../results/hpsearch_multiple_12-16/constShaped/"
+    folder = "../results/hpsearch_cnode1_12-14/expt/"
     path_pattern = f"{folder}cNODE-paper-ocean-std_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     

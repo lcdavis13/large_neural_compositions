@@ -110,7 +110,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
-        x, y, current_index = data.get_batch(x_val, y_val, minibatch_examples, current_index)
+        x, y, current_index = data.get_batch(x_val, y_val, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
         mb_examples = x.size(0)
         
         with torch.no_grad():
@@ -130,7 +130,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     return avg_loss, avg_score, avg_penalty
 
 
-def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, optimizer, scheduler, scaler, t,
+def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, noise, optimizer, scheduler, scaler, t,
                 outputs_per_epoch,
                 prev_examples, fold, epoch_num, model_name, dataname, loss_fn, score_fn, distr_error_fn, device,
                 filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1):
@@ -156,7 +156,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
         
-        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index, augment_x=True, augment_y=True)  #
+        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
         mb_examples = x.size(0)
         
         if current_index >= total_samples:
@@ -246,7 +246,7 @@ def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
     model.load_state_dict(averaged_params)
 
 
-def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, device,
+def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, noise, device,
             min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, initial_lr,
             verbosity=1, seed=None, run_validation=False):  # Set the seed for reproducibility
     # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
@@ -293,7 +293,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     done = False
     while not done:
-        x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index, augment_x=True, augment_y=True)
+        x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
         if current_index >= total_samples:
             current_index = 0
             x, y = data.shuffle_data(x, y)
@@ -435,7 +435,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     return optimal_weight_decay, optimal_lr
 
 
-def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, scaler, x_train,
+def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, scaler, x_train,
                y_train, x_valid, y_valid, t,
                model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train=False, jobstring=""):
@@ -492,9 +492,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         outer_optimizer.load_state_dict(optimizer.state_dict())
         outer_optimizer.lr = reptile_rate
     
+    training_curve = []
     while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
-                                                        accumulated_minibatches, optimizer, scheduler, scaler, t,
+                                                        accumulated_minibatches, noise, optimizer, scheduler, scaler, t,
                                                         outputs_per_epoch, train_examples_seen,
                                                         fold, manager.epoch, model_name, dataname, loss_fn, score_fn,
                                                         distr_error_fn, device, filepath_out_incremental,
@@ -567,6 +568,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         trnscore_opt.track_best(dict)
         last_opt.track_best(dict)
         
+        training_curve.append({"fold": fold, "epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "time": elapsed_time})
+        
         old_lr = new_lr
         
         # check if we should continue
@@ -576,10 +579,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
     # TODO: could also try to save the source code, but would need to copy it at time of execution and then rename it if it gets the best score.
     
-    return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt
+    return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
 
-def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device, early_stop, patience, kfolds,
+def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs,
                         minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
@@ -594,6 +597,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
     trn_loss_optims = []
     trn_score_optims = []
     final_optims = []
+    val_loss_curves = []
     for fold_num, data_fold in enumerate(data_folded):
         if whichfold >= 0:
             fold_num = whichfold
@@ -615,8 +619,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
         
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt = run_epochs(model, optimizer, scheduler, manager,
-                                                                            minibatch_examples, accumulated_minibatches,
+        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(model, optimizer, scheduler, manager,
+                                                                            minibatch_examples, accumulated_minibatches, noise,
                                                                             scaler, x_train, y_train,
                                                                             x_valid, y_valid, timesteps, model_name,
                                                                             dataname, fold_num, loss_fn, score_fn,
@@ -700,7 +704,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                               "fold", fold_num + 1,
                               "Validation Loss", val_loss,
                               "Validation Score", val_score,
-                              "Val @ epochs", val_epoch + 1,
+                              "Val @ epoch0s", val_epoch + 1,
                               "Val @ time", val_time,
                               "Val @ training loss", val_trn_loss,
                               "Training Loss", trn_loss,
@@ -711,7 +715,9 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, device
                               prefix="\n========================================FOLD=========================================\n",
                               suffix="\n=====================================================================================\n")
     
-    return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims
+    val_loss_curves.append(training_curve)
+    
+    return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, val_loss_curves
 
 
 def unrolldict(d):
@@ -766,8 +772,8 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 200
-    hp.max_epochs = 200
+    hp.min_epochs = 5
+    hp.max_epochs = 5
     hp.patience = 1100
     hp.early_stop = True
     
@@ -779,7 +785,7 @@ def main():
     hp.LR = 0.1
     hp.reptile_lr = 0.1
     hp.WD = 0.0
-    
+    hp.noise = 0.075
     
     
     # command-line arguments
@@ -792,6 +798,10 @@ def main():
     parser.add_argument('--mb', default=hp.minibatch_examples, help='minibatch size')
     parser.add_argument('--lr', default=hp.LR, help='learning rate')
     parser.add_argument('--reptile_rate', default=hp.reptile_lr, help='reptile outer-loop learning rate')
+    parser.add_argument('--wd', default=hp.WD, help='weight decay')
+    parser.add_argument('--noise', default=hp.noise, help='noise level')
+    parser.add_argument('--ode_steps', default=hp.ode_timesteps, help='number of ODE timesteps')
+    
     
     args = parser.parse_args()
     dataname = args.dataname
@@ -800,6 +810,9 @@ def main():
     hp.minibatch_examples = int(args.mb)
     hp.LR = float(args.lr)
     hp.reptile_lr = float(args.reptile_rate)
+    hp.WD = float(args.wd)
+    hp.noise = float(args.noise)
+    hp.ode_timesteps = int(args.ode_steps)
     
     jobid = int(args.jobid.split('_')[0])
     jobstring = f"_job{jobid}" if jobid >= 0 else ""
@@ -824,7 +837,7 @@ def main():
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
@@ -874,7 +887,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
@@ -1090,6 +1103,10 @@ def main():
         trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
         stream.stream_scores(filepath_out_expt, True,
                              "model", model_name,
+                             "mean_val_loss", -1,
+                             "mean_val_loss @ epoch", -1,
+                             "mean_val_loss @ time", -1,
+                             "mean_val_loss @ trn_loss", -1,
                              "model parameters", num_params,
                              "fold", -1,
                              "k-folds", kfolds,
@@ -1102,8 +1119,8 @@ def main():
         
         
         # train and test the model across multiple folds
-        val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims = crossvalidate_model(
-            hp.LR, scaler, hp.accumulated_minibatches, data_folded, device, hp.early_stop, hp.patience,
+        val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
+            hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
             reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=False, whichfold=whichfold, jobstring=jobstring
@@ -1127,10 +1144,22 @@ def main():
         print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
         print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
         
+        # find optimal epoch
+        # training_curves is a list of dictionaries, convert to a dataframe
+        all_data = [entry for fold in training_curves for entry in fold]
+        df = pd.DataFrame(all_data)
+        average_metrics = df.groupby('epoch').mean(numeric_only=True).reset_index()
+        min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+        best_epoch_metrics = min_val_loss_epoch.to_dict()
+        
         # write folds to log file
         for i in range(len(val_loss_optims)):
             stream.stream_scores(filepath_out_expt, True,
                                  "model", model_name,
+                                 "mean_val_loss", best_epoch_metrics["val_loss"],
+                                 "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
+                                 "mean_val_loss @ time", best_epoch_metrics["time"],
+                                 "mean_val_loss @ trn_loss", best_epoch_metrics["trn_loss"],
                                  "model parameters", num_params,
                                  "fold", i if whichfold < 0 else whichfold,
                                  "k-folds", kfolds,

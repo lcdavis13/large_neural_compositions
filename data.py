@@ -135,7 +135,7 @@ def check_leakage(folded_data):
     return True
 
 
-def get_batch(x, y, mb_size, current_index, augment_x=False, augment_y=False, noise_level_x=0.075, noise_level_y=0.075):
+def get_batch(x, y, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0):
     """Returns a batch of data of size `mb_size` starting from `current_index`, with optional noise augmentation for x and y."""
     end_index = current_index + mb_size
     if end_index > x.size(0):
@@ -145,11 +145,11 @@ def get_batch(x, y, mb_size, current_index, augment_x=False, augment_y=False, no
     x_batch = x[batch_indices, :]
     y_batch = y[batch_indices, :]
     
-    if augment_x:
+    if noise_level_x > 0:
         x_batch = resample_noisy(x_batch, noise_level_x)
         x_batch = normalize(x_batch)
         
-    if augment_y:
+    if noise_level_y > 0:
         y_batch = resample_noisy(y_batch, noise_level_y)
         y_batch = normalize(y_batch)
     
