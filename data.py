@@ -42,9 +42,12 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
     alpha = adjusted_means * k
     beta_param = (1 - adjusted_means) * k
     
-    # Clamp alpha and beta to avoid numerical instability (e.g., negative or zero values)
-    alpha = torch.clamp(alpha, min=1e-6)
-    beta_param = torch.clamp(beta_param, min=1e-6)
+    if torch.any(torch.isnan(alpha)) or torch.any(torch.isnan(beta_param)):
+        print(f"NaN detected in alpha or beta param")
+        # find the index of the NaN value
+        nan_idx = torch.isnan(alpha) | torch.isnan(beta_param)
+        # print(f"NaN index: {mean_values[nan_idx]}")
+        print(f"mean_values with NaN: {mean_values[nan_idx]}")
     
     # Sample from the Beta distribution for each mean value that is within (0, 1)
     sampled_values_within_range = torch.distributions.Beta(alpha, beta_param).sample()
@@ -135,7 +138,7 @@ def check_leakage(folded_data):
     return True
 
 
-def get_batch(x, y, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0):
+def get_batch(x, y, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolation_steps=1):
     """Returns a batch of data of size `mb_size` starting from `current_index`, with optional noise augmentation for x and y."""
     end_index = current_index + mb_size
     if end_index > x.size(0):
@@ -144,6 +147,18 @@ def get_batch(x, y, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0
     batch_indices = torch.arange(current_index, end_index, dtype=torch.long)
     x_batch = x[batch_indices, :]
     y_batch = y[batch_indices, :]
+    
+    # interpolation from x to y
+    if interpolation_steps > 1:
+        interpolation_steps += 1
+        x_batch = x_batch.unsqueeze(1)
+        y_batch = y_batch.unsqueeze(1)
+        x_batch = x_batch.repeat(1, interpolation_steps, 1)
+        y_batch = y_batch.repeat(1, interpolation_steps, 1)
+        interpolation = torch.linspace(0, 1, interpolation_steps)[1:].unsqueeze(-1).unsqueeze(-1)
+        batch = x_batch + interpolation * (y_batch - x_batch)
+        x_batch = batch[:, :-1, :].reshape(-1, x_batch.size(-1))
+        y_batch = batch[:, 1:, :].reshape(-1, y_batch.size(-1))
     
     if noise_level_x > 0:
         x_batch = resample_noisy(x_batch, noise_level_x)

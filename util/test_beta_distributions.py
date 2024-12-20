@@ -36,7 +36,7 @@ def get_bounds_from_csv(file_path):
 
 
 # File path to the CSV (update this path as needed)
-csv_file_path = '../data/cNODE-paper-ocean-std_train.csv'
+csv_file_path = '../data/waimea-std_train.csv'
 
 # Get bounds from the CSV file
 try:
@@ -70,6 +70,7 @@ for x_mean in mean_values:
     pdf = beta.pdf(x, alpha, beta_param)
     plt.plot(x, pdf, label=f'mean = {x_mean}')#, α = {alpha:.1f}, β = {beta_param:.1f}')
     
+plt.legend()
 plt.show()
 
 plt.figure(figsize=(12, 8))
@@ -135,6 +136,7 @@ for i,m in enumerate(mean_values):
     print(f"expected mean = {m}, mean of sampled values = {mean}")
     print(f"max = {np.max(data)}, min = {np.min(data)}")
     plt.hist(data, bins=20, density=False, alpha=0.5, label=f'mean = {m}')
+plt.legend()
 plt.show()
 
 # plot the first mean separately

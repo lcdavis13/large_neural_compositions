@@ -59,14 +59,17 @@ def loss_bc_dki(y_pred, y_true):
 
 
 def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
+    return torch.mean(torch.sum(torch.abs(y_pred - y_true), dim=-1) / torch.sum(torch.abs(y_pred) + torch.abs(y_true), dim=-1))
+
+
+def loss_bc_old(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))
-    # return torch.sum(torch.abs(y_pred - y_true)) / (2.0 * y_true.shape[0])   # simplified by assuming every vector is a species composition that sums to 1 ... but some models may violate that constraint so maybe don't use this
 
 
 def loss_bc_scaled(y_pred, y_true, epsilon=1e-10):
-    numerator = torch.sum(torch.abs(y_pred - y_true) / (torch.abs(y_true) + epsilon))
-    denominator = torch.sum(torch.abs(y_pred) + torch.abs(y_true) / (torch.abs(y_true) + epsilon))
-    return numerator / denominator
+    numerator = torch.sum(torch.abs(y_pred - y_true) / (torch.abs(y_true) + epsilon), dim=-1)
+    denominator = torch.sum(torch.abs(y_pred) + torch.abs(y_true) / (torch.abs(y_true) + epsilon), dim=-1)
+    return torch.mean(numerator / denominator)
 
 
 def loss_bc_root(y_pred, y_true):
@@ -133,7 +136,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
 def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, noise, optimizer, scheduler, scaler, t,
                 outputs_per_epoch,
                 prev_examples, fold, epoch_num, model_name, dataname, loss_fn, score_fn, distr_error_fn, device,
-                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1):
+                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
     model.train()
     
     total_loss = 0
@@ -155,15 +158,17 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
+        requires_timesteps = getattr(model, 'USES_ODEINT', False)
+        supervise_steps = (supervised_timesteps > 1) and requires_timesteps
         
-        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
+        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, interpolation_steps=(supervised_timesteps if supervise_steps else 1))  #
         mb_examples = x.size(0)
         
         if current_index >= total_samples:
             current_index = 0  # Reset index if end of dataset is reached
             x, y = data.shuffle_data(x, y)
         
-        y_pred, _ = eval_model(model, x, t)
+        y_pred, y_timesteps = eval_model(model, x, t)
         y_pred = y_pred.to(device)
         
         loss = loss_fn(y_pred, y)
@@ -232,12 +237,12 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     return avg_loss, avg_penalty, new_total_examples
 
 
-# backup model parameters
+# backup model parameters for reptile
 def backup_parameters(model):
     return {name: param.clone() for name, param in model.state_dict().items()}
 
 
-# perform weighted averaging of parameters
+# perform weighted averaging of parameters for reptile
 def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
     averaged_params = {
         key: alpha * paramsA[key] + (1 - alpha) * paramsB[key]
@@ -734,6 +739,7 @@ def main():
     
     # dataname = "P"
     # dataname = "waimea"
+    # dataname = "waimea-std"
     # dataname = "waimea-condensed"
     # dataname = "cNODE-paper-ocean"
     dataname = "cNODE-paper-ocean-std"
@@ -772,8 +778,8 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 5
-    hp.max_epochs = 5
+    hp.min_epochs = 15
+    hp.max_epochs = 15
     hp.patience = 1100
     hp.early_stop = True
     
@@ -837,7 +843,7 @@ def main():
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
@@ -887,7 +893,7 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
