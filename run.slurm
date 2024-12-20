@@ -1,56 +1,88 @@
 #!/bin/bash
 # See https://slurm.schedmd.com/job_array.html
 
+#SBATCH --job-name=cnode-hpsearch
+#SBATCH --array=0-99  ## Make sure this is enough for all hyperparam/fold combos
+
+#SBATCH --time=0-00:30:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=gpu
-
-# Calculate the total number of combinations:
-# 5 (mb values) x 5 (lr values) x 5 (reptile_rate values) = 125
-#SBATCH --array=0-124                # Array range for 125 total combinations (0 to 124)
-#SBATCH --output=slurm_out/%A/%A_%a.out    # Output files in job-specific folder
-#SBATCH --error=slurm_out/%A/%A_%a.err     # Error files in job-specific folder
-
 #SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
 ##SBATCH --gpus-per-node=NV-L40:1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=4G ## max amount of memory per node you require
-#SBATCH --time=0-00:30:00 ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --mem=4G
 
-#SBATCH --job-name=cnode-hpsearch
+#SBATCH --output=slurm_out/%A/%A_%a.out
+#SBATCH --error=slurm_out/%A/%A_%a.err
+#SBATCH --cpus-per-task=1
 ##SBATCH --mail-type=FAIL
 ##SBATCH --mail-user=myemail@hawaii.edu
 
 echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID running on $HOSTNAME"
 
-# Define the arrays of values for learning rate (lr), reptile_rate, and mb
-lr_values=(0.0001 0.001 0.01 0.1 1.0)
-reptile_rate_values=(0.0032 0.032 0.1 0.5 1.0)
-mb_values=(176 64 32 20 10)
+# -------------------------
+# 1. Define Hyperparameters
+# -------------------------
+declare -A hyperparams
+hyperparams["lr"]="0.001 0.01 0.1 1.0 10.0"
+hyperparams["reptile_rate"]="0.0032 0.032 0.1 0.5 1.0"
+hyperparams["noise"]="0.025 0.05 0.075 0.1"
 
-# Calculate the indices for the lr, reptile_rate, and mb from SLURM_ARRAY_TASK_ID
-# Total combinations = number of mb values * number of lr values * number of reptile_rate values
 
-total_lr_values=${#lr_values[@]}  # 5
-reptile_rate_total=${#reptile_rate_values[@]}  # 5
-mb_total=${#mb_values[@]}  # 5
+# -------------------------
+# 2. Calculate Total Combinations
+# -------------------------
+total_combinations=1
+declare -A hyperparam_sizes
+for param in "${!hyperparams[@]}"; do
+    values=(${hyperparams[$param]}) # Split into array
+    hyperparam_sizes[$param]=${#values[@]} # Store size of each hyperparam
+    total_combinations=$((total_combinations * ${#values[@]}))
+done
 
-total_combinations=$((mb_total * total_lr_values * reptile_rate_total))  # 5 x 5 x 5 = 125
+# Exit if SLURM_ARRAY_TASK_ID exceeds total combinations
+if [[ "$SLURM_ARRAY_TASK_ID" -ge "$total_combinations" ]]; then
+    echo "Error: SLURM_ARRAY_TASK_ID exceeds total combinations ($total_combinations)."
+    exit 1
+fi
 
-# Decompose SLURM_ARRAY_TASK_ID into mb, lr, and reptile_rate indices
-mb_index=$((SLURM_ARRAY_TASK_ID % mb_total))  # Which mb to run (0 to 4)
-lr_index=$(( (SLURM_ARRAY_TASK_ID / mb_total) % total_lr_values ))  # Which lr to use (0 to 4)
-reptile_rate_index=$(( (SLURM_ARRAY_TASK_ID / (mb_total * total_lr_values)) % reptile_rate_total ))  # Which reptile_rate to use (0 to 4)
+# -------------------------
+# 3. Decompose SLURM_ARRAY_TASK_ID
+# -------------------------
+declare -A hyperparam_indices
+current_id=$SLURM_ARRAY_TASK_ID
 
-# Get the specific values for mb, lr, and reptile_rate
-mb=${mb_values[$mb_index]}
-lr=${lr_values[$lr_index]}
-reptile_rate=${reptile_rate_values[$reptile_rate_index]}
+for param in "${!hyperparams[@]}"; do
+    size=${hyperparam_sizes[$param]}
+    hyperparam_indices[$param]=$((current_id % size)) # Get current index
+    current_id=$((current_id / size)) # Reduce task_id for the next hyperparam
+done
 
-echo "MB index: $mb_index"
-echo "Mini-batch size (mb): $mb"
-echo "Learning rate (lr): $lr"
-echo "Reptile rate: $reptile_rate"
+# -------------------------
+# 4. Extract Values for Each Hyperparameter
+# -------------------------
+declare -A hyperparam_values
+for param in "${!hyperparams[@]}"; do
+    values=(${hyperparams[$param]})
+    index=${hyperparam_indices[$param]}
+    hyperparam_values[$param]=${values[$index]}
+done
 
-# Load python environment, then call the python script with calculated arguments
+# Print debug information
+for param in "${!hyperparam_values[@]}"; do
+    echo "$param: ${hyperparam_values[$param]}"
+done
+
+# -------------------------
+# 5. Run the Python Script
+# -------------------------
 source activate lnc
-python run.py --kfolds 5 --headless --jobid $SLURM_JOB_ID --whichfold -1 --lr $lr --reptile_rate $reptile_rate --mb $mb
+python run.py --kfolds 5 --headless \
+    --jobid $SLURM_JOB_ID \
+    --whichfold -1 \
+    --lr ${hyperparam_values["lr"]} \
+    --reptile_rate ${hyperparam_values["reptile_rate"]} \
+    --mb 20 \
+    --wd 0.0 \
+    --ode_steps=30 \
+    --noise ${hyperparam_values["noise"]}
+
