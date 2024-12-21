@@ -796,7 +796,8 @@ def main():
     hp.reptile_lr = 0.1
     hp.WD = 0.0
     hp.noise = 0.075
-    hp.interpolate = True
+    # hp.interpolate = True
+    hp.interpolate = False
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='run')
