@@ -186,7 +186,7 @@ def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=
             z[i] = resample_noisy(z[i], noise_level[i].item())
             z[i] = normalize(z[i])
     
-    return z[0], z[-1], end_index
+    return z, end_index
 
 
 def shuffle_data(x, y):

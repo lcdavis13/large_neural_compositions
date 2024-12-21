@@ -111,7 +111,8 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
-        x, y, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
+        z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
+        x, y = z[0], z[-1]
         mb_examples = x.size(0)
         
         with torch.no_grad():
@@ -156,21 +157,26 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
-        requires_timesteps = getattr(model, 'USES_ODEINT', False)
-        supervise_steps = (supervised_timesteps > 1) and requires_timesteps
+        model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
+        supervise_steps = interpolate and model_requires_timesteps
         
-        x, y, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
-        mb_examples = x.size(0)
+        z, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
+        mb_examples = z.shape[-2]
         
         if current_index >= total_samples:
             current_index = 0  # Reset index if end of dataset is reached
             x_train, y_train = data.shuffle_data(x_train, y_train)
         
-        y_timesteps = eval_model(model, x, t)
-        y_pred = y_timesteps[-1]
+        y_pred = eval_model(model, z[0], t)
+        if supervise_steps:
+            y_pred = y_pred[1:]
+            y_true = z[1:]
+        else:
+            y_pred = y_pred[-1:]
+            y_true = z[-1:]
         y_pred = y_pred.to(device)
         
-        loss = loss_fn(y_pred, y)
+        loss = loss_fn(y_pred, y_true)
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches  # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
         
