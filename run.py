@@ -109,11 +109,9 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     total_samples = x_val.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
     current_index = 0  # Initialize current index to start of dataset
-    t_val = torch.tensor([t[0], t[-1]]).to(device)
     
     for mb in range(minibatches):
-        z, current_index = data.get_batch(x_val, y_val, t_val, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
-        x, y = z[0], z[-1]
+        x, y, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
         mb_examples = x.size(0)
         
         with torch.no_grad():
@@ -159,24 +157,20 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
         requires_timesteps = getattr(model, 'USES_ODEINT', False)
-        supervise_steps = interpolate and requires_timesteps
-        batch_timesteps = t if supervise_steps else torch.tensor([t[0], t[-1]]).to(device)
+        supervise_steps = (supervised_timesteps > 1) and requires_timesteps
         
-        z, current_index = data.get_batch(x_train, y_train, batch_timesteps, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
-        mb_examples = z.shape[1]
+        x, y, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
+        mb_examples = x.size(0)
         
         if current_index >= total_samples:
             current_index = 0  # Reset index if end of dataset is reached
             x_train, y_train = data.shuffle_data(x_train, y_train)
         
-        y_pred = eval_model(model, z[0], t)
-        if supervise_steps:
-            y_pred = y_pred[-1:]
+        y_timesteps = eval_model(model, x, t)
+        y_pred = y_timesteps[-1]
         y_pred = y_pred.to(device)
         
-        print(f"y_pred: {y_pred.shape}")
-        print(f"z[1:]: {z[1:].shape}")
-        loss = loss_fn(y_pred, z[1:])
+        loss = loss_fn(y_pred, y)
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches  # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
         
@@ -302,7 +296,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     done = False
     while not done:
-        x_batch, y_batch, current_index = data.get_batch(x, y, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
+        x_batch, y_batch, current_index = data.get_batch(x, y, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
         if current_index >= total_samples:
             current_index = 0
             x, y = data.shuffle_data(x, y)
@@ -844,7 +838,7 @@ def main():
     hp.ffn_dim_multiplier = 0.5
     assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
     
-    reeval_train = True # hp.interpolate # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
+    reeval_train = True # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
