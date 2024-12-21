@@ -42,15 +42,13 @@ def eval_model(model, x, timesteps):
     
     if requires_timesteps and timesteps is not None:
         # Call models that require the timesteps argument
-        y_list = model(timesteps, x)
-        y = y_list[-1]  # Final output is the last element
-        y_steps = y_list  # Debug outputs are the entire list
+        y_steps = model(timesteps, x)
     else:
         # Call models that do not require the timesteps argument
         y = model(x)
         y_steps = y.unsqueeze(0)
     
-    return y, y_steps
+    return y_steps
 
 
 def loss_bc_dki(y_pred, y_true):
@@ -111,13 +109,15 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     total_samples = x_val.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
     current_index = 0  # Initialize current index to start of dataset
+    t_val = torch.tensor([t[0], t[-1]]).to(device)
     
     for mb in range(minibatches):
-        x, y, current_index = data.get_batch(x_val, y_val, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
+        z, current_index = data.get_batch(x_val, y_val, t_val, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
+        x, y = z[0], z[-1]
         mb_examples = x.size(0)
         
         with torch.no_grad():
-            y_pred, _ = eval_model(model, x, t)
+            y_pred = eval_model(model, x, t)[-1]
             y_pred = y_pred.to(device)
             
             loss = loss_fn(y_pred, y)
@@ -133,7 +133,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     return avg_loss, avg_score, avg_penalty
 
 
-def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, noise, optimizer, scheduler, scaler, t,
+def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
                 outputs_per_epoch,
                 prev_examples, fold, epoch_num, model_name, dataname, loss_fn, score_fn, distr_error_fn, device,
                 filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
@@ -159,19 +159,24 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
         requires_timesteps = getattr(model, 'USES_ODEINT', False)
-        supervise_steps = (supervised_timesteps > 1) and requires_timesteps
+        supervise_steps = interpolate and requires_timesteps
+        batch_timesteps = t if supervise_steps else torch.tensor([t[0], t[-1]]).to(device)
         
-        x, y, current_index = data.get_batch(x_train, y_train, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, interpolation_steps=(supervised_timesteps if supervise_steps else 1))  #
-        mb_examples = x.size(0)
+        z, current_index = data.get_batch(x_train, y_train, batch_timesteps, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
+        mb_examples = z.shape[1]
         
         if current_index >= total_samples:
             current_index = 0  # Reset index if end of dataset is reached
-            x, y = data.shuffle_data(x, y)
+            x_train, y_train = data.shuffle_data(x_train, y_train)
         
-        y_pred, y_timesteps = eval_model(model, x, t)
+        y_pred = eval_model(model, z[0], t)
+        if supervise_steps:
+            y_pred = y_pred[-1:]
         y_pred = y_pred.to(device)
         
-        loss = loss_fn(y_pred, y)
+        print(f"y_pred: {y_pred.shape}")
+        print(f"z[1:]: {z[1:].shape}")
+        loss = loss_fn(y_pred, z[1:])
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches  # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
         
@@ -179,8 +184,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         if scaled_loss.requires_grad and scaled_loss.grad_fn is not None:
             scaled_loss.backward()
         else:
-            print(
-                f"GRADIENT ERROR: Loss at epoch {epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
+            print(f"GRADIENT ERROR: Loss at epoch {epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
         
         distr_error = distr_error_fn(y_pred)
         actual_penalty = distr_error.item() * mb_examples
@@ -303,7 +307,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
             current_index = 0
             x, y = data.shuffle_data(x, y)
         
-        y_pred, _ = eval_model(model, x_batch, timesteps)
+        y_pred = eval_model(model, x_batch, timesteps)[-1]
         y_pred = y_pred.to(device)
         loss = loss_fn(y_pred, y_batch) / accumulated_minibatches
         scaler.scale(loss).backward()
@@ -440,7 +444,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     return optimal_weight_decay, optimal_lr
 
 
-def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, scaler, x_train,
+def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, scaler, x_train,
                y_train, x_valid, y_valid, t,
                model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train=False, jobstring=""):
@@ -500,7 +504,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     training_curve = []
     while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
-                                                        accumulated_minibatches, noise, optimizer, scheduler, scaler, t,
+                                                        accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
                                                         outputs_per_epoch, train_examples_seen,
                                                         fold, manager.epoch, model_name, dataname, loss_fn, score_fn,
                                                         distr_error_fn, device, filepath_out_incremental,
@@ -587,7 +591,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
 
-def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise, device, early_stop, patience, kfolds,
+def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise, interpolate, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs,
                         minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
@@ -625,7 +629,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(model, optimizer, scheduler, manager,
-                                                                            minibatch_examples, accumulated_minibatches, noise,
+                                                                            minibatch_examples, accumulated_minibatches, noise, interpolate,
                                                                             scaler, x_train, y_train,
                                                                             x_valid, y_valid, timesteps, model_name,
                                                                             dataname, fold_num, loss_fn, score_fn,
@@ -646,7 +650,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
             model.eval()
             with torch.no_grad():
                 # Get the model output for the first minibatch
-                output, debug_ys = eval_model(model, x_valid[:DEBUG_OUT_NUM].to(device), timesteps)
+                debug_ys = eval_model(model, x_valid[:DEBUG_OUT_NUM].to(device), timesteps)
                 
                 # Get the corresponding y_valid batch
                 y_valid_batch = y_valid[0:DEBUG_OUT_NUM].to(device)
@@ -792,7 +796,7 @@ def main():
     hp.reptile_lr = 0.1
     hp.WD = 0.0
     hp.noise = 0.075
-    
+    hp.interpolate = True
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='run')
@@ -807,6 +811,7 @@ def main():
     parser.add_argument('--wd', default=hp.WD, help='weight decay')
     parser.add_argument('--noise', default=hp.noise, help='noise level')
     parser.add_argument('--ode_steps', default=hp.ode_timesteps, help='number of ODE timesteps')
+    parser.add_argument('--interpolate', default=int(hp.interpolate), help='whether or not to use supervised interpolation steps, 0 or 1')
     
     
     args = parser.parse_args()
@@ -819,6 +824,7 @@ def main():
     hp.WD = float(args.wd)
     hp.noise = float(args.noise)
     hp.ode_timesteps = int(args.ode_steps)
+    hp.interpolate = bool(int(args.interpolate))
     
     jobid = int(args.jobid.split('_')[0])
     jobstring = f"_job{jobid}" if jobid >= 0 else ""
@@ -836,6 +842,8 @@ def main():
     hp.depth = 2
     hp.ffn_dim_multiplier = 0.5
     assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+    
+    reeval_train = True # hp.interpolate # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
@@ -1109,6 +1117,7 @@ def main():
         trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
         stream.stream_scores(filepath_out_expt, True,
                              "model", model_name,
+                             "dataset", dataname,
                              "mean_val_loss", -1,
                              "mean_val_loss @ epoch", -1,
                              "mean_val_loss @ time", -1,
@@ -1126,10 +1135,10 @@ def main():
         
         # train and test the model across multiple folds
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
-            hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, device, hp.early_stop, hp.patience,
+            hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
-            reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=False, whichfold=whichfold, jobstring=jobstring
+            reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=whichfold, jobstring=jobstring
         )
         
         # print all folds
@@ -1162,6 +1171,7 @@ def main():
         for i in range(len(val_loss_optims)):
             stream.stream_scores(filepath_out_expt, True,
                                  "model", model_name,
+                                 "dataset", dataname,
                                  "mean_val_loss", best_epoch_metrics["val_loss"],
                                  "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
                                  "mean_val_loss @ time", best_epoch_metrics["time"],

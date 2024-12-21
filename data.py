@@ -20,6 +20,9 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
         torch.Tensor: A tensor of the same shape as mean_values, containing sampled values from the Beta distribution.
     """
     # Ensure input is a torch tensor
+    if peak_stddev <= 0:
+        return mean_values
+    
     if not isinstance(mean_values, torch.Tensor):
         raise TypeError("mean_values must be a torch.Tensor")
     
@@ -63,11 +66,14 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
 
 
 def normalize(x, transposed=False):
-    # Normalizes the input to sum to 1
+    # Normalizes the input to sum to 1 along the correct axis
     if transposed:
-        return x / x.sum(axis=0)[np.newaxis, :]
+        # For transposed input, normalize along the second-to-last axis
+        axis = -2 if x.ndim > 1 else 0
+        return x / x.sum(axis=axis, keepdims=True)
     else:
-        return x / x.sum(axis=1)[:, np.newaxis]
+        # Normalize along the last axis
+        return x / x.sum(axis=-1, keepdims=True)
 
 
 def process_data(y0):
@@ -138,37 +144,49 @@ def check_leakage(folded_data):
     return True
 
 
-def get_batch(x, y, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolation_steps=1):
-    """Returns a batch of data of size `mb_size` starting from `current_index`, with optional noise augmentation for x and y."""
+import torch
+
+
+def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False):
+    """Returns a batch of data of size `mb_size` starting from `current_index`,
+    with optional noise augmentation for x and y, and returns a tensor z with interpolation according to t."""
+    
+    # Calculate end index for the batch
     end_index = current_index + mb_size
     if end_index > x.size(0):
         end_index = x.size(0)
     
+    # Get indices for the batch
     batch_indices = torch.arange(current_index, end_index, dtype=torch.long)
     x_batch = x[batch_indices, :]
     y_batch = y[batch_indices, :]
     
-    # interpolation from x to y
-    if interpolation_steps > 1:
-        interpolation_steps += 1
-        x_batch = x_batch.unsqueeze(1)
-        y_batch = y_batch.unsqueeze(1)
-        x_batch = x_batch.repeat(1, interpolation_steps, 1)
-        y_batch = y_batch.repeat(1, interpolation_steps, 1)
-        interpolation = torch.linspace(0, 1, interpolation_steps)[1:].unsqueeze(-1).unsqueeze(-1)
-        batch = x_batch + interpolation * (y_batch - x_batch)
-        x_batch = batch[:, :-1, :].reshape(-1, x_batch.size(-1))
-        y_batch = batch[:, 1:, :].reshape(-1, y_batch.size(-1))
-    
-    if noise_level_x > 0:
-        x_batch = resample_noisy(x_batch, noise_level_x)
-        x_batch = normalize(x_batch)
+    # Optionally apply noise and normalization to x_batch and y_batch
+    if interpolate_noise:
+        if noise_level_x > 0:
+            x_batch = resample_noisy(x_batch, noise_level_x)
+            x_batch = normalize(x_batch)
         
-    if noise_level_y > 0:
-        y_batch = resample_noisy(y_batch, noise_level_y)
-        y_batch = normalize(y_batch)
+        if noise_level_y > 0:
+            y_batch = resample_noisy(y_batch, noise_level_y)
+            y_batch = normalize(y_batch)
     
-    return x_batch, y_batch, end_index
+    # Create tensor z with an extra outside dimension with the same length as t
+    t = t.view(-1, 1, 1)  # Reshape t to (len(t), 1, 1) for broadcasting
+    
+    # Interpolate linearly between x_batch and y_batch according to t
+    z = (1 - t) * x_batch.unsqueeze(0) + t * y_batch.unsqueeze(0)  # Shape: (len(t), mb_size, x.size(1))
+
+    # Optionally apply noise to all elements of z
+    if not interpolate_noise:
+        # Interpolate noise levels according to t, and use to independently resample each timestep of z
+        t = t.squeeze()
+        noise_level = (1 - t) * noise_level_x + t * noise_level_y
+        for i in range(z.size(0)):
+            z[i] = resample_noisy(z[i], noise_level[i].item())
+            z[i] = normalize(z[i])
+    
+    return z, end_index
 
 
 def shuffle_data(x, y):
@@ -186,3 +204,12 @@ def shuffle_data(x, y):
         y = y[permutation]
     
     return x, y
+
+
+def shuffle_tensor(z, dim=-2):
+    """Shuffles a tensor along the specified dimension `dim`."""
+    perm = torch.randperm(z.size(dim))
+    # Use 'slice(None)' to keep other dimensions unchanged
+    idx = [slice(None)] * len(z.shape)
+    idx[dim] = perm  # Replace the corresponding dimension with permuted indices
+    return z[tuple(idx)]
