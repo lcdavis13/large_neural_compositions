@@ -782,8 +782,8 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 15
-    hp.max_epochs = 15
+    hp.min_epochs = 500
+    hp.max_epochs = 500
     hp.patience = 1100
     hp.early_stop = True
     
@@ -796,8 +796,7 @@ def main():
     hp.reptile_lr = 0.1
     hp.WD = 0.0
     hp.noise = 0.075
-    # hp.interpolate = True
-    hp.interpolate = False
+    hp.interpolate = True
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='run')
@@ -852,7 +851,11 @@ def main():
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),

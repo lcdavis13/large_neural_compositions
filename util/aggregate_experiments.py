@@ -1,6 +1,7 @@
 import os
 import glob
 import pandas as pd
+import re
 
 
 def load_and_process_csv_files(path_pattern):
@@ -9,6 +10,7 @@ def load_and_process_csv_files(path_pattern):
     grouping rows by the 'model' column to ensure rows with different 'model' values are not averaged together,
     averaging numeric columns within each group, and taking the first value for non-numeric columns.
     Additionally, compute summary statistics (median, standard deviation, min, and max) for the 'val_loss' column.
+    Extract the job number from the filename and include it as a column.
 
     Args:
         path_pattern (str): The file path pattern to match CSV files (e.g., '../results/hpsearch_cnode1_12-14/cNODE-paper-ocean-std_job*_experiments.csv')
@@ -28,6 +30,10 @@ def load_and_process_csv_files(path_pattern):
     
     for file_path in csv_files:
         try:
+            # Extract job number from the filename using regex
+            job_number_match = re.search(r'job(\d+)', os.path.basename(file_path))
+            job_number = int(job_number_match.group(1)) if job_number_match else None
+            
             # Load the CSV file
             df = pd.read_csv(file_path)
             
@@ -68,13 +74,12 @@ def load_and_process_csv_files(path_pattern):
                         'val_loss_max': None
                     }
                 
-                # Add the model value to the row if applicable
+                # Add the model value and job number to the row if applicable
+                processed_row = {'job_number': job_number}
                 if 'model' in df.columns:
-                    processed_row = {'model': model_value}
-                else:
-                    processed_row = {}
+                    processed_row['model'] = model_value
                 
-                # Combine the two dictionaries into one row
+                # Combine the dictionaries into one row
                 processed_row.update(averaged_data)
                 processed_row.update(first_value_data)
                 processed_row.update(val_loss_stats)
@@ -100,8 +105,9 @@ def save_master_csv(master_df, output_path):
     try:
         # Define the desired column order
         column_order = [
-            'model', 'mean_val_loss', 'LR', 'reptile_lr', 'minibatch_examples', 'noise', 'WD', 'mean_val_loss @ epoch', 'mean_val_loss @ time',
-            'mean_val_loss @ trn_loss', 'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
+            'dataset', 'model', 'mean_val_loss', 'LR', 'reptile_lr', 'minibatch_examples', 'noise', 'interpolate', 'WD',
+            'mean_val_loss @ epoch', 'mean_val_loss @ time',
+            'mean_val_loss @ trn_loss', 'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max', 'job_number'
         ]
         
         # Reorder columns if they exist in the DataFrame
@@ -111,7 +117,7 @@ def save_master_csv(master_df, output_path):
         
         master_df = master_df[ordered_columns]
         
-        # Sort by 'val_loss' in ascending order
+        # Sort by 'mean_val_loss' in ascending order
         if 'mean_val_loss' in master_df.columns:
             master_df = master_df.sort_values(by='mean_val_loss', ascending=True)
         
@@ -122,8 +128,8 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "../results/hpsearch_unstandardized_mostlyDuplicates/expt/"
-    path_pattern = f"{folder}cNODE-paper-ocean_job*_experiments.csv"
+    folder = "../results/hpsearch-slpmult-nointerp/expt/"
+    path_pattern = f"{folder}cNODE-paper-ocean*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     
     # Load, process, and concatenate all CSV files into a master DataFrame

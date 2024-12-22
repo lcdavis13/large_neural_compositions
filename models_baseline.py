@@ -85,6 +85,137 @@ class ConstOutputFilteredNormalized(nn.Module):
                 y[i, mask[i]] = f_normalized  # Assign normalized values back
         
         return y
+
+
+class SLPFilteredNormalized(nn.Module):
+    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N, M):
+        super().__init__()
+        self.f1 = nn.Linear(N, M)
+        self.relu = nn.ReLU()
+        self.f2 = nn.Linear(M, N)
+    
+    def forward(self, x):
+        # x is assumed to be batched with shape (batch_size, input_dim)
+        batch_size = x.shape[0]
+        input_dim = x.shape[1]
+        
+        f = self.f1(x)
+        f = self.relu(f)
+        f = self.f2(f)
+        
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(f)  # This will hold the output
+        
+        for i in range(batch_size):
+            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        
+        return y
+
+
+class SLPSumFilteredNormalized(nn.Module):
+    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N, M):
+        super().__init__()
+        self.f1 = nn.Linear(N, M)
+        self.relu = nn.ReLU()
+        self.f2 = nn.Linear(M, N)
+    
+    def forward(self, x):
+        # x is assumed to be batched with shape (batch_size, input_dim)
+        batch_size = x.shape[0]
+        input_dim = x.shape[1]
+        
+        f = self.f1(x)
+        f = self.relu(f)
+        f = self.f2(f)
+        f = x + f
+        
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(f)  # This will hold the output
+        
+        for i in range(batch_size):
+            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        
+        return y
+
+
+class SLPMultFilteredNormalized(nn.Module):
+    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N, M):
+        super().__init__()
+        self.f1 = nn.Linear(N, M)
+        self.relu = nn.ReLU()
+        self.f2 = nn.Linear(M, N)
+    
+    def forward(self, x):
+        # x is assumed to be batched with shape (batch_size, input_dim)
+        batch_size = x.shape[0]
+        input_dim = x.shape[1]
+        
+        f = self.f1(x)
+        f = self.relu(f)
+        f = self.f2(f)
+        f = x * f
+        
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(f)  # This will hold the output
+        
+        for i in range(batch_size):
+            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        
+        return y
+
+
+class SLPMultSumFilteredNormalized(nn.Module):
+    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N, M):
+        super().__init__()
+        self.f1 = nn.Linear(N, M)
+        self.relu = nn.ReLU()
+        self.f2 = nn.Linear(M, N)
+    
+    def forward(self, x):
+        # x is assumed to be batched with shape (batch_size, input_dim)
+        batch_size = x.shape[0]
+        input_dim = x.shape[1]
+        
+        f = self.f1(x)
+        f = self.relu(f)
+        f = self.f2(f)
+        f = (x * f) + x
+        
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(f)  # This will hold the output
+        
+        for i in range(batch_size):
+            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        
+        return y
     
     
 class SingleLayerPerceptron(nn.Module):
