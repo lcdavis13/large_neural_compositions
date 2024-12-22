@@ -110,7 +110,6 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     total_distr_error = 0.0
     total_samples = x_val.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
-    current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
         z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0,
@@ -411,68 +410,124 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
-
-def train_and_evaluate_model(LR, scaler, accumulated_minibatches, x_train, y_train, sample_data, noise, interpolate,
-                             device,
+def train_and_evaluate_model(LR, scaler, accumulated_minibatches, x_train, y_train, x_test, y_test,  noise, interpolate, device,
                              min_epochs, max_epochs, minibatch_examples, model_constr, model_args, model_name,
                              timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1):
     model = model_constr(model_args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=weight_decay)
     manager = epoch_managers.FixedManager(max_epochs=min_epochs)
-    
+
     base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=100, cooldown=100,
                                        threshold_mode='rel', threshold=0.01)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR)
-    
+
     print(f"Training model {model_name}")
-    
+
     # Train the model
     run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate,
-               scaler, x_train, y_train, sample_data[0:1], sample_data[1:2], timesteps, model_name, "", 0, loss_fn,
-               score_fn, distr_error_fn, device,
+               scaler, x_train, y_train, x_train[0:1], y_train[1:2], timesteps, model_name, "", 0, loss_fn, score_fn, distr_error_fn, device,
                outputs_per_epoch=10, verbosity=verbosity)
-    
+
     # Evaluate the model
-    l_sample, score_sample, penalty_sample = validate_epoch(model, sample_data[0:1], sample_data[1:2],
-                                                            minibatch_examples, timesteps, loss_fn,
+    l_sample, score_sample, penalty_sample = validate_epoch(model, x_test, y_test, minibatch_examples, timesteps, loss_fn,
                                                             score_fn, distr_error_fn, device)
-    
-    print(f"Sample Loss: {l_sample}, Sample Score: {score_sample}, Sample Distribution Error: {penalty_sample}")
-    
+
+    print(f"Test Loss: {l_sample}, Test Score: {score_sample}, Test Distribution Error: {penalty_sample}")
+
     return model, l_sample, score_sample, penalty_sample
 
 
 def main():
+    import argparse
+
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
-    
+
+    # Command-line argument for index
+    parser = argparse.ArgumentParser(description='run')
+    parser.add_argument('--index', type=int, required=False, help='Index for the configuration to use')
+    args = parser.parse_args()
+    args.index = 0
+
+    # Predefined configurations
+    configurations = [
+        {
+            "model": "baseline-SLPMultShaped",
+            "noise_level": 0.075,
+            "supervised_interpolation": True,
+            "learning_rate": 0.1,
+            "reptile_rate": 0.01,
+            "epochs": 2
+        },
+        {
+            "model": "baseline-SLPMultShaped",
+            "noise_level": 0.075,
+            "supervised_interpolation": True,
+            "learning_rate": 0.1,
+            "reptile_rate": 0.01,
+            "epochs": 345
+        },
+        {
+            "model": "baseline-SLPMultShaped",
+            "noise_level": 0.0,
+            "supervised_interpolation": False,
+            "learning_rate": 0.1,
+            "reptile_rate": 1.0,
+            "epochs": 34
+        },
+        {
+            "model": "cNODE1",
+            "noise_level": 0.075,
+            "supervised_interpolation": True,
+            "learning_rate": 0.1,
+            "reptile_rate": 0.5,
+            "epochs": 233
+        },
+        {
+            "model": "cNODE1",
+            "noise_level": 0.0,
+            "supervised_interpolation": False,
+            "learning_rate": 0.1,
+            "reptile_rate": 1.0,
+            "epochs": 68
+        }
+    ]
+
+    # Load selected configuration
+    config = configurations[args.index]
+
     # Data
     dataname = "cNODE-paper-ocean-std"
     filepath_train = f'data/{dataname}_train.csv'
     filepath_test = f'data/{dataname}_test.csv'
     x_train, y_train = data.load_data(filepath_train, device)
     x_test, y_test = data.load_data(filepath_test, device)
-    
+
     print(f'Training data shape: {x_train.shape}')
     print(f'Testing data shape: {x_test.shape}')
-    
-    # Select a single sample for evaluation
-    sample_data = (x_train[0:1], y_train[0:1])
-    
+
+    # Set hyperparameters from config
+    model_name = config["model"]
+    noise_level = config["noise_level"]
+    supervised_interpolation = config["supervised_interpolation"]
+    learning_rate = config["learning_rate"]
+    reptile_rate = config["reptile_rate"]
+    epochs = config["epochs"]
+
     # Hyperparameters
     hp = dicy()
     hp.solver = os.getenv("SOLVER")
-    hp.min_epochs = 500
-    hp.max_epochs = 500
+    hp.min_epochs = epochs
+    hp.max_epochs = epochs
     hp.minibatch_examples = 20
     hp.accumulated_minibatches = 1
-    hp.LR = 0.1
+    hp.LR = learning_rate
     hp.WD = 0.0
-    hp.noise = 0.075
-    hp.interpolate = True
+    hp.noise = noise_level
+    hp.interpolate = supervised_interpolation
     hp.ode_timesteps = 30
-    
+
     # Model shape hyperparameters
     _, hp.data_dim = x_train.shape
     hp.hidden_dim = math.isqrt(hp.data_dim)
@@ -480,29 +535,33 @@ def main():
     hp.num_heads = 4
     hp.depth = 2
     hp.ffn_dim_multiplier = 0.5
-    
+
     # Specify model(s) for experiment
-    model_name = 'baseline-SLPShaped'
-    model_constr = lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim)
+    if model_name == 'baseline-SLPMultShaped':
+        model_constr = lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim)
+    elif model_name == 'cNODE1':
+        model_constr = lambda args: models.cNODE1(hp.data_dim)
+    else:
+        raise ValueError(f"Unsupported model: {model_name}")
+
     model_args = {}
-    
+
     # Loss and evaluation functions
     loss_fn = loss_bc
     score_fn = loss_bc
     distr_error_fn = distribution_error
-    
+
     scaler = torch.cuda.amp.GradScaler()
-    
+
     # Time steps
     ode_timemax = 1.0
     ode_stepsize = ode_timemax / hp.ode_timesteps
     timesteps = torch.arange(0.0, ode_timemax + 0.1 * ode_stepsize, ode_stepsize).to(device)
-    
+
     # Train and evaluate the model
-    train_and_evaluate_model(hp.LR, scaler, hp.accumulated_minibatches, x_train, y_train, sample_data, hp.noise,
+    train_and_evaluate_model(hp.LR, scaler, hp.accumulated_minibatches, x_train, y_train, x_test, y_test, hp.noise,
                              hp.interpolate, device, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr,
                              model_args, model_name, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4)
-
 
 if __name__ == "__main__":
     main()
