@@ -613,7 +613,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         model = model_constr(model_args).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR * LR_start_factor, weight_decay=weight_decay)
         # optimizer = torch.optim.SGD(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
-        manager = epoch_managers.FixedManager(max_epochs=min_epochs)
+        # manager = epoch_managers.FixedManager(max_epochs=min_epochs)
+        manager = epoch_managers.ExplosionManager(memory=0.5, threshold=1.0, mode="rel", max_epochs=max_epochs)
         # manager = epoch_managers.ConvergenceManager(memory=0.1, threshold=0.001, mode="const", min_epochs=min_epochs, max_epochs=max_epochs)
         
         x_train, y_train, x_valid, y_valid = data_fold
@@ -1167,7 +1168,8 @@ def main():
         # training_curves is a list of dictionaries, convert to a dataframe
         all_data = [entry for fold in training_curves for entry in fold]
         df = pd.DataFrame(all_data)
-        average_metrics = df.groupby('epoch').mean(numeric_only=True).reset_index()
+        df_clean = df.dropna(subset=['val_loss'])
+        average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
         min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
         best_epoch_metrics = min_val_loss_epoch.to_dict()
         
