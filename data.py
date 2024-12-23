@@ -19,50 +19,45 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
     Returns:
         torch.Tensor: A tensor of the same shape as mean_values, containing sampled values from the Beta distribution.
     """
-    # Ensure input is a torch tensor
     if peak_stddev <= 0:
         return mean_values
     
     if not isinstance(mean_values, torch.Tensor):
         raise TypeError("mean_values must be a torch.Tensor")
+        
+        # Handle edge cases for mean values near 0 and 1
+    near_zero_mask = mean_values <= 0
+    near_one_mask = mean_values >= 1
     
-    # Replace 0s and 1s with 0.5 temporarily to avoid issues in the Beta distribution
-    adjusted_means = torch.where(mean_values <= 0, torch.full_like(mean_values, 0.5), mean_values)
-    adjusted_means = torch.where(mean_values >= 1, torch.full_like(mean_values, 0.5), adjusted_means)
+    # Replace invalid values with temporary safe values for Beta computation
+    safe_means = mean_values.clone()
+    safe_means[near_zero_mask] = 0.5
+    safe_means[near_one_mask] = 0.5
     
-    # Mask values that are within the range (0, 1)
-    valid_mask = (mean_values > 0) & (mean_values < 1)
+    # Compute standard deviation and variance
+    stddev = torch.sin(safe_means * torch.pi) * peak_stddev
+    var = stddev.square()
     
-    # Calculate the standard deviation for each valid mean value
-    stddev = torch.sin(adjusted_means * torch.pi) * peak_stddev
+    # Compute Beta parameters
+    k = safe_means * (1 - safe_means) / var - 1
+    alpha = safe_means * k
+    beta_param = (1 - safe_means) * k
     
-    # Calculate the variance
-    var = stddev ** 2
+    # Handle invalid Beta parameters (NaNs or negative values)
+    valid_mask = (alpha > 0) & (beta_param > 0)
+    alpha[~valid_mask] = 1.0
+    beta_param[~valid_mask] = 1.0
     
-    # Calculate the Beta distribution parameters alpha and beta
-    k = adjusted_means * (1.0 - adjusted_means) / var - 1.0
+    # Sample values from Beta distribution
+    beta_dist = torch.distributions.Beta(alpha, beta_param)
+    sampled_values = beta_dist.sample()
     
-    alpha = adjusted_means * k
-    beta_param = (1 - adjusted_means) * k
-    
-    if torch.any(torch.isnan(alpha)) or torch.any(torch.isnan(beta_param)):
-        print(f"NaN detected in alpha or beta param")
-        # find the index of the NaN value
-        nan_idx = torch.isnan(alpha) | torch.isnan(beta_param)
-        # print(f"NaN index: {mean_values[nan_idx]}")
-        print(f"mean_values with NaN: {mean_values[nan_idx]}")
-    
-    # Sample from the Beta distribution for each mean value that is within (0, 1)
-    sampled_values_within_range = torch.distributions.Beta(alpha, beta_param).sample()
-    
-    # Only update the sampled values for elements where 0 < mean < 1
-    sampled_values = torch.where(valid_mask, sampled_values_within_range, mean_values)
-    
-    # Restore 0s and 1s to their original values
-    sampled_values = torch.where(mean_values <= 0, torch.zeros_like(mean_values), sampled_values)
-    sampled_values = torch.where(mean_values >= 1, torch.ones_like(mean_values), sampled_values)
+    # Restore original 0 and 1 for edge cases
+    sampled_values[near_zero_mask] = 0.0
+    sampled_values[near_one_mask] = 1.0
     
     return sampled_values
+
 
 
 def normalize(x, transposed=False):
@@ -144,49 +139,32 @@ def check_leakage(folded_data):
     return True
 
 
-import torch
-
-
 def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False):
     """Returns a batch of data of size `mb_size` starting from `current_index`,
     with optional noise augmentation for x and y, and returns a tensor z with interpolation according to t."""
-    
-    # Calculate end index for the batch
-    end_index = current_index + mb_size
-    if end_index > x.size(0):
-        end_index = x.size(0)
-    
-    # Get indices for the batch
-    batch_indices = torch.arange(current_index, end_index, dtype=torch.long)
-    x_batch = x[batch_indices, :]
-    y_batch = y[batch_indices, :]
-    
-    # Optionally apply noise and normalization to x_batch and y_batch
+    end_index = min(current_index + mb_size, x.size(0))
+    batch_indices = torch.arange(current_index, end_index, dtype=torch.long, device=x.device)
+    x_batch = x[batch_indices]
+    y_batch = y[batch_indices]
+
     if interpolate_noise:
         if noise_level_x > 0:
-            x_batch = resample_noisy(x_batch, noise_level_x)
-            x_batch = normalize(x_batch)
-        
+            x_batch = normalize(resample_noisy(x_batch, noise_level_x))
         if noise_level_y > 0:
-            y_batch = resample_noisy(y_batch, noise_level_y)
-            y_batch = normalize(y_batch)
-    
-    # Create tensor z with an extra outside dimension with the same length as t
-    t = t.view(-1, 1, 1)  # Reshape t to (len(t), 1, 1) for broadcasting
-    
-    # Interpolate linearly between x_batch and y_batch according to t
-    z = (1 - t) * x_batch.unsqueeze(0) + t * y_batch.unsqueeze(0)  # Shape: (len(t), mb_size, x.size(1))
+            y_batch = normalize(resample_noisy(y_batch, noise_level_y))
 
-    # Optionally apply noise to all elements of z
+    # Prepare for interpolation
+    t = t.view(-1, 1, 1)  # Reshape t to (len(t), 1, 1) for broadcasting
+    z = (1 - t) * x_batch.unsqueeze(0) + t * y_batch.unsqueeze(0)
+
     if not interpolate_noise:
-        # Interpolate noise levels according to t, and use to independently resample each timestep of z
-        t = t.squeeze()
-        noise_level = (1 - t) * noise_level_x + t * noise_level_y
+        # Interpolate noise levels and apply noise to z
+        noise_level = (1 - t.squeeze()) * noise_level_x + t.squeeze() * noise_level_y
         for i in range(z.size(0)):
-            z[i] = resample_noisy(z[i], noise_level[i].item())
-            z[i] = normalize(z[i])
-    
+            z[i] = normalize(resample_noisy(z[i], noise_level[i].item()))
+
     return z, end_index
+
 
 
 def shuffle_data(x, y):
