@@ -783,8 +783,8 @@ def main():
     
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 500
-    hp.max_epochs = 500
+    hp.min_epochs = 200
+    hp.max_epochs = 200
     hp.patience = 1100
     hp.early_stop = True
     
@@ -857,11 +857,14 @@ def main():
     assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
     
     
-    reeval_train = True # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
+    reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
+        'canODE': lambda args: models_condensed.canODE(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"],
+                                             depth=args["depth"], ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"], dropout=args["dropout"]),
+        
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
@@ -923,8 +926,6 @@ def main():
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
-        'canODE': lambda args: models_condensed.canODE(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"],
-                                             depth=args["depth"], ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"]),
         
         # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -1024,7 +1025,7 @@ def main():
     for model_name, model_constr in models_to_test.items():
         
         model_args = {"hidden_dim": hp.hidden_dim, "attend_dim": hp.attend_dim, "num_heads": hp.num_heads,
-                      "depth": hp.depth, "ffn_dim_multiplier": hp.ffn_dim_multiplier}
+                      "depth": hp.depth, "ffn_dim_multiplier": hp.ffn_dim_multiplier, "dropout": hp.dropout}
         
         # # TODO remove this: it's just to resume from where we were previously
         # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
