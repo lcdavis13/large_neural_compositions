@@ -788,7 +788,7 @@ def main():
     hp.patience = 1100
     hp.early_stop = True
     
-    hp.ode_timesteps = 30
+    hp.ode_timesteps = 15
     
     # optimization hyperparameters
     hp.minibatch_examples = 20
@@ -798,6 +798,15 @@ def main():
     hp.WD = 0.0
     hp.noise = 0.075
     hp.interpolate = True
+    
+    # model shape hyperparameters
+    _, hp.data_dim = x.shape
+    hp.hidden_dim = math.isqrt(hp.data_dim) * 2
+    hp.attend_dim = 16  # math.isqrt(hidden_dim)
+    hp.num_heads = 2
+    hp.depth = 3
+    hp.ffn_dim_multiplier = 4.0
+    hp.dropout = 0.5
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='run')
@@ -813,6 +822,12 @@ def main():
     parser.add_argument('--noise', default=hp.noise, help='noise level')
     parser.add_argument('--ode_steps', default=hp.ode_timesteps, help='number of ODE timesteps')
     parser.add_argument('--interpolate', default=int(hp.interpolate), help='whether or not to use supervised interpolation steps, 0 or 1')
+    parser.add_argument('--num_heads', default=hp.num_heads, help='number of attention heads')
+    parser.add_argument('--hidden_dim', default=hp.hidden_dim, help='hidden dimension')
+    parser.add_argument('--attend_dim', default=hp.attend_dim, help='attention dimension')
+    parser.add_argument('--depth', default=hp.depth, help='depth of model')
+    parser.add_argument('--ffn_dim_multiplier', default=hp.ffn_dim_multiplier, help='multiplier for ffn dimension')
+    parser.add_argument('--dropout', default=hp.dropout, help='dropout rate')
     
     
     args = parser.parse_args()
@@ -826,23 +841,21 @@ def main():
     hp.noise = float(args.noise)
     hp.ode_timesteps = int(args.ode_steps)
     hp.interpolate = bool(int(args.interpolate))
+    hp.num_heads = int(args.num_heads)
+    hp.hidden_dim = int(args.hidden_dim)
+    hp.attend_dim = int(args.attend_dim)
+    hp.depth = int(args.depth)
+    hp.ffn_dim_multiplier = float(args.ffn_dim_multiplier)
+    hp.dropout = float(args.dropout)
     
     jobid = int(args.jobid.split('_')[0])
     jobstring = f"_job{jobid}" if jobid >= 0 else ""
     
     if args.headless:
         plotstream.set_headless()
-    
-    
-    
-    # model shape hyperparameters
-    _, hp.data_dim = x.shape
-    hp.hidden_dim = math.isqrt(hp.data_dim)
-    hp.attend_dim = 16  # math.isqrt(hidden_dim)
-    hp.num_heads = 4
-    hp.depth = 2
-    hp.ffn_dim_multiplier = 0.5
+
     assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+    
     
     reeval_train = True # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
     
@@ -852,11 +865,11 @@ def main():
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
-        'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        # 'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        # 'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        # 'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        # 'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
         # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
@@ -906,9 +919,12 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
         # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
+        
+        'canODE': lambda args: models_condensed.canODE(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"],
+                                             depth=args["depth"], ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"]),
         
         # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
@@ -926,6 +942,7 @@ def main():
         # 'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
         # 'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
         
+        # 'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(hp.data_dim), # for testing, identical to cNODE1
         # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
         # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(hp.data_dim), # sanity test, this is the same as cNODE2 but less optimized

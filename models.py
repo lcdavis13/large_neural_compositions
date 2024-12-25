@@ -4,7 +4,7 @@ from ode_solver import odeint
 
 class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
     def __init__(self, N):
-        super(ODEFunc_cNODE2, self).__init__()
+        super().__init__()
         self.fcc1 = nn.Linear(N, N)
         # self.bn1 = nn.BatchNorm1d(N)
         self.fcc2 = nn.Linear(N, N)
@@ -25,7 +25,7 @@ class cNODE2(nn.Module):
     def __init__(self, N):
         self.USES_ODEINT = True
         
-        super(cNODE2, self).__init__()
+        super().__init__()
         self.func = ODEFunc_cNODE2(N)
     
     def forward(self, t, x):
@@ -35,7 +35,7 @@ class cNODE2(nn.Module):
 
 class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
     def __init__(self, N):
-        super(ODEFunc_cNODE1, self).__init__()
+        super().__init__()
         self.fcc1 = nn.Linear(N, N)
     
     def forward(self, t, x):
@@ -55,7 +55,7 @@ class cNODE1(nn.Module):
     def __init__(self, N):
         self.USES_ODEINT = True
         
-        super(cNODE1, self).__init__()
+        super().__init__()
         self.func = ODEFunc_cNODE1(N)
     
     def forward(self, t, x):
@@ -72,7 +72,7 @@ class Embedded_cNODE2(nn.Module):
     def __init__(self, N, M):
         self.USES_ODEINT = True
         
-        super(Embedded_cNODE2, self).__init__()
+        super().__init__()
         self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
         # self.softmax = nn.Softmax(dim=-1)
         self.func = ODEFunc_cNODE2(M)
@@ -90,7 +90,7 @@ class Embedded_cNODE2(nn.Module):
 
 class ODEFunc_cNODEGen_ConstructedFitness(nn.Module):  # cNODE2 with generalized f(x), specified via a constructor for the f(x) object passed during construction
     def __init__(self, f_constr):
-        super(ODEFunc_cNODEGen_ConstructedFitness, self).__init__()
+        super().__init__()
         self.f = f_constr()
     
     def forward(self, t, x):
@@ -107,7 +107,7 @@ class cNODEGen_ConstructedFitness(nn.Module):
     def __init__(self, f_constr):
         self.USES_ODEINT = True
         
-        super(cNODEGen_ConstructedFitness, self).__init__()
+        super().__init__()
         self.func = ODEFunc_cNODEGen_ConstructedFitness(f_constr)
     
     def forward(self, t, x):
@@ -117,7 +117,7 @@ class cNODEGen_ConstructedFitness(nn.Module):
 
 class ODEFunc_cNODEGen_FnFitness(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
     def __init__(self, f):
-        super(ODEFunc_cNODEGen_FnFitness, self).__init__()
+        super().__init__()
         self.f = f
     
     def forward(self, t, x):
@@ -133,7 +133,7 @@ class cNODEGen_FnFitness(nn.Module):
     def __init__(self, f):
         self.USES_ODEINT = True
         
-        super(cNODEGen_FnFitness, self).__init__()
+        super().__init__()
         self.func = ODEFunc_cNODEGen_FnFitness(f)
     
     def forward(self, t, x):
@@ -143,7 +143,7 @@ class cNODEGen_FnFitness(nn.Module):
 
 class ODEFunc_cNODEGen_FnFitness_Args(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
     def __init__(self, f):
-        super(ODEFunc_cNODEGen_FnFitness_Args, self).__init__()
+        super().__init__()
         self.f = f
     
     def forward(self, t, x, args):
@@ -160,7 +160,7 @@ class cNODE2_FnFitness(nn.Module):
     def __init__(self, N):
         self.USES_ODEINT = True
         
-        super(cNODE2_FnFitness, self).__init__()
+        super().__init__()
         f = nn.Sequential(
             nn.Linear(N, N),
             nn.Linear(N, N)
@@ -190,7 +190,7 @@ class cNODE2_ExternalFitness(nn.Module):
     def __init__(self, N):
         self.USES_ODEINT = True
         
-        super(cNODE2_ExternalFitness, self).__init__()
+        super().__init__()
         self.func = ODEFunc_cNODEGen_ExternalFitness()
         self.fcc1 = nn.Linear(N, N)
         self.fcc2 = nn.Linear(N, N)
@@ -199,6 +199,35 @@ class cNODE2_ExternalFitness(nn.Module):
         fx = self.fcc1(x)
         fx = self.fcc2(fx)
         y = odeint(lambda x,t: self.func(x,t,fx), x, t)
+        return y
+
+
+class ODEFunc_cNODEGen_ExternalFitnessFn(nn.Module):
+    # cNODE2 with generalized f(x0), computed by calling context at runtime
+    # Note that, while f(x0) can be a function of the initial vector x0, it cannot be a function of the evolving value x
+    # as the ODE is evaluated, unlike normal implementations of cNODE.
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, t, x, Fn):
+        fitness = Fn(x)
+        xT_fx = torch.sum(x * fitness, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
+        diff = fitness - xT_fx  # B x N
+        dxdt = torch.mul(x, diff)  # B x N
+        
+        return dxdt  # B x N
+
+
+class cNODE2_ExternalFitnessFn(nn.Module):
+    def __init__(self, N):
+        self.USES_ODEINT = True
+        
+        super().__init__()
+        self.func = ODEFunc_cNODEGen_ExternalFitnessFn()
+        self.Fn = nn.Linear(N, N)
+    
+    def forward(self, t, x):
+        y = odeint(lambda x,t: self.func(x,t,self.Fn), x, t)
         return y
 
 
@@ -216,7 +245,7 @@ class cNODE2_ExternalFitness(nn.Module):
 
 class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
     def __init__(self, N):
-        super(ODEFunc_cNODE2_DKI, self).__init__()
+        super().__init__()
         self.fcc1 = nn.Linear(N, N)
         self.fcc2 = nn.Linear(N, N)
 
@@ -232,7 +261,7 @@ class cNODE2_DKI(nn.Module):
     def __init__(self, N):
         self.USES_ODEINT = True
         
-        super(cNODE2_DKI, self).__init__()
+        super().__init__()
         self.func = ODEFunc_cNODE2_DKI(N)
 
     def forward(self, t, x):
