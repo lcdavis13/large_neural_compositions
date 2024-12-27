@@ -4,24 +4,38 @@ import torch.nn as nn
 from ode_solver import odeint
 import models
 
+# TODO: Putting a setting here is a hacky shortcut. But ideally this should be addressed at the data preprocessing level instead of doing it dynamically, since it's expensive to do at runtime.
+#  The complication is that we then need to dynamically select from condensed or non-condensed versions of the dataset depending on the model being trained.
+#  We'd also have to use a fixed condensed dimension with padding to equalize them all, so it might be worth it to dynimcally trim off the last dimensions from batches even after moving the rest of the condensiing process to preprocessing.
+needs_condense = False
+
 
 def condense(x):
-    device = x.device
-    batch_size = x.size(0)
-    max_len = max(torch.sum(x[i] != 0).item() for i in range(batch_size))
+    if needs_condense:
     
-    padded_values = torch.zeros(batch_size, max_len, dtype=x.dtype, device=device)
-    padded_positions = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
-    
-    for i in range(batch_size):
-        positions = torch.nonzero(x[i], as_tuple=True)[0]
-        values = x[i][positions]
-        len_values = len(values)
+        device = x.device
+        batch_size = x.size(0)
+        max_len = max(torch.sum(x[i] != 0).item() for i in range(batch_size))
         
-        padded_values[i, :len_values] = values
-        padded_positions[i, :len_values] = positions + 1  # Adjust positions by 1
+        padded_values = torch.zeros(batch_size, max_len, dtype=x.dtype, device=device)
+        padded_positions = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
+        
+        for i in range(batch_size):
+            positions = torch.nonzero(x[i], as_tuple=True)[0]
+            values = x[i][positions]
+            len_values = len(values)
+            
+            padded_values[i, :len_values] = values
+            padded_positions[i, :len_values] = positions + 1  # Adjust positions by 1
+        
+        return padded_values, padded_positions
     
-    return padded_values, padded_positions
+    else:
+        pos = torch.arange(1, x.size(1) + 1, device=x.device)
+        # multiply by 0 or 1 depending on if the value is 0 or not
+        pos = pos * (x != 0).long()
+        
+        return x, pos
 
 
 def decondense(values, positions, size):
@@ -38,30 +52,35 @@ def decondense(values, positions, size):
     Returns:
         torch.Tensor: Decondensed tensor with shape (..., size).
     """
-    device = values.device
-    positions = positions.unsqueeze(0).expand(values.shape[0], -1, -1)
-    batch_dims = values.shape[:-1]  # All dimensions except the last
-    batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
-    y_shape = (*batch_dims, size)  # Shape of the output tensor
-    y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
     
-    # Reshape to flatten batch dimensions, treating them as a single batch
-    values_flat = values.reshape(batch_size, -1)
-    positions_flat = positions.reshape(batch_size, -1)
-    y_flat = y.reshape(batch_size, size)
-    
-    for i in range(batch_size):
-        valid_positions = positions_flat[i]  # Extract positions for this batch item
-        valid_positions = valid_positions[valid_positions > 0]  # Remove any zero positions
-        valid_positions -= 1  # Adjust positions to be zero-indexed
-        len_valid = len(valid_positions)
+    if needs_condense:
+        device = values.device
+        positions = positions.unsqueeze(0).expand(values.shape[0], -1, -1)
+        batch_dims = values.shape[:-1]  # All dimensions except the last
+        batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
+        y_shape = (*batch_dims, size)  # Shape of the output tensor
+        y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
         
-        y_flat[i][valid_positions[:len_valid]] = values_flat[i][:len_valid]  # Place the values at the valid positions
+        # Reshape to flatten batch dimensions, treating them as a single batch
+        values_flat = values.reshape(batch_size, -1)
+        positions_flat = positions.reshape(batch_size, -1)
+        y_flat = y.reshape(batch_size, size)
+        
+        for i in range(batch_size):
+            valid_positions = positions_flat[i]  # Extract positions for this batch item
+            valid_positions = valid_positions[valid_positions > 0]  # Remove any zero positions
+            valid_positions -= 1  # Adjust positions to be zero-indexed
+            len_valid = len(valid_positions)
+            
+            y_flat[i][valid_positions[:len_valid]] = values_flat[i][:len_valid]  # Place the values at the valid positions
+        
+        # Reshape y back to original batch dimensions
+        y = y_flat.view(*y_shape)
+        
+        return y
     
-    # Reshape y back to original batch dimensions
-    y = y_flat.view(*y_shape)
-    
-    return y
+    else:
+        return values
 
 
 class cAttend_simple(nn.Module):

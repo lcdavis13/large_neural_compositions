@@ -147,16 +147,18 @@ def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=
     x_batch = x[batch_indices]
     y_batch = y[batch_indices]
 
+    # interpolated (not independent) noise
     if interpolate_noise:
         if noise_level_x > 0:
             x_batch = normalize(resample_noisy(x_batch, noise_level_x))
         if noise_level_y > 0:
             y_batch = normalize(resample_noisy(y_batch, noise_level_y))
 
-    # Prepare for interpolation
+    # Interpolate
     t = t.view(-1, 1, 1)  # Reshape t to (len(t), 1, 1) for broadcasting
     z = (1 - t) * x_batch.unsqueeze(0) + t * y_batch.unsqueeze(0)
 
+    # Independent noise
     if not interpolate_noise:
         # Interpolate noise levels and apply noise to z
         noise_level = (1 - t.squeeze()) * noise_level_x + t.squeeze() * noise_level_y
