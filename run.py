@@ -90,9 +90,9 @@ def loss_bc_unbounded(y_pred, y_true, avg_richness, epsilon=1e-10):
 def distribution_error(x):  # penalties for invalid distributions
     a = 1.0
     b = 1.0
-    feature_penalty = torch.sum(torch.clamp(torch.abs(x - 0.5) - 0.5, min=0.0)) / x.shape[
-        0]  # each feature penalized for distance from range [0,1]
-    sum_penalty = torch.sum(torch.abs(torch.sum(x, dim=1) - 1.0)) / x.shape[0]  # sum penalized for distance from 1.0
+    feature_penalty = torch.sum(torch.clamp(torch.abs(x - 0.5) - 0.5, min=0.0))  # each feature penalized for distance from range [0,1]. Currently not normalized.
+    sum_penalty = torch.sum(torch.abs(torch.sum(x, dim=-1) - 1.0))  # sum penalized for distance from 1.0
+    # normalize by the product of all dimensions except the final one?
     return a * feature_penalty + b * sum_penalty
 
 
@@ -111,7 +111,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
-        z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0)
+        z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
         x, y = z[0], z[-1]
         mb_examples = x.size(0)
         
@@ -160,7 +160,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)  #
+        z, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, requires_timesteps=supervise_steps)  #
         mb_examples = z.shape[-2]
         
         if current_index >= total_samples:
@@ -795,14 +795,14 @@ def main():
     hp.accumulated_minibatches = 1
     hp.LR = 0.1
     hp.reptile_lr = 0.1
-    hp.WD = 0.0
+    hp.WD_factor = 0.0
     hp.noise = 0.075
     hp.interpolate = True
     
     # model shape hyperparameters
     _, hp.data_dim = x.shape
     hp.hidden_dim = math.isqrt(hp.data_dim) * 2
-    hp.attend_dim = 16  # math.isqrt(hidden_dim)
+    hp.attend_dim_per_head = 4
     hp.num_heads = 2
     hp.depth = 3
     hp.ffn_dim_multiplier = 4.0
@@ -818,13 +818,13 @@ def main():
     parser.add_argument('--mb', default=hp.minibatch_examples, help='minibatch size')
     parser.add_argument('--lr', default=hp.LR, help='learning rate')
     parser.add_argument('--reptile_rate', default=hp.reptile_lr, help='reptile outer-loop learning rate')
-    parser.add_argument('--wd', default=hp.WD, help='weight decay')
+    parser.add_argument('--wd_factor', default=hp.WD_factor, help='weight decay factor (multiple of LR)')
     parser.add_argument('--noise', default=hp.noise, help='noise level')
     parser.add_argument('--ode_steps', default=hp.ode_timesteps, help='number of ODE timesteps')
     parser.add_argument('--interpolate', default=int(hp.interpolate), help='whether or not to use supervised interpolation steps, 0 or 1')
     parser.add_argument('--num_heads', default=hp.num_heads, help='number of attention heads')
     parser.add_argument('--hidden_dim', default=hp.hidden_dim, help='hidden dimension')
-    parser.add_argument('--attend_dim', default=hp.attend_dim, help='attention dimension')
+    parser.add_argument('--attend_dim_per_head', default=hp.attend_dim_per_head, help='attention dimension')
     parser.add_argument('--depth', default=hp.depth, help='depth of model')
     parser.add_argument('--ffn_dim_multiplier', default=hp.ffn_dim_multiplier, help='multiplier for ffn dimension')
     parser.add_argument('--dropout', default=hp.dropout, help='dropout rate')
@@ -837,16 +837,20 @@ def main():
     hp.minibatch_examples = int(args.mb)
     hp.LR = float(args.lr)
     hp.reptile_lr = float(args.reptile_rate)
-    hp.WD = float(args.wd)
+    hp.WD_factor = float(args.wd_factor)
     hp.noise = float(args.noise)
     hp.ode_timesteps = int(args.ode_steps)
     hp.interpolate = bool(int(args.interpolate))
     hp.num_heads = int(args.num_heads)
     hp.hidden_dim = int(args.hidden_dim)
-    hp.attend_dim = int(args.attend_dim)
+    hp.attend_dim_per_head = int(args.attend_dim_per_head)
     hp.depth = int(args.depth)
     hp.ffn_dim_multiplier = float(args.ffn_dim_multiplier)
     hp.dropout = float(args.dropout)
+    
+    hp.WD = hp.LR * hp.WD_factor
+    hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+    hp.hidden_middle_dim = (hp.hidden_dim + hp.data_dim) // 2
     
     jobid = int(args.jobid.split('_')[0])
     jobstring = f"_job{jobid}" if jobid >= 0 else ""
@@ -862,16 +866,25 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'canODE': lambda args: models_condensed.canODE(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"],
-                                             depth=args["depth"], ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"], dropout=args["dropout"]),
+        'canODE': lambda args: models_condensed.canODE_GenerateFitMat(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"], depth=args["depth"],
+                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"], dropout=args["dropout"]),
+        'transformer': lambda args: models_condensed.JustATransformer(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"],
+                                                                      num_heads=args["num_heads"], depth=args["depth"],
+                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"],
+                                                                      dropout=args["dropout"]),
+        'transformShaped': lambda args: models_condensed.TransformerNormalized(data_dim=hp.data_dim,
+                                                                      id_embed_dim=args["attend_dim"],
+                                                                      num_heads=args["num_heads"], depth=args["depth"],
+                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"],
+                                                                      dropout=args["dropout"]),
         
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
         # 'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        # 'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
@@ -922,8 +935,8 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
-        # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
+        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
         

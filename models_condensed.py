@@ -381,7 +381,7 @@ class canODE_transformer_static(nn.Module):  # compositional attention nODE
         id_embed = self.embed(pos)
         
         h = self.transformer(id_embed)
-        fx = self.decode(h).squeeze();
+        fx = self.decode(h).squeeze()
         
         y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)
         
@@ -389,8 +389,10 @@ class canODE_transformer_static(nn.Module):  # compositional attention nODE
         return y
 
 
-class canODE(nn.Module):  # compositional attention neural ODE
+class canODE_GenerateFitMat(nn.Module):
     '''
+    Version of canODE that learns to directly generate a fitness interaction matrix
+    
     1. Create condensed embedding
     2. Enrich embeddings with transformer encoder
     3. Create a fitness interaction matrix using embedded scaled dot product similarity (a subcomponent of attention)
@@ -434,6 +436,84 @@ class canODE(nn.Module):  # compositional attention neural ODE
         fitnessFn = lambda h: torch.einsum('...ij, ...i -> ...j', fitmatrix, h) + fitbias
         
         y = odeint(lambda xo, to: self.ode_func(xo, to, fitnessFn), val, t)
+        
+        y = decondense(y, pos, self.data_dim)
+        return y
+    
+    
+class JustATransformer(nn.Module):
+    '''
+    Use a transformer to directly predict the final relative abundances from the input.
+    The only thing unconventional for transformers is basics of working with our data structure:
+    - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
+    - We condense & decondense the sequence if applicable
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
+        
+        # define the transformer
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+    
+    def forward(self, x):
+        val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        
+        # concatenate the value onto the id embedding
+        h0 = torch.cat((val.unsqueeze(-1), id_embed), -1)
+        
+        h = self.transform(h0)
+        
+        # extract the value from the transformer output
+        y = h[..., 0]
+        
+        y = decondense(y, pos, self.data_dim)
+        return y
+    
+class TransformerNormalized(nn.Module):
+    '''
+    Use a transformer to directly predict the final relative abundances from the input.
+    This model normalizes the output to sum to 1 in addition to the following:
+    - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
+    - We condense & decondense the sequence if applicable
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
+        
+        # define the transformer
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+    
+    def forward(self, x):
+        val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        
+        # concatenate the value onto the id embedding
+        h0 = torch.cat((val.unsqueeze(-1), id_embed), -1)
+        
+        h = self.transform(h0)
+        
+        # extract the value from the transformer output
+        y = h[..., 0]
+        
+        # normalize the output to sum to 1
+        y = nn.functional.softmax(y, dim=-1)
         
         y = decondense(y, pos, self.data_dim)
         return y

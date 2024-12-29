@@ -139,13 +139,16 @@ def check_leakage(folded_data):
     return True
 
 
-def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False):
+def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True):
     """Returns a batch of data of size `mb_size` starting from `current_index`,
     with optional noise augmentation for x and y, and returns a tensor z with interpolation according to t."""
     end_index = min(current_index + mb_size, x.size(0))
     batch_indices = torch.arange(current_index, end_index, dtype=torch.long, device=x.device)
     x_batch = x[batch_indices]
     y_batch = y[batch_indices]
+    
+    if not requires_timesteps:
+        t = torch.tensor([t[0], t[-1]]).to(x.device)
 
     # interpolated (not independent) noise
     if interpolate_noise:
