@@ -1,89 +1,92 @@
 #!/bin/bash
+# See https://slurm.schedmd.com/job_array.html
 
+#SBATCH --job-name=cnode-hpsearch
+#SBATCH --array=0-863  ## Make sure this is enough for all hyperparam/fold combos
 
-#SBATCH --output=slurm_out/%A/%A_%a.out    # Output files in job-specific folder
-#SBATCH --error=slurm_out/%A/%A_%a.err     # Error files in job-specific folder
-
-##SBATCH --gpus-per-node=1
+#SBATCH --time=0-04:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --partition=gpu
+#SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
 ##SBATCH --gpus-per-node=NV-L40:1
-#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
 
+#SBATCH --output=slurm_out/%A/%A_%a.out
+#SBATCH --error=slurm_out/%A/%A_%a.err
+#SBATCH --cpus-per-task=1
 ##SBATCH --mail-type=FAIL
 ##SBATCH --mail-user=myemail@hawaii.edu
 
-echo "Unparsed arguments:"
-
-
+echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID running on $HOSTNAME"
 
 # -------------------------
-# 1. Parse Input Arguments
+# 1. User Config: Toggle between parallel or single-job execution of folds
 # -------------------------
-while [[ "$#" -gt 0 ]]; do
-    echo Param:
-    echo $1
-    echo Value:
-    echo $2
-    case $1 in
-        --num-folds) NUM_FOLDS="$2"; shift ;;
-        --run-folds-in-parallel) RUN_FOLDS_IN_PARALLEL="$2"; shift ;;
-        --job-name) JOB_NAME="$2"; shift ;;
-        --time-limit) TIME_LIMIT="$2"; shift ;;
-        --memory) MEMORY="$2"; shift ;;
-        --hyperparams-*)
-            param_name="${1/--hyperparams-/}"
-            param_name="${param_name//-/_}"  # Replace hyphens with underscores
-            declare -A hyperparams
-            hyperparams["$param_name"]="$2"
-            shift ;;
-    esac
-    shift
-done
-
-# Print debug information
-echo "Job Name: $JOB_NAME"
-echo "Time Limit: $TIME_LIMIT"
-echo "Memory: $MEMORY"
-echo "Job ID: $SLURM_ARRAY_JOB_ID"
-echo "Task ID: $SLURM_ARRAY_TASK_ID"
-echo "Folds: $NUM_FOLDS"
-echo "Run Folds in Parallel: $RUN_FOLDS_IN_PARALLEL"
+RUN_FOLDS_IN_PARALLEL=false  # Set to 'true' to run each fold in its own job, 'false' to run all 5 folds in one job
+NUM_FOLDS=5                 # Number of folds
 
 # -------------------------
-# 2. Calculate Total Combinations
+# 2. Define Hyperparameters
 # -------------------------
-declare -A hyperparam_sizes
+declare -A hyperparams
+hyperparams["ode_steps"]="15"
+hyperparams["lr"]="0.0001 0.0032 0.1"
+hyperparams["reptile_rate"]="0.05 0.5 1.0"
+hyperparams["noise"]="0.0 0.075"
+hyperparams["wd_factor"]="0.0 2.0"
+hyperparams["interpolate"]="0"
+hyperparams["num_heads"]="2 8"
+hyperparams["hidden_dim"]="8"
+hyperparams["attend_dim_per_head"]="4 6"
+hyperparams["depth"]="4 16"
+hyperparams["ffn_dim_multiplier"]="4"
+hyperparams["dropout"]="0.1 0.5 0.8"
+
+# -------------------------
+# 3. Calculate Total Combinations
+# -------------------------
 total_combinations=1
+declare -A hyperparam_sizes
 for param in "${!hyperparams[@]}"; do
-    values=(${hyperparams[$param]})
-    hyperparam_sizes[$param]=${#values[@]}  # Number of values for each hyperparam
+    values=(${hyperparams[$param]}) # Split into array
+    hyperparam_sizes[$param]=${#values[@]} # Store size of each hyperparam
     total_combinations=$((total_combinations * ${#values[@]}))
 done
 
-if [[ "$RUN_FOLDS_IN_PARALLEL" == "true" ]]; then
-    total_combinations=$((total_combinations * NUM_FOLDS))
+if [[ "$RUN_FOLDS_IN_PARALLEL" == true ]]; then
+    total_combinations=$((total_combinations * NUM_FOLDS))  # Increase total combinations by number of folds
+fi
+
+# Exit if SLURM_ARRAY_TASK_ID exceeds total combinations
+if [[ "$SLURM_ARRAY_TASK_ID" -ge "$total_combinations" ]]; then
+    echo "Error: SLURM_ARRAY_TASK_ID ($SLURM_ARRAY_TASK_ID) exceeds total combinations ($total_combinations)."
+    exit 1
 fi
 
 # -------------------------
-# 3. Decompose Task ID
+# 4. Decompose SLURM_ARRAY_TASK_ID
 # -------------------------
+declare -A hyperparam_indices
 current_id=$SLURM_ARRAY_TASK_ID
-if [[ "$RUN_FOLDS_IN_PARALLEL" == "true" ]]; then
-    fold_index=$((current_id % NUM_FOLDS))
-    current_id=$((current_id / NUM_FOLDS))
+
+# If parallel folds are enabled, separate the last digit to represent the fold number
+if [[ "$RUN_FOLDS_IN_PARALLEL" == true ]]; then
+    fold_index=$((current_id % NUM_FOLDS)) # Get the fold number (0, 1, ..., NUM_FOLDS-1)
+    current_id=$((current_id / NUM_FOLDS)) # Reduce current_id to ignore fold portion
 else
-    fold_index=-1
+    fold_index=-1  # If running all folds in one job, set whichfold to -1
 fi
 
 # Calculate hyperparameter indices
-declare -A hyperparam_indices
 for param in "${!hyperparams[@]}"; do
     size=${hyperparam_sizes[$param]}
-    hyperparam_indices[$param]=$((current_id % size))
-    current_id=$((current_id / size))
+    hyperparam_indices[$param]=$((current_id % size)) # Get current index
+    current_id=$((current_id / size)) # Reduce task_id for the next hyperparam
 done
 
-# Extract hyperparameter values
+# -------------------------
+# 5. Extract Values for Each Hyperparameter
+# -------------------------
 declare -A hyperparam_values
 for param in "${!hyperparams[@]}"; do
     values=(${hyperparams[$param]})
@@ -98,12 +101,23 @@ for param in "${!hyperparam_values[@]}"; do
 done
 
 # -------------------------
-# 4. Run the Python Script
+# 6. Run the Python Script
 # -------------------------
 source activate lnc
-echo run.py --kfolds $NUM_FOLDS --headless \
+python run.py --kfolds $NUM_FOLDS --headless \
     --jobid $SLURM_JOB_ID \
     --whichfold $fold_index \
     --lr ${hyperparam_values["lr"]} \
     --reptile_rate ${hyperparam_values["reptile_rate"]} \
-    --noise ${hyperparam_values["noise"]}
+    --mb 20 \
+    --noise ${hyperparam_values["noise"]} \
+    --interpolate ${hyperparam_values["interpolate"]} \
+    --num_heads ${hyperparam_values["num_heads"]} \
+    --hidden_dim ${hyperparam_values["hidden_dim"]} \
+    --attend_dim ${hyperparam_values["attend_dim_per_head"]} \
+    --depth ${hyperparam_values["depth"]} \
+    --ffn_dim_multiplier ${hyperparam_values["ffn_dim_multiplier"]} \
+    --dropout ${hyperparam_values["dropout"]} \
+    --ode_steps ${hyperparam_values["ode_steps"]} \
+    --wd_factor ${hyperparam_values["wd_factor"]}
+
