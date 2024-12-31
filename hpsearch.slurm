@@ -4,7 +4,7 @@
 #SBATCH --job-name=cnode-hpsearch
 #SBATCH --array=0-863  ## Make sure this is enough for all hyperparam/fold combos
 
-#SBATCH --time=0-04:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --time=0-01:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=gpu
 #SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1

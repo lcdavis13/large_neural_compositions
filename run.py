@@ -25,7 +25,7 @@ import epoch_managers
 import lr_schedule
 import models
 import models_baseline
-import models_condensed
+import models_embedded
 import stream
 from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
@@ -203,7 +203,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             end_time = time.time()
             examples_per_second = stream_examples / max(end_time - prev_time,
                                                         0.0001)  # TODO: Find a better way to handle div by zero, or at least a more appropriate nonzero value
-            stream.stream_results(filepath_out_incremental, verbosity > 0,
+            stream.stream_results(filepath_out_incremental, verbosity > 0, verbosity > 0, verbosity > -1,
                                   "fold", fold,
                                   "epoch", epoch_num + 1,
                                   "minibatch", mb + 1,
@@ -471,7 +471,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     gpu_memory_reserved = torch.cuda.memory_reserved(device)
     _, cpuRam = tracemalloc.get_traced_memory()
-    stream.stream_results(filepath_out_epoch, verbosity > 0,
+    stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
                           "fold", fold,
                           "epoch", 0,
                           "training examples", 0,
@@ -542,7 +542,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         _, cpuRam = tracemalloc.get_traced_memory()
         
-        stream.stream_results(filepath_out_epoch, verbosity > 0,
+        stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
                               "fold", fold,
                               "epoch", manager.epoch + 1,
                               "training examples", train_examples_seen,
@@ -642,7 +642,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
                                                                             jobstring=jobstring)
         
         # Print output of model on a batch of test examples
-        DEBUG_OUTPUT = True  # TO DO: make this an actual parameter
+        DEBUG_OUTPUT = False  # TO DO: make this an actual parameter
         DEBUG_OUT_NUM = 4
         
         if DEBUG_OUTPUT:
@@ -710,7 +710,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         trn_epoch = trn_opt.epoch
         trn_time = trn_opt.time
         
-        stream.stream_results(filepath_out_fold, verbosity > 0,
+        stream.stream_results(filepath_out_fold, verbosity > 0, verbosity > 0, verbosity > -1,
                               "fold", fold_num + 1,
                               "Validation Loss", val_loss,
                               "Validation Score", val_score,
@@ -866,13 +866,9 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models_to_test = {
-        'canODE': lambda args: models_condensed.canODE_GenerateFitMat(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"], depth=args["depth"],
-                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"], dropout=args["dropout"]),
-        'transformer': lambda args: models_condensed.JustATransformer(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"],
-                                                                      num_heads=args["num_heads"], depth=args["depth"],
-                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"],
-                                                                      dropout=args["dropout"]),
-        'transformShaped': lambda args: models_condensed.TransformerNormalized(data_dim=hp.data_dim,
+        # 'canODE': lambda args: models_embedded.canODE_GenerateFitMat(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"], depth=args["depth"],
+        #                                                               ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"], dropout=args["dropout"]),
+        'transformShaped': lambda args: models_embedded.TransformerNormalized(data_dim=hp.data_dim,
                                                                       id_embed_dim=args["attend_dim"],
                                                                       num_heads=args["num_heads"], depth=args["depth"],
                                                                       ffn_dim_multiplier=args["ffn_dim_multiplier"],
@@ -881,10 +877,10 @@ def main():
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
+        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
         # 'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
+        # 'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
         # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
         # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
@@ -935,29 +931,33 @@ def main():
         #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
         #     nn.ReLU(),
         #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        'cNODE1': lambda args: models.cNODE1(hp.data_dim),
-        'cNODE2': lambda args: models.cNODE2(hp.data_dim),
+        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
+        # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
         # LR: 0.03, WD: 3.3
         
-        
-        # 'canODE-noValue': lambda args: models_condensed.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # # 'canODE-noValue-static': lambda args: models_condensed.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE': lambda args: models_condensed.canODE_attention(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE-multihead': lambda args: models_condensed.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], args["num_heads"]),
-        # 'canODE-singlehead': lambda args: models_condensed.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], 1),
-        # 'canODE-transformer': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d2': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d6': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d6-old': lambda args: models_condensed.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
-        # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_condensed.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
-        # 'canODE-transformer-d3-med': lambda args: models_condensed.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
-        # 'canODE-transformer-d3-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
-        # 'canODE-transformer-d4-small': lambda args: models_condensed.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
-        # 'canODE-transformer-d4-big': lambda args: models_condensed.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
+        # 'transformer': lambda args: models_embedded.JustATransformer(data_dim=hp.data_dim,
+        #                                                               id_embed_dim=args["attend_dim"],
+        #                                                               num_heads=args["num_heads"], depth=args["depth"],
+        #                                                               ffn_dim_multiplier=args["ffn_dim_multiplier"],
+        #                                                               dropout=args["dropout"]),
+        # 'canODE-noValue': lambda args: models_embedded.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # # 'canODE-noValue-static': lambda args: models_embedded.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE': lambda args: models_embedded.canODE_attention(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'canODE-multihead': lambda args: models_embedded.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], args["num_heads"]),
+        # 'canODE-singlehead': lambda args: models_embedded.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], 1),
+        # 'canODE-transformer': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d2': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d6': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d6-old': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
+        # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_embedded.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
+        # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_embedded.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
+        # 'canODE-transformer-d3-med': lambda args: models_embedded.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
+        # 'canODE-transformer-d3-big': lambda args: models_embedded.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
+        # 'canODE-transformer-d4-small': lambda args: models_embedded.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
+        # 'canODE-transformer-d4-big': lambda args: models_embedded.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
         
         # 'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(hp.data_dim), # for testing, identical to cNODE1
-        # 'cAttend-simple': lambda args: models_condensed.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
+        # 'cAttend-simple': lambda args: models_embedded.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
         # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
         # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(hp.data_dim), # sanity test, this is the same as cNODE2 but less optimized
         # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(hp.data_dim, hp.data_dim), nn.Linear(hp.data_dim, hp.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
@@ -1151,7 +1151,7 @@ def main():
         trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
         val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
         trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
-        stream.stream_scores(filepath_out_expt, True,
+        stream.stream_scores(filepath_out_expt, True, True, True,
                              "model", model_name,
                              "dataset", dataname,
                              "mean_val_loss", -1,
@@ -1173,7 +1173,7 @@ def main():
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
             kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
-            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=4,
+            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
             reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=whichfold, jobstring=jobstring
         )
         
@@ -1200,13 +1200,17 @@ def main():
         all_data = [entry for fold in training_curves for entry in fold]
         df = pd.DataFrame(all_data)
         df_clean = df.dropna(subset=['val_loss'])
-        average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
-        min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+        # Check if df_clean is not empty
+        if not df_clean.empty:
+            average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
+            min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+        else:
+            min_val_loss_epoch = None  # or handle the empty case as needed
         best_epoch_metrics = min_val_loss_epoch.to_dict()
         
         # write folds to log file
         for i in range(len(val_loss_optims)):
-            stream.stream_scores(filepath_out_expt, True,
+            stream.stream_scores(filepath_out_expt, True, True, True,
                                  "model", model_name,
                                  "dataset", dataname,
                                  "mean_val_loss", best_epoch_metrics["val_loss"],
@@ -1224,7 +1228,7 @@ def main():
                                  suffix="\n=========================================================================================================================\n")
         
         # except Exception as e:
-        #     stream.stream_scores(filepath_out_expt, True,
+        #     stream.stream_scores(filepath_out_expt, True, True, True,
         #         "model", model_name,
         #         "model parameters", -1,
         #         "Validation Score", -1,

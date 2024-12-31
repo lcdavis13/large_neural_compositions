@@ -46,7 +46,7 @@ def decondense(values, positions, size):
 
     Args:
         values (torch.Tensor): Tensor of values to be decondensed. Shape: (..., N)
-        positions (torch.Tensor): Tensor of positions where the values should be placed. Shape: (..., N)
+        positions (torch.Tensor): Tensor of positions where the values should be placed. Shape: (..., N) or (extra_batch, ..., N)
         size (int): The size of the last dimension of the output tensor.
 
     Returns:
@@ -55,28 +55,34 @@ def decondense(values, positions, size):
     
     if needs_condense:
         device = values.device
-        positions = positions.unsqueeze(0).expand(values.shape[0], -1, -1)
-        batch_dims = values.shape[:-1]  # All dimensions except the last
-        batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
-        y_shape = (*batch_dims, size)  # Shape of the output tensor
+        batch_dims_values = values.shape[:-1]  # All batch dimensions of values except the last
+        batch_dims_positions = positions.shape[:-1]  # All batch dimensions of positions except the last
+        
+        # Ensure positions has the same batch dimensions as values
+        if batch_dims_positions != batch_dims_values:
+            extra_batch_dims = batch_dims_positions[:-len(batch_dims_values)]
+            positions = positions.reshape(*extra_batch_dims, *batch_dims_values, positions.shape[-1])
+            positions = positions.expand(*batch_dims_values, positions.shape[-1])
+        
+        y_shape = (*batch_dims_values, size)
         y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
         
-        # Reshape to flatten batch dimensions, treating them as a single batch
+        # Reshape to flatten batch dimensions
+        batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
         values_flat = values.reshape(batch_size, -1)
         positions_flat = positions.reshape(batch_size, -1)
         y_flat = y.reshape(batch_size, size)
         
         for i in range(batch_size):
-            valid_positions = positions_flat[i]  # Extract positions for this batch item
-            valid_positions = valid_positions[valid_positions > 0]  # Remove any zero positions
-            valid_positions -= 1  # Adjust positions to be zero-indexed
-            len_valid = len(valid_positions)
-            
-            y_flat[i][valid_positions[:len_valid]] = values_flat[i][:len_valid]  # Place the values at the valid positions
+            valid_positions = positions_flat[i]
+            valid_positions = valid_positions[
+                valid_positions >= 0]  # Remove invalid positions (assume non-negative are valid)
+            valid_positions = valid_positions.clamp(max=size - 1)  # Clamp positions within range [0, size-1]
+            y_flat[i][valid_positions] = values_flat[i][
+                                         :len(valid_positions)]  # Place the values at the valid positions
         
         # Reshape y back to original batch dimensions
         y = y_flat.view(*y_shape)
-        
         return y
     
     else:
@@ -478,6 +484,57 @@ class JustATransformer(nn.Module):
         y = decondense(y, pos, self.data_dim)
         return y
     
+class TransformerNormalized(nn.Module):
+    '''
+    Use a transformer to directly predict the final relative abundances from the input.
+    This model normalizes the output to sum to 1 in addition to the following:
+    - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
+    - We condense & decondense the sequence if applicable
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
+        
+        # define the transformer
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+    
+    def forward(self, x):
+        val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        
+        # concatenate the value onto the id embedding
+        h0 = torch.cat((val.unsqueeze(-1), id_embed), -1)
+        
+        h = self.transform(h0)
+        
+        # extract the value from the transformer output
+        y_raw = h[..., 0]
+        
+        # softmax
+        y = self.masked_softmax(pos, y_raw)
+        
+        y = decondense(y, pos, self.data_dim)
+        return y
+    
+    def masked_softmax(self, pos, y_raw):
+        # Mask out elements where pos is 0
+        mask = (pos != 0)
+        masked_y_raw = y_raw.masked_fill(~mask, float('-inf'))
+        # Normalize the output to sum to 1 (excluding masked elements)
+        y = nn.functional.softmax(masked_y_raw, dim=-1)
+        # Set masked elements to 0
+        y = y * mask.float()
+        return y
+
+
 class TransformerNormalized(nn.Module):
     '''
     Use a transformer to directly predict the final relative abundances from the input.
