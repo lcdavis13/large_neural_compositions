@@ -535,7 +535,7 @@ class TransformerNormalized(nn.Module):
         return y
 
 
-class TransformerNormalized(nn.Module):
+class TransformerSoftmax(nn.Module):
     '''
     Use a transformer to directly predict the final relative abundances from the input.
     This model normalizes the output to sum to 1 in addition to the following:

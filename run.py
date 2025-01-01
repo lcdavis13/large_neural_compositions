@@ -873,6 +873,11 @@ def main():
                                                                       num_heads=args["num_heads"], depth=args["depth"],
                                                                       ffn_dim_multiplier=args["ffn_dim_multiplier"],
                                                                       dropout=args["dropout"]),
+        'transformSoftmax': lambda args: models_embedded.TransformerSoftmax(data_dim=hp.data_dim,
+                                                                      id_embed_dim=args["attend_dim"],
+                                                                      num_heads=args["num_heads"], depth=args["depth"],
+                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"],
+                                                                      dropout=args["dropout"]),
         
         # 'baseline-1const': lambda args: models_baseline.SingleConst(),
         # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
