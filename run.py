@@ -872,6 +872,7 @@ def main():
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
     models = {
+        # most useful models
         'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
         'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim),
         'cNODE1': lambda args: models.cNODE1(args.data_dim),
@@ -889,6 +890,8 @@ def main():
         ),
         'baseline-cNODE0': lambda args: models_baseline.cNODE0(args.data_dim),
         
+        
+        # additional baseline models
         'baseline-1const': lambda args: models_baseline.SingleConst(),
         'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
         'baseline-const': lambda args: models_baseline.ConstOutput(args.data_dim),
@@ -907,6 +910,7 @@ def main():
         ),
 
         
+        # additional attention-based models
         'transformer': lambda args: models_embedded.JustATransformer(data_dim=args.data_dim,
                                                                       id_embed_dim=args.attend_dim,
                                                                       num_heads=args.num_heads, depth=args.depth,
@@ -925,6 +929,7 @@ def main():
         'canODE-multihead': lambda args: models_embedded.canODE_attentionMultihead(args.data_dim, args.attend_dim, args.num_heads),
 
         
+        # sanity test models
         'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(args.data_dim), # for testing, identical to cNODE1
         'cNODE2_DKI': lambda args: models.cNODE2_DKI(args.data_dim), # sanity test, this is the same as cNODE2 but less optimized
         'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim), nn.Linear(args.data_dim, args.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
