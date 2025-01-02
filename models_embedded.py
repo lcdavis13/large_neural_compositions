@@ -449,8 +449,62 @@ class canODE_GenerateFitMat(nn.Module):
         
         y = decondense(y, pos, self.data_dim)
         return y
+
+
+class canODE_ReplicatorAttendFit(nn.Module):
+    '''
+    Version of canODE that encodes the OTUs with a transformer, then uses an attention layer as the fitness function for the replicator ODE.
     
+    1. Create condensed embedding
+    2. Enrich embeddings with transformer encoder
+    3. Define the fitness function as an attention mechanism with the encoded embeddings concatenated onto the abundances
+    4. Run the Replicator ODE using the computed fitness function
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout):
+        self.USES_ODEINT = True
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
+        
+        # define the transformer
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+        self.compress = nn.Linear(id_embed_dim, fitness_qk_dim - 1) # minus 1 to account for value concat while maintaining divisibility by num_heads
+        
+        attend = cAttentionMultihead(fitness_qk_dim, num_heads)
+        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
     
+    def forward(self, t, x):
+        val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        id_embed = self.transform(id_embed)
+        
+        # compress transformer embeddings for the ODE attention mechanism
+        id_embed = self.compress(id_embed)
+        
+        y = odeint(lambda xo, to: self.func(xo, to, id_embed), val, t)
+        
+        y = decondense(y, pos, self.data_dim)
+        return y
+
+
+# class canODE_AttendODE(nn.Module):
+#     '''
+#     Version of canODE that encodes the OTUs with a transformer, then uses an attention layer as the ODE
+#
+#     1. Create condensed embedding
+# 2. Enrich embeddings with transformer encoder
+#     3. Solve an ODE of the attention mechanism and linear layer with the encoded embeddings concatenated onto the abundances
+#     (intuition for step 3 being that finding the fixed point of the final layer will act as an inductive bias toward replicator-equation-like dynamics, even though we don't explicitly use the replicator equation)
+#     '''
+
+
 class JustATransformer(nn.Module):
     '''
     Use a transformer to directly predict the final relative abundances from the input.

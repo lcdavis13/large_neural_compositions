@@ -856,7 +856,6 @@ def main():
     
     hp.WD = hp.LR * hp.WD_factor
     hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
-    hp.hidden_middle_dim = (hp.hidden_dim + hp.data_dim) // 2
     
     jobid = int(args.jobid.split('_')[0])
     jobstring = f"_job{jobid}" if jobid >= 0 else ""
@@ -885,6 +884,10 @@ def main():
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
         ),
+        'canODE-attendFit': lambda args: models_embedded.canODE_ReplicatorAttendFit(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
+        ),
         'cNODE-hourglass': lambda args: models.cNODE_HourglassFitness(
             data_dim=args.data_dim, hidden_dim=args.hidden_dim, depth=args.depth
         ),
@@ -908,26 +911,23 @@ def main():
         'baseline-cNODE2-width2': lambda args: models.cNODE_HourglassFitness(
             data_dim=args.data_dim, hidden_dim=2, depth=3
         ),
-
+        
         
         # additional attention-based models
-        'transformer': lambda args: models_embedded.JustATransformer(data_dim=args.data_dim,
-                                                                      id_embed_dim=args.attend_dim,
-                                                                      num_heads=args.num_heads, depth=args.depth,
-                                                                      ffn_dim_multiplier=args.ffn_dim_multiplier,
-                                                                      dropout=args.dropout),
-        'transformSoftmax': lambda args: models_embedded.TransformerSoftmax(data_dim=args.data_dim,
-                                                                            id_embed_dim=args.attend_dim,
-                                                                            num_heads=args.num_heads,
-                                                                            depth=args.depth,
-                                                                            ffn_dim_multiplier=args.ffn_dim_multiplier,
-                                                                            dropout=args.dropout),
+        'transformer': lambda args: models_embedded.JustATransformer(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        ),
+        'transformSoftmax': lambda args: models_embedded.TransformerSoftmax(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        ),
         'canODE-transformer': lambda args: models_embedded.canODE_transformer(args.data_dim, args.attend_dim, args.num_heads, args.depth, args.ffn_dim_multiplier),
         'canODE-noValue': lambda args: models_embedded.canODE_attentionNoValue(args.data_dim, args.attend_dim, args.attend_dim),
         'canODE-noValue-static': lambda args: models_embedded.canODE_attentionNoValue_static(args.data_dim, args.attend_dim, args.attend_dim),
         'canODE-attention': lambda args: models_embedded.canODE_attention(args.data_dim, args.attend_dim, args.attend_dim),
         'canODE-multihead': lambda args: models_embedded.canODE_attentionMultihead(args.data_dim, args.attend_dim, args.num_heads),
-
+        
         
         # sanity test models
         'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(args.data_dim), # for testing, identical to cNODE1

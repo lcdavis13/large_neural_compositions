@@ -4,7 +4,7 @@
 #SBATCH --job-name=cnode-hpsearch
 #SBATCH --array=0-863  ## Make sure this is enough for all hyperparam/fold combos
 
-#SBATCH --time=0-01:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --time=0-00:20:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=gpu
 #SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
@@ -29,7 +29,10 @@ NUM_FOLDS=5                 # Number of folds
 # 2. Define Hyperparameters
 # -------------------------
 declare -A hyperparams
-hyperparams["ode_steps"]="15"
+hyperparams["dataname"]="cNODE-paper-ocean-std"
+hyperparams["models"]="canODE-attendFit,transformShaped"  # Spaces for different jobs, commas for multiple models on the same job
+hyperparams["epochs"]="200"
+hyperparams["ode_steps"]="2"
 hyperparams["lr"]="0.0001 0.0032 0.1"
 hyperparams["reptile_rate"]="0.05 0.5 1.0"
 hyperparams["noise"]="0.0 0.075"
@@ -107,6 +110,9 @@ source activate lnc
 python run.py --kfolds $NUM_FOLDS --headless \
     --jobid $SLURM_JOB_ID \
     --whichfold $fold_index \
+    --dataname ${hyperparam_values["dataname"]} \
+    --models ${hyperparam_values["models"]} \
+    --epochs ${hyperparam_values["epochs"]} \
     --lr ${hyperparam_values["lr"]} \
     --reptile_rate ${hyperparam_values["reptile_rate"]} \
     --mb 20 \
