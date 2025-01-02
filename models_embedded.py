@@ -90,12 +90,16 @@ def decondense(values, positions, size):
 
 
 class cAttend_simple(nn.Module):
+    """
+    No ODE, simplest model that only generates a fitness matrix from Q and K and tries to directly predict from it.
+    """
     def __init__(self, data_dim, id_embed_dim, qk_dim):
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim+1, id_embed_dim)  # Add 1 to account for placeholder ID
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
+        self.scale_factor = qk_dim ** -0.5
     
     def forward(self, t, x):
         val, pos = condense(x)

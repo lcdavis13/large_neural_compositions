@@ -63,31 +63,6 @@ class cNODE1(nn.Module):
         return y
 
 
-class Embedded_cNODE2(nn.Module):
-    # This model doesn't work.
-    # With softmax layers, it has the same score at the start of training as at the end. It doesn't learn.
-    # Without any softmax layers, it starts off producing non-distributions, with huge loss. The model eventually beats the performance of the softmax version, but doesn't learn to produce a distribution.
-    # Without softmax layers and WITH added penalties for non-distributions, it performs slightly better and becomes closer to producing a distribution, but it's only a partial success.
-    # From just theoretical perspective, the ODE expects a few-hot encoded species assemblage summing to 1. It doesn't make sense to discard the distribution information in the input before it ever reaches the ODE. We should instead use two channels - embedded IDs for each species, and a small dense list of their abundances.
-    def __init__(self, N, M):
-        self.USES_ODEINT = True
-        
-        super().__init__()
-        self.embed = nn.Linear(N, M)  # can't use a proper embedding matrix because there are multiple active channels, not one-hot encoded
-        # self.softmax = nn.Softmax(dim=-1)
-        self.func = ODEFunc_cNODE2(M)
-        self.unembed = nn.Linear(M, N)
-        # self.softmax = nn.Softmax(dim=-1)
-    
-    def forward(self, t, x):
-        x = self.embed(x)
-        # x = self.softmax(x)
-        y = odeint(self.func, x, t)
-        y = self.unembed(y)
-        # y = self.softmax(y)
-        return y
-
-
 class ODEFunc_cNODEGen_ConstructedFitness(nn.Module):  # cNODE2 with generalized f(x), specified via a constructor for the f(x) object passed during construction
     def __init__(self, f_constr):
         super().__init__()
@@ -113,6 +88,37 @@ class cNODEGen_ConstructedFitness(nn.Module):
     def forward(self, t, x):
         y = odeint(self.func, x, t) #, rtol=1e-10, atol=1e-12)[-1] # can increase tolerance when model is too stiff (underflows)
         return y
+
+
+class cNODE_HourglassFitness(nn.Module):
+    def __init__(self, data_dim, hidden_dim, depth):
+        self.USES_ODEINT = True
+        super().__init__()
+        
+        self.func = ODEFunc_cNODEGen_ConstructedFitness(
+            lambda: self.construct_fitness(data_dim, hidden_dim, depth)
+        )
+    
+    def forward(self, t, x):
+        y = odeint(self.func, x, t)
+        return y
+    
+    @staticmethod
+    def construct_fitness(data_dim, hidden_dim, depth):
+        layers = []
+        
+        # Exponentially interpolate dimensions
+        dims = [
+            int(data_dim * (hidden_dim / data_dim) ** (i / (depth - 1)))
+            for i in range(depth)
+        ]
+        
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            if i < len(dims) - 2:  # Add ReLU for all but the last layer
+                layers.append(nn.ReLU())
+        
+        return nn.Sequential(*layers)
 
 
 class ODEFunc_cNODEGen_FnFitness(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
@@ -256,6 +262,7 @@ class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to 
         f = torch.matmul(torch.matmul(torch.ones(y.size(dim=-1), 1).to(y.device), y), torch.transpose(out, -2, -1))
         dydt = torch.mul(y, out - torch.transpose(f, -2, -1))
         return dydt.squeeze(1)  # B x N
+
 
 class cNODE2_DKI(nn.Module):
     def __init__(self, N):

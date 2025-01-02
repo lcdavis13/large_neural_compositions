@@ -87,6 +87,21 @@ class ConstOutputFilteredNormalized(nn.Module):
         return y
 
 
+class SingleLayerPerceptron(nn.Module):
+    def __init__(self, N, M):
+        super().__init__()
+        self.f1 = nn.Linear(N, M)
+        self.relu = nn.ReLU()
+        self.f2 = nn.Linear(M, N)
+    
+    def forward(self, t, x):
+        h = self.f1(x)
+        h = self.relu(h)
+        h = self.f2(h)
+        
+        return h
+    
+    
 class SLPFilteredNormalized(nn.Module):
     # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
     def __init__(self, N, M):
@@ -218,7 +233,7 @@ class SLPMultSumFilteredNormalized(nn.Module):
         return y
     
     
-class SingleLayerPerceptron(nn.Module):
+class SingleLayer(nn.Module):
     def __init__(self, N):
         super().__init__()
         self.f = nn.Linear(N, N)
@@ -306,24 +321,13 @@ class cNODE1_singlestep(nn.Module):
         return x + dxdt
 
 
-class ODEFunc_SLPODE(nn.Module):
-    def __init__(self, N):
-        super().__init__()
-        self.f = nn.Linear(N, N)
-    
-    def forward(self, t, x):
-        fx = self.f(x)  # B x N
-        
-        return fx  # B x N
-
-
 class SLPODE(nn.Module):
     # use odeint to train a single layer perceptron's fixed point
-    def __init__(self, N):
+    def __init__(self, N, M):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_SLPODE(N)
+        self.func = SingleLayerPerceptron(N, M)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)

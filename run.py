@@ -781,10 +781,12 @@ def main():
     # experiment hyperparameters
     hp = dicy()
     
+    hp.modelnames = "baseline-constShaped,transformShaped"
+    
     hp.solver = os.getenv("SOLVER")
     
-    hp.min_epochs = 200
-    hp.max_epochs = 200
+    hp.min_epochs = 2
+    hp.max_epochs = 2
     hp.patience = 1100
     hp.early_stop = True
     
@@ -810,11 +812,13 @@ def main():
     
     # command-line arguments
     parser = argparse.ArgumentParser(description='run')
+    parser.add_argument('--models', default=hp.modelnames, help='models to run, comma-separated list')
     parser.add_argument('--dataname', default=dataname, help='dataset name')
     parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
     parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
     parser.add_argument("--jobid", default=jobid, help="job id")
     parser.add_argument("--headless", action="store_true", help="run without plotting")
+    parser.add_argument('--epochs', default=hp.max_epochs, help='maximum number of epochs')
     parser.add_argument('--mb', default=hp.minibatch_examples, help='minibatch size')
     parser.add_argument('--lr', default=hp.LR, help='learning rate')
     parser.add_argument('--reptile_rate', default=hp.reptile_lr, help='reptile outer-loop learning rate')
@@ -831,9 +835,11 @@ def main():
     
     
     args = parser.parse_args()
+    hp.modelnames = args.models
     dataname = args.dataname
     whichfold = int(args.whichfold)
     kfolds = int(args.kfolds)
+    hp.max_epochs = int(args.epochs)
     hp.minibatch_examples = int(args.mb)
     hp.LR = float(args.lr)
     hp.reptile_lr = float(args.reptile_rate)
@@ -865,110 +871,69 @@ def main():
     
     # Specify model(s) for experiment
     # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
-    models_to_test = {
-        # 'canODE': lambda args: models_embedded.canODE_GenerateFitMat(data_dim=hp.data_dim, id_embed_dim=args["attend_dim"], num_heads=args["num_heads"], depth=args["depth"],
-        #                                                               ffn_dim_multiplier=args["ffn_dim_multiplier"], fitness_qk_dim=args["attend_dim"], dropout=args["dropout"]),
-        'transformShaped': lambda args: models_embedded.TransformerNormalized(data_dim=hp.data_dim,
-                                                                      id_embed_dim=args["attend_dim"],
-                                                                      num_heads=args["num_heads"], depth=args["depth"],
-                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"],
-                                                                      dropout=args["dropout"]),
-        'transformSoftmax': lambda args: models_embedded.TransformerSoftmax(data_dim=hp.data_dim,
-                                                                      id_embed_dim=args["attend_dim"],
-                                                                      num_heads=args["num_heads"], depth=args["depth"],
-                                                                      ffn_dim_multiplier=args["ffn_dim_multiplier"],
-                                                                      dropout=args["dropout"]),
+    models = {
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
+        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim),
+        'cNODE1': lambda args: models.cNODE1(args.data_dim),
+        'cNODE2': lambda args: models.cNODE2(args.data_dim),
+        'transformShaped': lambda args: models_embedded.TransformerNormalized(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        ),
+        'canODE-FitMat': lambda args: models_embedded.canODE_GenerateFitMat(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
+        ),
+        'cNODE-hourglass': lambda args: models.cNODE_HourglassFitness(
+            data_dim=args.data_dim, hidden_dim=args.hidden_dim, depth=args.depth
+        ),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(args.data_dim),
         
-        # 'baseline-1const': lambda args: models_baseline.SingleConst(),
-        # 'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
-        # 'baseline-const': lambda args: models_baseline.ConstOutput(hp.data_dim),
-        # 'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(hp.data_dim),
-        # 'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        # 'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        # 'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        # 'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(hp.data_dim, hp.hidden_dim),
-        # 'baseline-SLP': lambda args: models_baseline.SingleLayerPerceptron(hp.data_dim),
-        # 'baseline-SLPMult': lambda args: models_baseline.SingleLayerMultiplied(hp.data_dim),
-        # 'baseline-SLPSum': lambda args: models_baseline.SingleLayerSummed(hp.data_dim),
-        # 'baseline-SLPMultSum': lambda args: models_baseline.SingleLayerMultipliedSummed(hp.data_dim),
-        # 'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(hp.data_dim),
-        # 'baseline-cNODE0': lambda args: models_baseline.cNODE0(hp.data_dim),
-        # 'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(hp.data_dim),
-        # 'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(hp.data_dim),
-        # LRRS range: 1e-2...1e0.5
-        # WD range: 1e-6...1e0
-        # LR:0.5994842503189424, WD:0.33
-        # LR:0.8799225435691093, WD:0.33
-        # 'baseline-cNODE2-width1': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, 1),
-        #     nn.Linear(1, hp.data_dim))),
-        # 'baseline-cNODE2-width4': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, 4),
-        #     nn.Linear(4, hp.data_dim))),
-        #
-        # 'cNODE2-custom': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE2-custom-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE-deep3': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE-deep3-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE-deep4-flat': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE-deep4-flat-nl': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(
-        #     nn.Linear(hp.data_dim, args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], args["hidden_dim"]),
-        #     nn.ReLU(),
-        #     nn.Linear(args["hidden_dim"], hp.data_dim))),
-        # 'cNODE1': lambda args: models.cNODE1(hp.data_dim),
-        # 'cNODE2': lambda args: models.cNODE2(hp.data_dim),
-        # LR: 0.03, WD: 3.3
+        'baseline-1const': lambda args: models_baseline.SingleConst(),
+        'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
+        'baseline-const': lambda args: models_baseline.ConstOutput(args.data_dim),
+        'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim),
+        'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(args.data_dim, args.hidden_dim),
+        'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(args.data_dim, args.hidden_dim),
+        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(args.data_dim),
+        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(args.data_dim),
+        'baseline-cAttend-1step': lambda args: models_embedded.cAttend_simple(args.data_dim, args.attend_dim, args.attend_dim),
+        'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(args.data_dim, args.hidden_dim),
+        'baseline-cNODE2-width1': lambda args: models.cNODE_HourglassFitness(
+            data_dim=args.data_dim, hidden_dim=1, depth=3
+        ),
+        'baseline-cNODE2-width2': lambda args: models.cNODE_HourglassFitness(
+            data_dim=args.data_dim, hidden_dim=2, depth=3
+        ),
+
         
-        # 'transformer': lambda args: models_embedded.JustATransformer(data_dim=hp.data_dim,
-        #                                                               id_embed_dim=args["attend_dim"],
-        #                                                               num_heads=args["num_heads"], depth=args["depth"],
-        #                                                               ffn_dim_multiplier=args["ffn_dim_multiplier"],
-        #                                                               dropout=args["dropout"]),
-        # 'canODE-noValue': lambda args: models_embedded.canODE_attentionNoValue(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # # 'canODE-noValue-static': lambda args: models_embedded.canODE_attentionNoValue_static(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE': lambda args: models_embedded.canODE_attention(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'canODE-multihead': lambda args: models_embedded.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], args["num_heads"]),
-        # 'canODE-singlehead': lambda args: models_embedded.canODE_attentionMultihead(hp.data_dim, args["attend_dim"], 1),
-        # 'canODE-transformer': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], args["depth"], args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d2': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 2, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d6': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], args["num_heads"], 6, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d6-old': lambda args: models_embedded.canODE_transformer(hp.data_dim, args["attend_dim"], 4, 6, args["ffn_dim_multiplier"]),
-        # 'canODE-transformer-d3-a8-h2-f0.5': lambda args: models_embedded.canODE_transformer(hp.data_dim, 8, 2, 3, 0.5),
-        # 'canODE-transformer-d3-a8-h4-f2.0': lambda args: models_embedded.canODE_transformer(hp.data_dim, 8, 4, 3, 2.0),
-        # 'canODE-transformer-d3-med': lambda args: models_embedded.canODE_transformer(hp.data_dim, 32, 4, 3, 1.0),
-        # 'canODE-transformer-d3-big': lambda args: models_embedded.canODE_transformer(hp.data_dim, 64, 16, 3, 2.0),
-        # 'canODE-transformer-d4-small': lambda args: models_embedded.canODE_transformer(hp.data_dim, 16, 4, 4, 2.0),
-        # 'canODE-transformer-d4-big': lambda args: models_embedded.canODE_transformer(hp.data_dim, 64, 8, 4, 1.0),
+        'transformer': lambda args: models_embedded.JustATransformer(data_dim=args.data_dim,
+                                                                      id_embed_dim=args.attend_dim,
+                                                                      num_heads=args.num_heads, depth=args.depth,
+                                                                      ffn_dim_multiplier=args.ffn_dim_multiplier,
+                                                                      dropout=args.dropout),
+        'transformSoftmax': lambda args: models_embedded.TransformerSoftmax(data_dim=args.data_dim,
+                                                                            id_embed_dim=args.attend_dim,
+                                                                            num_heads=args.num_heads,
+                                                                            depth=args.depth,
+                                                                            ffn_dim_multiplier=args.ffn_dim_multiplier,
+                                                                            dropout=args.dropout),
+        'canODE-transformer': lambda args: models_embedded.canODE_transformer(args.data_dim, args.attend_dim, args.num_heads, args.depth, args.ffn_dim_multiplier),
+        'canODE-noValue': lambda args: models_embedded.canODE_attentionNoValue(args.data_dim, args.attend_dim, args.attend_dim),
+        'canODE-noValue-static': lambda args: models_embedded.canODE_attentionNoValue_static(args.data_dim, args.attend_dim, args.attend_dim),
+        'canODE-attention': lambda args: models_embedded.canODE_attention(args.data_dim, args.attend_dim, args.attend_dim),
+        'canODE-multihead': lambda args: models_embedded.canODE_attentionMultihead(args.data_dim, args.attend_dim, args.num_heads),
+
         
-        # 'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(hp.data_dim), # for testing, identical to cNODE1
-        # 'cAttend-simple': lambda args: models_embedded.cAttend_simple(hp.data_dim, args["attend_dim"], args["attend_dim"]),
-        # 'Embedded-cNODE2': lambda args: models.Embedded_cNODE2(hp.data_dim, args["hidden_dim"]),  # this model is not good
-        # 'cNODE2_DKI': lambda args: models.cNODE2_DKI(hp.data_dim), # sanity test, this is the same as cNODE2 but less optimized
-        # 'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(hp.data_dim, hp.data_dim), nn.Linear(hp.data_dim, hp.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        # "cNODE2-static": lambda args: models.cNODE2_ExternalFitness(hp.data_dim),
-        # "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(hp.data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
+        'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(args.data_dim), # for testing, identical to cNODE1
+        'cNODE2_DKI': lambda args: models.cNODE2_DKI(args.data_dim), # sanity test, this is the same as cNODE2 but less optimized
+        'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim), nn.Linear(args.data_dim, args.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        "cNODE2-static": lambda args: models.cNODE2_ExternalFitness(args.data_dim), # sanity test
+        "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(args.data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
+    
+    modelnames_to_run = hp.modelnames.split(',')
+    models_to_run = {name: models[name] for name in modelnames_to_run}
     
     # specify loss function
     loss_fn = loss_bc
@@ -1040,10 +1005,7 @@ def main():
     filepath_out_expt = f'results/expt/{dataname}{jobstring}_experiments.csv'
     seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
     print(f"Seed: {seed}")
-    for model_name, model_constr in models_to_test.items():
-        
-        model_args = {"hidden_dim": hp.hidden_dim, "attend_dim": hp.attend_dim, "num_heads": hp.num_heads,
-                      "depth": hp.depth, "ffn_dim_multiplier": hp.ffn_dim_multiplier, "dropout": hp.dropout}
+    for model_name, model_constr in models_to_run.items():
         
         # # TODO remove this: it's just to resume from where we were previously
         # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
@@ -1053,13 +1015,13 @@ def main():
         print(f"\nRunning model: {model_name}")
         
         # test construction and print parameter count
-        model = model_constr(model_args)
+        model = model_constr(hp)
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
         # find optimal LR
         # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-        #     model_constr, model_args, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+        #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
         #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
         # print(f"LR:{hp.LR}, WD:{hp.WD}")
         
@@ -1177,7 +1139,7 @@ def main():
         # train and test the model across multiple folds
         val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
             hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
-            kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, model_args,
+            kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, hp,
             model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
             reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=whichfold, jobstring=jobstring
         )
