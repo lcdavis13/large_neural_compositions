@@ -97,15 +97,16 @@ def load_and_process_csv_files(path_pattern):
 def save_master_csv(master_df, output_path):
     """
     Save the master DataFrame to a CSV file.
-
+    
     Args:
         master_df (pd.DataFrame): The master DataFrame to save.
         output_path (str): The output file path for the CSV file.
     """
+    
     try:
         # Define the desired column order
         column_order = [
-            'dataset', 'model', 'mean_val_loss', 'LR', 'reptile_lr', 'minibatch_examples', 'noise', 'interpolate', 'WD',
+            'dataset', 'model', 'mean_val_loss', 'LR', 'reptile_lr', 'noise', 'interpolate', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'WD_factor', 'ode_timesteps', 'hidden_dim', 'attend_dim', 'ffn_dim_multiplier',
             'mean_val_loss @ epoch', 'mean_val_loss @ time',
             'mean_val_loss @ trn_loss', 'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max', 'job_number'
         ]
@@ -128,7 +129,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "../results/hpsearch_transformers_12-30/expt/"
+    folder = "../results/hpsearch_attendODE_1-2/expt/"
     path_pattern = f"{folder}cNODE-paper-ocean*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     
