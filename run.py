@@ -764,24 +764,10 @@ def main():
     
     jobid = "-1"  # -1 for no job id
     
-    # load data
-    filepath_train = f'data/{dataname}_train.csv'
-    x, y = data.load_data(filepath_train, device)
-    # x, y = data.shuffle_data(x, y)  # UNCOMMENT - only using this for LOO tracking which example is which fold
-    # x,y = x[1:], y[1:] # FOR TESTING ONLY
-    data_folded = data.fold_data(x, y, kfolds)
-    data_folded = [data_folded[whichfold]] if whichfold >= 0 else data_folded  # only run a single fold based on args
-    assert (data.check_leakage(data_folded))
-    
-    print('dataset:', filepath_train)
-    print(f'data shape: {x.shape}')
-    print(f'training data shape: {data_folded[0][0].shape}')
-    print(f'validation data shape: {data_folded[0][2].shape}')
-    
     # experiment hyperparameters
     hp = dicy()
     
-    hp.modelnames = "baseline-constShaped,transformShaped"
+    hp.modelnames = "canODE-attendFit"
     
     hp.solver = os.getenv("SOLVER")
     
@@ -802,8 +788,7 @@ def main():
     hp.interpolate = True
     
     # model shape hyperparameters
-    _, hp.data_dim = x.shape
-    hp.hidden_dim = math.isqrt(hp.data_dim) * 2
+    hp.hidden_dim = 8
     hp.attend_dim_per_head = 4
     hp.num_heads = 2
     hp.depth = 3
@@ -854,6 +839,24 @@ def main():
     hp.ffn_dim_multiplier = float(args.ffn_dim_multiplier)
     hp.dropout = float(args.dropout)
     
+    
+    # load data
+    filepath_train = f'data/{dataname}_train.csv'
+    x, y = data.load_data(filepath_train, device)
+    # x, y = data.shuffle_data(x, y)  # UNCOMMENT - only using this for LOO tracking which example is which fold
+    # x,y = x[1:], y[1:] # FOR TESTING ONLY
+    data_folded = data.fold_data(x, y, kfolds)
+    data_folded = [data_folded[whichfold]] if whichfold >= 0 else data_folded  # only run a single fold based on args
+    assert (data.check_leakage(data_folded))
+    
+    print('dataset:', filepath_train)
+    print(f'data shape: {x.shape}')
+    print(f'training data shape: {data_folded[0][0].shape}')
+    print(f'validation data shape: {data_folded[0][2].shape}')
+    
+    
+    # computed hyperparams
+    _, hp.data_dim = x.shape
     hp.WD = hp.LR * hp.WD_factor
     hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
     

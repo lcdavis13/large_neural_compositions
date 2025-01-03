@@ -106,7 +106,7 @@ def save_master_csv(master_df, output_path):
     try:
         # Define the desired column order
         column_order = [
-            'dataset', 'model', 'mean_val_loss', 'LR', 'reptile_lr', 'noise', 'interpolate', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'WD_factor', 'ode_timesteps', 'hidden_dim', 'attend_dim', 'ffn_dim_multiplier',
+            'dataset', 'model', 'mean_val_loss', 'LR', 'reptile_lr', 'noise', 'interpolate', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'WD_factor', 'ode_timesteps', 'hidden_dim', 'ffn_dim_multiplier',
             'mean_val_loss @ epoch', 'mean_val_loss @ time',
             'mean_val_loss @ trn_loss', 'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max', 'job_number'
         ]
@@ -129,7 +129,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "../results/hpsearch_attendODE_1-2/expt/"
+    folder = "../results/hpsearch_nonstd_newmodels_1-2/expt/"
     path_pattern = f"{folder}cNODE-paper-ocean*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     

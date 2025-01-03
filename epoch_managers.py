@@ -46,8 +46,9 @@ class MovingAverageEpochManager(EpochManager):
         self.ema1 = None
         self.ema2 = None
         self.initial_score = None
-        self.best_score = float('inf')
-        self.best_raw_score = float('inf')
+        self.inf_score = 1e10 ## not infinity to ensure I can end experiment if we reach infinity
+        self.best_score = self.inf_score
+        self.best_raw_score = self.inf_score
     
     def update_dema(self, value):
         if self.ema1 is None:
@@ -74,6 +75,10 @@ class MovingAverageEpochManager(EpochManager):
         self.best_score = min(self.best_score, dema_score)
         if self.initial_score is None:
             self.initial_score = current_score
+            
+        # abort in case of infinity
+        if current_score > self.inf_score:
+            return True
         
         # min/max epochs
         if self.epoch < self.min_epochs:
@@ -135,7 +140,8 @@ class ConvergenceManager(EpochManager):
         self.mode = mode
         self.ema1 = None
         self.ema2 = None
-        self.best_score = float('inf')
+        self.inf_score = 1e10 ## not infinity to ensure I can end experiment if we reach infinity
+        self.best_score = self.inf_score
         self.prev_score = None
         self.initial_score = None
     
@@ -164,6 +170,10 @@ class ConvergenceManager(EpochManager):
         if self.prev_score is None:
             self.prev_score = current_score
             return False  # Can't compute slope until 2nd epoch. Inconsequential bug: if max_epochs is 1, this will cause it to run 2 epochs instead.
+        
+        # abort in case of infinity
+        if current_score > self.inf_score:
+            return True
         
         # tracked stats
         dema_score = self.update_dema(current_score - self.prev_score)
