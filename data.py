@@ -61,68 +61,96 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
 
 
 def normalize(x, transposed=False):
-    # Normalizes the input to sum to 1 along the correct axis
     if transposed:
-        # For transposed input, normalize along the second-to-last axis
-        axis = -2 if x.ndim > 1 else 0
-        return x / x.sum(axis=axis, keepdims=True)
+        axis = -2 if x.ndim > 1 else -1
     else:
-        # Normalize along the last axis
-        return x / x.sum(axis=-1, keepdims=True)
+        axis = -1
+
+    # check for any rows of all zero
+    if (x.sum(axis=axis) == 0).any():
+        print('WARNING: some input rows are all zero')
+        # print indices
+        print(np.where(x.sum(axis=axis) == 0))
+
+    # Normalizes the input to sum to 1 along the correct axis
+    return x / x.sum(axis=axis, keepdims=True)
 
 
-def process_data(y0):
+def process_data(y0, transpose=False):
     # produces X (assemblage) from Y (composition), normalizes the composition to sum to 1, and transposes the data
     y = y0.copy()
     x = y0.copy()
     x[x > 0] = 1
-    y = normalize(y, transposed=True)
-    x = normalize(x, transposed=True)
+    y = normalize(y, transposed=transpose)
+    x = normalize(x, transposed=transpose)
     y = y.astype(np.float32)
     x = x.astype(np.float32)
     if (np.sum(np.abs(y0 - y)) > y.shape[1]/25.0):
         print('WARNING: input columns are not distributions. Is the data transposed?')
-    y = torch.from_numpy(y.T)
-    x = torch.from_numpy(x.T)
+    y = torch.from_numpy(y.T if transpose else y)
+    x = torch.from_numpy(x.T if transpose else x)
     return x, y
 
 
-def load_data(filepath_train, device):
+def load_data(filepath_train, filepath_train_pos, filepath_train_val, device):
     # Load data
     y = np.loadtxt(filepath_train, delimiter=',')
-    x, y = process_data(y)  # Assuming process_data is defined somewhere
+    ycon = np.loadtxt(filepath_train_val, delimiter=',')
+    idcon = np.loadtxt(filepath_train_pos, delimiter=',')
+    idcon = torch.from_numpy(idcon).long()
+    print("uncondensed")
+    x, y = process_data(y, transpose=True) 
+    print("condensed")
+    xcon, ycon = process_data(ycon, transpose=False) 
+
+    # print(f"shapes:\n x={x.shape}\n y={y.shape}\n xcon={xcon.shape}\n ycon={ycon.shape}\n idcon={idcon.shape}")
     
     # Move data to device if specified
     if device:
         x = x.to(device)
         y = y.to(device)
+        xcon = xcon.to(device)
+        ycon = ycon.to(device)
+        idcon = idcon.to(device)
     
-    return x, y
+    return x, y, xcon, ycon, idcon
 
 
-def fold_data(x, y, k=5):
-    if k < 0:  # Hold out 1 sample for negative values
-        k = x.size(0)
+def fold_data(datasets, k=5):
+    # Ensure datasets is a list of tensors/arrays with matching lengths
+    dataset_lengths = [len(dataset) for dataset in datasets]
+    if not all(length == dataset_lengths[0] for length in dataset_lengths):
+        raise ValueError("All datasets must have the same length.")
     
+    if k < 0:  # Leave-One-Out if k is negative
+        k = dataset_lengths[0]
+
     # Split data into k folds
     kf = KFold(n_splits=k, shuffle=True, random_state=42)
-    
+
     fold_data = []
-    
-    for train_index, valid_index in kf.split(x):
-        x_train, x_valid = x[train_index], x[valid_index]
-        y_train, y_valid = y[train_index], y[valid_index]
-        
-        fold_data.append((x_train, y_train, x_valid, y_valid))
-    
+
+    for train_index, valid_index in kf.split(datasets[0]):
+        fold = []
+        for dataset in datasets:
+            train_split = dataset[train_index]
+            valid_split = dataset[valid_index]
+            fold.append((train_split, valid_split))
+        fold_data.append(fold)
+
     return fold_data
+
 
 
 def check_leakage(folded_data):
     """
     Checks for data leakage by verifying if any fold contains the same data row repeated in both y_train and y_valid.
     """
-    for fold_idx, (x_train, y_train, x_valid, y_valid) in enumerate(folded_data):
+    for fold_idx, datasets in enumerate(folded_data):
+        # Unpack datasets
+        y_train = datasets[1][0]
+        y_valid = datasets[1][1]
+
         # Convert y_train and y_valid to sets for fast comparison
         y_train_set = set(y_train)
         y_valid_set = set(y_valid)
@@ -139,13 +167,20 @@ def check_leakage(folded_data):
     return True
 
 
-def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True):
+def get_batch(data, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True):
     """Returns a batch of data of size `mb_size` starting from `current_index`,
     with optional noise augmentation for x and y, and returns a tensor z with interpolation according to t."""
+    if len(data) == 3:
+        x, y, ids = data
+    else:
+        x, y = data
+        ids = None
+    
     end_index = min(current_index + mb_size, x.size(0))
     batch_indices = torch.arange(current_index, end_index, dtype=torch.long, device=x.device)
     x_batch = x[batch_indices]
     y_batch = y[batch_indices]
+    ids_batch = ids[batch_indices] if ids is not None else None
     
     if not requires_timesteps:
         t = torch.tensor([t[0], t[-1]]).to(x.device)
@@ -168,25 +203,27 @@ def get_batch(x, y, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=
         for i in range(z.size(0)):
             z[i] = normalize(resample_noisy(z[i], noise_level[i].item()))
 
-    return z, end_index
+    return z, ids_batch, end_index
 
 
 
-def shuffle_data(x, y):
-    # Assuming x and y are numpy arrays or PyTorch tensors
-    assert len(x) == len(y)
-    
-    # If x and y are PyTorch tensors
-    if isinstance(x, torch.Tensor):
-        permutation = torch.randperm(len(x))
-        x = x[permutation]
-        y = y[permutation]
-    else:  # If x and y are numpy arrays
-        permutation = np.random.permutation(len(x))
-        x = x[permutation]
-        y = y[permutation]
-    
-    return x, y
+def shuffle_data(datasets):
+    # Ensure datasets is a list of tensors/arrays with matching lengths
+    dataset_lengths = [len(dataset) for dataset in datasets]
+    if not all(length == dataset_lengths[0] for length in dataset_lengths):
+        raise ValueError("All datasets must have the same length.")
+
+    # Determine type and create permutation
+    if isinstance(datasets[0], torch.Tensor):
+        permutation = torch.randperm(len(datasets[0]))
+    else:  # Assuming numpy arrays
+        permutation = np.random.permutation(len(datasets[0]))
+
+    # Shuffle all datasets using the same permutation
+    shuffled_datasets = [dataset[permutation] for dataset in datasets]
+
+    return shuffled_datasets
+
 
 
 def shuffle_tensor(z, dim=-2):

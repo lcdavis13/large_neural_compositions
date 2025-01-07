@@ -1,92 +1,93 @@
 import math
 import torch
 import torch.nn as nn
+from rezero.transformer import RZTXEncoderLayer
 from ode_solver import odeint
-import models
+import models_cnode
 
-# TODO: Putting a setting here is a hacky shortcut. But ideally this should be addressed at the data preprocessing level instead of doing it dynamically, since it's expensive to do at runtime.
-#  The complication is that we then need to dynamically select from condensed or non-condensed versions of the dataset depending on the model being trained.
-#  We'd also have to use a fixed condensed dimension with padding to equalize them all, so it might be worth it to dynimcally trim off the last dimensions from batches even after moving the rest of the condensiing process to preprocessing.
-needs_condense = False
+# # TODO: Putting a setting here is a hacky shortcut. But ideally this should be addressed at the data preprocessing level instead of doing it dynamically, since it's expensive to do at runtime.
+# #  The complication is that we then need to dynamically select from condensed or non-condensed versions of the dataset depending on the model being trained.
+# #  We'd also have to use a fixed condensed dimension with padding to equalize them all, so it might be worth it to dynimcally trim off the last dimensions from batches even after moving the rest of the condensiing process to preprocessing.
+# needs_condense = False
+#
 
-
-def condense(x):
-    if needs_condense:
-    
-        device = x.device
-        batch_size = x.size(0)
-        max_len = max(torch.sum(x[i] != 0).item() for i in range(batch_size))
-        
-        padded_values = torch.zeros(batch_size, max_len, dtype=x.dtype, device=device)
-        padded_positions = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
-        
-        for i in range(batch_size):
-            positions = torch.nonzero(x[i], as_tuple=True)[0]
-            values = x[i][positions]
-            len_values = len(values)
-            
-            padded_values[i, :len_values] = values
-            padded_positions[i, :len_values] = positions + 1  # Adjust positions by 1
-        
-        return padded_values, padded_positions
-    
-    else:
-        pos = torch.arange(1, x.size(1) + 1, device=x.device)
-        # multiply by 0 or 1 depending on if the value is 0 or not
-        pos = pos * (x != 0).long()
-        
-        return x, pos
-
-
-def decondense(values, positions, size):
-    """
-    Decondenses the values into a larger tensor according to the specified positions.
-    This function supports multiple batch dimensions, with only the last dimension
-    being a non-batch dimension.
-
-    Args:
-        values (torch.Tensor): Tensor of values to be decondensed. Shape: (..., N)
-        positions (torch.Tensor): Tensor of positions where the values should be placed. Shape: (..., N) or (extra_batch, ..., N)
-        size (int): The size of the last dimension of the output tensor.
-
-    Returns:
-        torch.Tensor: Decondensed tensor with shape (..., size).
-    """
-    
-    if needs_condense:
-        device = values.device
-        batch_dims_values = values.shape[:-1]  # All batch dimensions of values except the last
-        batch_dims_positions = positions.shape[:-1]  # All batch dimensions of positions except the last
-        
-        # Ensure positions has the same batch dimensions as values
-        if batch_dims_positions != batch_dims_values:
-            extra_batch_dims = batch_dims_positions[:-len(batch_dims_values)]
-            positions = positions.reshape(*extra_batch_dims, *batch_dims_values, positions.shape[-1])
-            positions = positions.expand(*batch_dims_values, positions.shape[-1])
-        
-        y_shape = (*batch_dims_values, size)
-        y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
-        
-        # Reshape to flatten batch dimensions
-        batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
-        values_flat = values.reshape(batch_size, -1)
-        positions_flat = positions.reshape(batch_size, -1)
-        y_flat = y.reshape(batch_size, size)
-        
-        for i in range(batch_size):
-            valid_positions = positions_flat[i]
-            valid_positions = valid_positions[
-                valid_positions >= 0]  # Remove invalid positions (assume non-negative are valid)
-            valid_positions = valid_positions.clamp(max=size - 1)  # Clamp positions within range [0, size-1]
-            y_flat[i][valid_positions] = values_flat[i][
-                                         :len(valid_positions)]  # Place the values at the valid positions
-        
-        # Reshape y back to original batch dimensions
-        y = y_flat.view(*y_shape)
-        return y
-    
-    else:
-        return values
+# def condense(x):
+#     if needs_condense:
+#
+#         device = x.device
+#         batch_size = x.size(0)
+#         max_len = max(torch.sum(x[i] != 0).item() for i in range(batch_size))
+#
+#         padded_values = torch.zeros(batch_size, max_len, dtype=x.dtype, device=device)
+#         padded_positions = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
+#
+#         for i in range(batch_size):
+#             positions = torch.nonzero(x[i], as_tuple=True)[0]
+#             values = x[i][positions]
+#             len_values = len(values)
+#
+#             padded_values[i, :len_values] = values
+#             padded_positions[i, :len_values] = positions + 1  # Adjust positions by 1
+#
+#         return padded_values, padded_positions
+#
+#     else:
+#         pos = torch.arange(1, x.size(1) + 1, device=x.device)
+#         # multiply by 0 or 1 depending on if the value is 0 or not
+#         pos = pos * (x != 0).long()
+#
+#         return x, pos
+#
+#
+# def decondense(values, positions, size):
+#     """
+#     Decondenses the values into a larger tensor according to the specified positions.
+#     This function supports multiple batch dimensions, with only the last dimension
+#     being a non-batch dimension.
+#
+#     Args:
+#         values (torch.Tensor): Tensor of values to be decondensed. Shape: (..., N)
+#         positions (torch.Tensor): Tensor of positions where the values should be placed. Shape: (..., N) or (extra_batch, ..., N)
+#         size (int): The size of the last dimension of the output tensor.
+#
+#     Returns:
+#         torch.Tensor: Decondensed tensor with shape (..., size).
+#     """
+#
+#     if needs_condense:
+#         device = values.device
+#         batch_dims_values = values.shape[:-1]  # All batch dimensions of values except the last
+#         batch_dims_positions = positions.shape[:-1]  # All batch dimensions of positions except the last
+#
+#         # Ensure positions has the same batch dimensions as values
+#         if batch_dims_positions != batch_dims_values:
+#             extra_batch_dims = batch_dims_positions[:-len(batch_dims_values)]
+#             positions = positions.reshape(*extra_batch_dims, *batch_dims_values, positions.shape[-1])
+#             positions = positions.expand(*batch_dims_values, positions.shape[-1])
+#
+#         y_shape = (*batch_dims_values, size)
+#         y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
+#
+#         # Reshape to flatten batch dimensions
+#         batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
+#         values_flat = values.reshape(batch_size, -1)
+#         positions_flat = positions.reshape(batch_size, -1)
+#         y_flat = y.reshape(batch_size, size)
+#
+#         for i in range(batch_size):
+#             valid_positions = positions_flat[i]
+#             valid_positions = valid_positions[
+#                 valid_positions >= 0]  # Remove invalid positions (assume non-negative are valid)
+#             valid_positions = valid_positions.clamp(max=size - 1)  # Clamp positions within range [0, size-1]
+#             y_flat[i][valid_positions] = values_flat[i][
+#                                          :len(valid_positions)]  # Place the values at the valid positions
+#
+#         # Reshape y back to original batch dimensions
+#         y = y_flat.view(*y_shape)
+#         return y
+#
+#     else:
+#         return values
 
 
 class cAttend_simple(nn.Module):
@@ -94,6 +95,7 @@ class cAttend_simple(nn.Module):
     No ODE, simplest model that only generates a fitness matrix from Q and K and tries to directly predict from it.
     """
     def __init__(self, data_dim, id_embed_dim, qk_dim):
+        self.USES_CONDENSED = True
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim+1, id_embed_dim)  # Add 1 to account for placeholder ID
@@ -101,8 +103,8 @@ class cAttend_simple(nn.Module):
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
         self.scale_factor = qk_dim ** -0.5
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -115,8 +117,8 @@ class cAttend_simple(nn.Module):
         dv = torch.mul(val, fx)
         val = torch.add(val, dv) # Can also just do v += fitness but this adds a bit of ODE-like inductive bias
         
-        y = decondense(val, pos, self.data_dim)
-        return y
+        # y = decondense(val, pos, self.data_dim)
+        return val
     
     
 class cAttentionNoValue(nn.Module):
@@ -161,39 +163,41 @@ class cAttention(nn.Module):
 class canODE_attentionNoValue(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttentionNoValue(id_embed_dim, qk_dim)
-        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
         
         y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
 class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
-        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
         self.scale_factor = qk_dim ** -0.5
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -208,35 +212,37 @@ class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
         
         y = odeint(lambda xo,to: self.func(xo,to,fx), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
 class canODE_attention(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttention(id_embed_dim, qk_dim)
-        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
         
         y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
 class canODE_attention_static(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, qk_dim):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         super().__init__()
         self.data_dim = data_dim
@@ -244,10 +250,10 @@ class canODE_attention_static(nn.Module): # compositional attention nODE
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
         self.w_v = nn.Linear(id_embed_dim, 1)
-        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -258,7 +264,7 @@ class canODE_attention_static(nn.Module): # compositional attention nODE
         fx = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0).squeeze()  # TODO: try dropout on this and other models
         y = odeint(lambda xo,to: self.func(xo,to,fx), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
     
     
@@ -280,29 +286,31 @@ class cAttentionMultihead(nn.Module):
 class canODE_attentionMultihead(nn.Module): # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttentionMultihead(id_embed_dim, num_heads)
-        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
         
         y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
 class canODE_attentionMultihead_static(nn.Module):  # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super().__init__()
@@ -311,10 +319,10 @@ class canODE_attentionMultihead_static(nn.Module):  # compositional attention nO
         self.attend = nn.MultiheadAttention(id_embed_dim, num_heads, batch_first=True, dropout=0.0)
         self.decode = nn.Linear(id_embed_dim,
                                 1)  # because pytorch's implementation doesn't support using a different embedding dim for V+Output than for Q+K
-        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -324,7 +332,7 @@ class canODE_attentionMultihead_static(nn.Module):  # compositional attention nO
         
         y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
     
     
@@ -349,29 +357,31 @@ class cAttentionTransformer(nn.Module):
 class canODE_transformer(nn.Module):  # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super().__init__()
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttentionTransformer(id_embed_dim, num_heads, depth, ffn_dim_multiplier)
-        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
         
         y = odeint(lambda xo,to: self.func(xo, to, id_embed), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
 class canODE_transformer_static(nn.Module):  # compositional attention nODE
     def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         
         # As is standard in multihead attention, the Q+K embedding dimensions are equal to the full embed dim divided by number of attention heads. This contrasts with the above models where it was explicitly parameterized.
         super().__init__()
@@ -382,10 +392,10 @@ class canODE_transformer_static(nn.Module):  # compositional attention nODE
                                                    activation="gelu", batch_first=True, dropout=0.0)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         self.decode = nn.Linear(id_embed_dim, 1)
-        self.func = models.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -395,7 +405,7 @@ class canODE_transformer_static(nn.Module):  # compositional attention nODE
         
         y = odeint(lambda xo, to: self.func(xo, to, fx), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
@@ -412,6 +422,7 @@ class canODE_GenerateFitMat(nn.Module):
     '''
     def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         super().__init__()
         
         self.data_dim = data_dim
@@ -430,10 +441,10 @@ class canODE_GenerateFitMat(nn.Module):
         self.fitbias = nn.Parameter(torch.zeros(data_dim + 1)) # Add 1 to account for placeholder ID
         
         # define the ODE function
-        self.ode_func = models.ODEFunc_cNODEGen_ExternalFitnessFn()
+        self.ode_func = models_cnode.ODEFunc_cNODEGen_ExternalFitnessFn()
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -447,7 +458,7 @@ class canODE_GenerateFitMat(nn.Module):
         
         y = odeint(lambda xo, to: self.ode_func(xo, to, fitnessFn), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
@@ -462,6 +473,7 @@ class canODE_ReplicatorAttendFit(nn.Module):
     '''
     def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout):
         self.USES_ODEINT = True
+        self.USES_CONDENSED = True
         super().__init__()
         
         self.data_dim = data_dim
@@ -476,10 +488,10 @@ class canODE_ReplicatorAttendFit(nn.Module):
         self.compress = nn.Linear(id_embed_dim, fitness_qk_dim - 1) # minus 1 to account for value concat while maintaining divisibility by num_heads
         
         attend = cAttentionMultihead(fitness_qk_dim, num_heads)
-        self.func = models.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
     
-    def forward(self, t, x):
-        val, pos = condense(x)
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -490,7 +502,7 @@ class canODE_ReplicatorAttendFit(nn.Module):
         
         y = odeint(lambda xo, to: self.func(xo, to, id_embed), val, t)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
 
 
@@ -513,6 +525,7 @@ class JustATransformer(nn.Module):
     - We condense & decondense the sequence if applicable
     '''
     def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        self.USES_CONDENSED = True
         super().__init__()
         
         self.data_dim = data_dim
@@ -525,8 +538,8 @@ class JustATransformer(nn.Module):
         self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         
     
-    def forward(self, x):
-        val, pos = condense(x)
+    def forward(self, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -539,7 +552,7 @@ class JustATransformer(nn.Module):
         # extract the value from the transformer output
         y = h[..., 0]
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
     
 class TransformerNormalized(nn.Module):
@@ -550,6 +563,7 @@ class TransformerNormalized(nn.Module):
     - We condense & decondense the sequence if applicable
     '''
     def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        self.USES_CONDENSED = True
         super().__init__()
         
         self.data_dim = data_dim
@@ -562,8 +576,8 @@ class TransformerNormalized(nn.Module):
         self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         
     
-    def forward(self, x):
-        val, pos = condense(x)
+    def forward(self, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -579,7 +593,58 @@ class TransformerNormalized(nn.Module):
         # softmax
         y = self.masked_softmax(pos, y_raw)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
+        return y
+    
+    def masked_softmax(self, pos, y_raw):
+        # Mask out elements where pos is 0
+        mask = (pos != 0)
+        masked_y_raw = y_raw.masked_fill(~mask, float('-inf'))
+        # Normalize the output to sum to 1 (excluding masked elements)
+        y = nn.functional.softmax(masked_y_raw, dim=-1)
+        # Set masked elements to 0
+        y = y * mask.float()
+        return y
+    
+class RZTransformerNormalized(nn.Module):
+    '''
+    Use a re-zero transformer to directly predict the final relative abundances from the input.
+    This model normalizes the output to sum to 1 in addition to the following:
+    - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
+    - We condense & decondense the sequence if applicable
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        self.USES_CONDENSED = True
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
+        
+        # define the transformer
+        encoder_layer = RZTXEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+    
+    def forward(self, val, pos):
+        # val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        
+        # concatenate the value onto the id embedding
+        h0 = torch.cat((val.unsqueeze(-1), id_embed), -1)
+        
+        h = self.transform(h0)
+        
+        # extract the value from the transformer output
+        y_raw = h[..., 0]
+        
+        # softmax
+        y = self.masked_softmax(pos, y_raw)
+        
+        # y = decondense(y, pos, self.data_dim)
         return y
     
     def masked_softmax(self, pos, y_raw):
@@ -601,6 +666,7 @@ class TransformerSoftmax(nn.Module):
     - We condense & decondense the sequence if applicable
     '''
     def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        self.USES_CONDENSED = True
         super().__init__()
         
         self.data_dim = data_dim
@@ -613,8 +679,8 @@ class TransformerSoftmax(nn.Module):
         self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         
     
-    def forward(self, x):
-        val, pos = condense(x)
+    def forward(self, val, pos):
+        # val, pos = condense(x)
         
         # modify v
         id_embed = self.embed(pos)
@@ -630,7 +696,7 @@ class TransformerSoftmax(nn.Module):
         # normalize the output to sum to 1
         y = nn.functional.softmax(y, dim=-1)
         
-        y = decondense(y, pos, self.data_dim)
+        # y = decondense(y, pos, self.data_dim)
         return y
     
     

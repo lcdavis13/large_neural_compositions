@@ -23,7 +23,7 @@ import torch.nn as nn
 import data
 import epoch_managers
 import lr_schedule
-import models
+import models_cnode
 import models_baseline
 import models_embedded
 import stream

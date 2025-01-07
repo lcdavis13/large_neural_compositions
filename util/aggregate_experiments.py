@@ -129,8 +129,8 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "../results/hpsearch_nonstd_newmodels_1-2/expt/"
-    path_pattern = f"{folder}cNODE-paper-ocean*_job*_experiments.csv"
+    folder = "../results/hpsearch_lrrs_waimea_1-4/expt/"
+    path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     
     # Load, process, and concatenate all CSV files into a master DataFrame

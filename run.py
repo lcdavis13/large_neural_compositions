@@ -23,7 +23,7 @@ import torch.nn as nn
 import data
 import epoch_managers
 import lr_schedule
-import models
+import models_cnode
 import models_baseline
 import models_embedded
 import stream
@@ -36,16 +36,23 @@ import tracemalloc
 tracemalloc.start()
 
 
-def eval_model(model, x, timesteps):
+def eval_model(model, x, timesteps, ids):
     # evaluates models whether they require ODE timesteps or not
     requires_timesteps = getattr(model, 'USES_ODEINT', False)
+    requires_condensed = getattr(model, 'USES_CONDENSED', False)
     
     if requires_timesteps and timesteps is not None:
         # Call models that require the timesteps argument
-        y_steps = model(timesteps, x)
+        if requires_condensed:
+            y_steps = model(timesteps, x, ids)
+        else:
+            y_steps = model(timesteps, x)
     else:
         # Call models that do not require the timesteps argument
-        y = model(x)
+        if requires_condensed:
+            y = model(x, ids)
+        else:
+            y = model(x)
         y_steps = y.unsqueeze(0)
     
     return y_steps
@@ -100,23 +107,23 @@ def ceildiv(a, b):
     return -(a // -b)
 
 
-def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device):
+def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device):
     model.eval()
     
     total_loss = 0.0
     total_score = 0.0
     total_distr_error = 0.0
-    total_samples = x_val.size(0)
+    total_samples = data_val[0].size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
     current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
-        z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
+        z, ids, current_index = data.get_batch(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
         x, y = z[0], z[-1]
         mb_examples = x.size(0)
         
         with torch.no_grad():
-            y_pred = eval_model(model, x, t)[-1]
+            y_pred = eval_model(model, x, t, ids)[-1]
             y_pred = y_pred.to(device)
             
             loss = loss_fn(y_pred, y)
@@ -132,7 +139,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     return avg_loss, avg_score, avg_penalty
 
 
-def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
+def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
                 outputs_per_epoch,
                 prev_examples, fold, epoch_num, model_name, dataname, loss_fn, score_fn, distr_error_fn, device,
                 filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
@@ -140,7 +147,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
     
     total_loss = 0
     total_penalty = 0
-    total_samples = x_train.size(0)
+    total_samples = data_train[0].size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
     current_index = 0  # Initialize current index to start of dataset
     new_examples = 0
@@ -160,14 +167,14 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, requires_timesteps=supervise_steps)  #
+        z, ids, current_index = data.get_batch(data_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, requires_timesteps=supervise_steps)  #
         mb_examples = z.shape[-2]
         
         if current_index >= total_samples:
             current_index = 0  # Reset index if end of dataset is reached
-            x_train, y_train = data.shuffle_data(x_train, y_train)
+            data_train = data.shuffle_data(data_train)
         
-        y_pred = eval_model(model, z[0], t)
+        y_pred = eval_model(model, z[0], t, ids)
         if supervise_steps:
             y_pred = y_pred[1:]
             y_true = z[1:]
@@ -444,8 +451,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     return optimal_weight_decay, optimal_lr
 
 
-def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, scaler, x_train,
-               y_train, x_valid, y_valid, t,
+def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, scaler, data_train, data_valid, t,
                model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train=False, jobstring=""):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
@@ -464,9 +470,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     filepath_out_incremental = f'results/incr/{model_name}_{dataname}{jobstring}_incremental.csv'
     
     # initial validation benchmark
-    l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn,
+    l_val, score_val, p_val = validate_epoch(model, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
-    l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn,
+    l_trn, score_trn, p_trn = validate_epoch(model, data_train, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
     
     gpu_memory_reserved = torch.cuda.memory_reserved(device)
@@ -503,7 +509,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     training_curve = []
     while True:
-        l_trn, p_trn, train_examples_seen = train_epoch(model, x_train, y_train, minibatch_examples,
+        l_trn, p_trn, train_examples_seen = train_epoch(model, data_train, minibatch_examples,
                                                         accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
                                                         outputs_per_epoch, train_examples_seen,
                                                         fold, manager.epoch, model_name, dataname, loss_fn, score_fn,
@@ -523,10 +529,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                 # Synchronize the inner model with the updated meta-model weights
                 model.load_state_dict(meta_model.state_dict())
         
-        l_val, score_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, t, loss_fn, score_fn,
+        l_val, score_val, p_val = validate_epoch(model, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                                  distr_error_fn, device)
         if reeval_train:
-            l_trn, score_trn, p_trn = validate_epoch(model, x_train, y_train, minibatch_examples, t, loss_fn, score_fn,
+            l_trn, score_trn, p_trn = validate_epoch(model, data_train, minibatch_examples, t, loss_fn, score_fn,
                                                      distr_error_fn, device)
         else:
             score_trn = -1.0
@@ -617,9 +623,17 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         manager = epoch_managers.ExplosionManager(memory=0.5, threshold=1.0, mode="rel", max_epochs=max_epochs)
         # manager = epoch_managers.ConvergenceManager(memory=0.1, threshold=0.001, mode="const", min_epochs=min_epochs, max_epochs=max_epochs)
         
-        x_train, y_train, x_valid, y_valid = data_fold
+        # x_train, y_train, x_valid, y_valid = data_fold
+        requires_condensed = getattr(model, 'USES_CONDENSED', False)
+        if not requires_condensed:
+            data_train = [data_fold[0][0], data_fold[1][0]]
+            data_valid = [data_fold[0][1], data_fold[1][1]]
+        else:
+            data_train = [data_fold[2][0], data_fold[3][0], data_fold[4][0]]
+            data_valid = [data_fold[2][1], data_fold[3][1], data_fold[4][1]]
+
         
-        steps_per_epoch = ceildiv(x_train.size(0), minibatch_examples * accumulated_minibatches)
+        steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
         base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
                                            threshold_mode='rel', threshold=0.01)
         # base_scheduler = OneCycleLR(
@@ -631,8 +645,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(model, optimizer, scheduler, manager,
                                                                             minibatch_examples, accumulated_minibatches, noise, interpolate,
-                                                                            scaler, x_train, y_train,
-                                                                            x_valid, y_valid, timesteps, model_name,
+                                                                            scaler, data_train, data_valid, 
+                                                                            timesteps, model_name,
                                                                             dataname, fold_num, loss_fn, score_fn,
                                                                             distr_error_fn, device,
                                                                             outputs_per_epoch=10,
@@ -641,56 +655,58 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
                                                                             reeval_train=reeval_train,
                                                                             jobstring=jobstring)
         
-        # Print output of model on a batch of test examples
-        DEBUG_OUTPUT = False  # TO DO: make this an actual parameter
-        DEBUG_OUT_NUM = 4
-        
-        if DEBUG_OUTPUT:
-            DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_{dataname}{jobstring}_predictions.csv"
-            
-            model.eval()
-            with torch.no_grad():
-                # Get the model output for the first minibatch
-                debug_ys = eval_model(model, x_valid[:DEBUG_OUT_NUM].to(device), timesteps)
-                
-                # Get the corresponding y_valid batch
-                y_valid_batch = y_valid[0:DEBUG_OUT_NUM].to(device)
-                
-                print(f"Example output of model {model_name} on first test batch")
-                
-                csv_data = []
-                # Iterate row by row
-                for i in range(DEBUG_OUT_NUM):
-                    y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
-                    
-                    
-                    # For console printing
-                    print(f"Row {i}:")
-                    print("time: -1, y_valid:")
-                    print(y_valid_row)
-                    
-                    # Iterate through each timestep to append debug_ys for the current batch position
-                    for t_idx, debug_y_row in enumerate(debug_ys[:, i].cpu().numpy()):
-                        timestep = timesteps[t_idx]
-                        
-                        # Add debug_ys row with the current timestep
-                        csv_data.append(
-                            [timestep.item()] + list(debug_y_row))  # Add debug_y for this batch at current timestep
-                        
-                        # For console printing
-                        print(f"time: {timestep.item()}, debug_y for batch {i}:")
-                        print(debug_y_row)
 
-                    # Add correct answer at the end with time = -1
-                    csv_data.append([-1] + list(y_valid_row))  # Add y_valid for this batch
-                    
-                    print('-' * 50)  # Separator between batch items
-                
-                # Create a DataFrame for exporting to CSV
-                df = pd.DataFrame(csv_data)
+        # Below is temporarily commented out - fix it for the new dataset formats
+        # Print output of model on a batch of test examples
+        # DEBUG_OUTPUT = False  # TO DO: make this an actual parameter
+        # DEBUG_OUT_NUM = 4
+        
+        # if DEBUG_OUTPUT:
+        #     DEBUG_OUT_CSV = f"./analysis/debug_outputs/{model_name}_{dataname}{jobstring}_predictions.csv"
             
-            # Export to CSV
-            df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
+        #     model.eval()
+        #     with torch.no_grad():
+        #         # Get the model output for the first minibatch
+        #         debug_ys = eval_model(model, x_valid[:DEBUG_OUT_NUM].to(device), timesteps)
+                
+        #         # Get the corresponding y_valid batch
+        #         y_valid_batch = y_valid[0:DEBUG_OUT_NUM].to(device)
+                
+        #         print(f"Example output of model {model_name} on first test batch")
+                
+        #         csv_data = []
+        #         # Iterate row by row
+        #         for i in range(DEBUG_OUT_NUM):
+        #             y_valid_row = y_valid_batch[i].cpu().numpy()  # Move to CPU and convert to numpy for easy processing
+                    
+                    
+        #             # For console printing
+        #             print(f"Row {i}:")
+        #             print("time: -1, y_valid:")
+        #             print(y_valid_row)
+                    
+        #             # Iterate through each timestep to append debug_ys for the current batch position
+        #             for t_idx, debug_y_row in enumerate(debug_ys[:, i].cpu().numpy()):
+        #                 timestep = timesteps[t_idx]
+                        
+        #                 # Add debug_ys row with the current timestep
+        #                 csv_data.append(
+        #                     [timestep.item()] + list(debug_y_row))  # Add debug_y for this batch at current timestep
+                        
+        #                 # For console printing
+        #                 print(f"time: {timestep.item()}, debug_y for batch {i}:")
+        #                 print(debug_y_row)
+
+        #             # Add correct answer at the end with time = -1
+        #             csv_data.append([-1] + list(y_valid_row))  # Add y_valid for this batch
+                    
+        #             print('-' * 50)  # Separator between batch items
+                
+        #         # Create a DataFrame for exporting to CSV
+        #         df = pd.DataFrame(csv_data)
+            
+        #     # Export to CSV
+        #     df.to_csv(DEBUG_OUT_CSV, index=False, header=False)
         
         val_loss_optims.append(val_opt)
         val_score_optims.append(valscore_opt)
@@ -744,10 +760,10 @@ def main():
     
     # dataname = "P"
     # dataname = "waimea"
-    # dataname = "waimea-std"
+    dataname = "waimea-std"
     # dataname = "waimea-condensed"
     # dataname = "cNODE-paper-ocean"
-    dataname = "cNODE-paper-ocean-std"
+    # dataname = "cNODE-paper-ocean-std"
     # dataname = "cNODE-paper-human-gut"
     # dataname = "cNODE-paper-human-oral"
     # dataname = "cNODE-paper-drosophila"
@@ -759,20 +775,20 @@ def main():
     # data folding params
     kfolds = 5  # -1 for leave-one-out, > 1 for k-folds
     
-    whichfold = -1
-    # whichfold = 0
+    # whichfold = -1
+    whichfold = 0
     
     jobid = "-1"  # -1 for no job id
     
     # experiment hyperparameters
     hp = dicy()
     
-    hp.modelnames = "canODE-attendFit"
+    hp.modelnames = "cNODE-hourglass"
     
     hp.solver = os.getenv("SOLVER")
     
     hp.min_epochs = 2
-    hp.max_epochs = 2
+    hp.max_epochs = 1
     hp.patience = 1100
     hp.early_stop = True
     
@@ -782,7 +798,7 @@ def main():
     hp.minibatch_examples = 20
     hp.accumulated_minibatches = 1
     hp.LR = 0.1
-    hp.reptile_lr = 0.1
+    hp.reptile_lr = 1.0
     hp.WD_factor = 0.0
     hp.noise = 0.075
     hp.interpolate = True
@@ -791,7 +807,7 @@ def main():
     hp.hidden_dim = 8
     hp.attend_dim_per_head = 4
     hp.num_heads = 2
-    hp.depth = 3
+    hp.depth = 6
     hp.ffn_dim_multiplier = 4.0
     hp.dropout = 0.5
     
@@ -842,17 +858,19 @@ def main():
     
     # load data
     filepath_train = f'data/{dataname}_train.csv'
-    x, y = data.load_data(filepath_train, device)
-    # x, y = data.shuffle_data(x, y)  # UNCOMMENT - only using this for LOO tracking which example is which fold
-    # x,y = x[1:], y[1:] # FOR TESTING ONLY
-    data_folded = data.fold_data(x, y, kfolds)
+    filepath_train_pos = f'data/{dataname}_train-pos.csv'
+    filepath_train_val = f'data/{dataname}_train-val.csv'
+    x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device)
+    data_folded = data.fold_data([x, y, xcon, ycon, idcon], kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
     data_folded = [data_folded[whichfold]] if whichfold >= 0 else data_folded  # only run a single fold based on args
     assert (data.check_leakage(data_folded))
     
     print('dataset:', filepath_train)
     print(f'data shape: {x.shape}')
-    print(f'training data shape: {data_folded[0][0].shape}')
-    print(f'validation data shape: {data_folded[0][2].shape}')
+    print(f'training data shape: {data_folded[0][0][0].shape}')
+    print(f'validation data shape: {data_folded[0][0][1].shape}')
+    print(f'condensed training shape: {data_folded[0][2][0].shape}')
+    print(f'condensed validation shape: {data_folded[0][2][1].shape}')
     
     
     # computed hyperparams
@@ -877,9 +895,13 @@ def main():
         # most useful models
         'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
         'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim),
-        'cNODE1': lambda args: models.cNODE1(args.data_dim),
-        'cNODE2': lambda args: models.cNODE2(args.data_dim),
+        'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim),
+        'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim),
         'transformShaped': lambda args: models_embedded.TransformerNormalized(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        ),
+        'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         ),
@@ -891,7 +913,7 @@ def main():
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
         ),
-        'cNODE-hourglass': lambda args: models.cNODE_HourglassFitness(
+        'cNODE-hourglass': lambda args: models_cnode.cNODE_HourglassFitness(
             data_dim=args.data_dim, hidden_dim=args.hidden_dim, depth=args.depth
         ),
         'baseline-cNODE0': lambda args: models_baseline.cNODE0(args.data_dim),
@@ -908,10 +930,10 @@ def main():
         'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(args.data_dim),
         'baseline-cAttend-1step': lambda args: models_embedded.cAttend_simple(args.data_dim, args.attend_dim, args.attend_dim),
         'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(args.data_dim, args.hidden_dim),
-        'baseline-cNODE2-width1': lambda args: models.cNODE_HourglassFitness(
+        'baseline-cNODE2-width1': lambda args: models_cnode.cNODE_HourglassFitness(
             data_dim=args.data_dim, hidden_dim=1, depth=3
         ),
-        'baseline-cNODE2-width2': lambda args: models.cNODE_HourglassFitness(
+        'baseline-cNODE2-width2': lambda args: models_cnode.cNODE_HourglassFitness(
             data_dim=args.data_dim, hidden_dim=2, depth=3
         ),
         
@@ -933,11 +955,11 @@ def main():
         
         
         # sanity test models
-        'cNODE1-GenFn': lambda args: models.cNODE2_ExternalFitnessFn(args.data_dim), # for testing, identical to cNODE1
-        'cNODE2_DKI': lambda args: models.cNODE2_DKI(args.data_dim), # sanity test, this is the same as cNODE2 but less optimized
-        'cNODE2-Gen': lambda args: models.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim), nn.Linear(args.data_dim, args.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        "cNODE2-static": lambda args: models.cNODE2_ExternalFitness(args.data_dim), # sanity test
-        "cNODE2-FnFitness": lambda args: models.cNODE2_FnFitness(args.data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
+        'cNODE1-GenFn': lambda args: models_cnode.cNODE2_ExternalFitnessFn(args.data_dim), # for testing, identical to cNODE1
+        'cNODE2_DKI': lambda args: models_cnode.cNODE2_DKI(args.data_dim), # sanity test, this is the same as cNODE2 but less optimized
+        'cNODE2-Gen': lambda args: models_cnode.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim), nn.Linear(args.data_dim, args.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
+        "cNODE2-static": lambda args: models_cnode.cNODE2_ExternalFitness(args.data_dim), # sanity test
+        "cNODE2-FnFitness": lambda args: models_cnode.cNODE2_FnFitness(args.data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
     
     modelnames_to_run = hp.modelnames.split(',')
@@ -960,47 +982,12 @@ def main():
     ode_stepsize = ode_timemax / hp.ode_timesteps
     timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
     
-    # # START of hacky hyperparam search - remove
-    # minibatch_examples_list = [1, 8, 16, 32]
-    # accumulated_minibatches_list = [1, 4, 8]
-    # LR_list = [0.0001, 0.002, 0.04, 0.8, 10.0]
-    # WD_list = [0.0, 0.0001, 0.001, 0.01]
-    # for minibatch_examples in minibatch_examples_list:
-    #     for accumulated_minibatches in accumulated_minibatches_list:
-    #         for LR in LR_list:
-    #             for WD in WD_list:
-    #                 #     # END of hacky hyperparam search - remove
-    
-    # # START of hacky hyperparam search - remove
-    # LR_list = [0.00004, 0.0001, 0.0004, 0.001, 0.004] #, 0.01, 0.04] #, 0.1, 0.4, 1.0]
-    # WD_list = [0.0] #, 0.000001, 0.00001, 0.0001]
-    # for LR in LR_list:
-    #     for WD in WD_list:
-    #         # END of hacky hyperparam search - remove
-    
-    # START of hacky hyperparam search - remove
-    # for hidden_dim in [1, 2, 4, 8, 16, 32, 64]:
-    #     attend_dim = hidden_dim
-    #     # num_heads = attend_dim
-    #     num_heads = {1:1, 2:2, 4:2, 8:4, 16:4, 32:8, 64:8}[attend_dim]
-    #     # END of hacky hyperparam search - remove
-    
-    # START of hacky hyperparam search - remove
-    # for num_heads in [2, 4, 8, 16]:
-    #     for head_dim in [4, 8, 16, 32]:
-    #         attend_dim = num_heads * head_dim
-    #         if attend_dim > data_dim:
-    #             continue
-    #         for ffn_dim_multiplier in [0.5, 1.0, 2.0]:
-    #             for depth in [2, 3]:
-    #     # END of hacky hyperparam search - remove
-    
     # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
     # Model dictionary. Hyperparam override(s)
     
     # Establish baseline performance and add to plots
     trivial_model = models_baseline.ReturnInput()
-    trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, x, y, hp.minibatch_examples,
+    trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, [x, y], hp.minibatch_examples,
                                                                        timesteps, loss_fn, score_fn, distr_error_fn,
                                                                        device)
     print(f"\n\nTRIVIAL MODEL loss: {trivial_loss}, score: {trivial_score}\n\n")
@@ -1032,85 +1019,6 @@ def main():
         #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
         #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
         # print(f"LR:{hp.LR}, WD:{hp.WD}")
-        
-        # TODO: remove, hardcoded values for cNODE2 (steepest point found in LRFinder)
-        
-        # # OCEAN
-        # if dataname == "cNODE-paper-ocean" and hp.minibatch_examples == 16:
-        #
-        #     # # transformer big:
-        #     # hp.WD = 3.2
-        #     # hp.LR = 0.01
-        #     # # hp.WD = 0.1
-        #     # # hp.LR = 0.001
-        #     #
-        #     # # # cNODE2:
-        #     # # hp.WD = 3.2
-        #     # # hp.LR = 0.032
-        #
-        #     # cNODE1:`
-        #     if model_name == "cNODE1":
-        #         # hp.LR = 0.1
-        #         # hp.WD = 0.1
-        #         hp.LR = 0.01 # for const LR instead of OneCycle
-        #         hp.WD = 0.0
-        #
-        #
-        #     if model_name == "baseline-SLP-ODE":
-        #         hp.LR = 0.001 # for const LR instead of OneCycle
-        #         hp.WD = 0.0
-        #
-        #     # # baseline-SLPReplicator:
-        #     # hp.LR = 2.0
-        #     # hp.WD = 0.01
-        #
-        #     # if model_name == "baseline-const":
-        #     #     hp.LR = 0.2
-        #     #     hp.WD = 0.32
-        #     #
-        #     # if model_name == "baseline-constShaped":
-        #     #     hp.LR = 10
-        #     #     hp.WD = 0.001
-        #
-        #     if model_name == "baseline-const":
-        #         hp.LR = 0.02
-        #         hp.WD = 0.32
-        #
-        #     if model_name == "baseline-constShaped":
-        #         # hp.LR = 1
-        #         # hp.WD = 0.01
-        #
-        #         hp.LR = 0.01 # for const LR instead of OneCycle
-        #         hp.WD = 0.0
-        #
-        #     if model_name == "baseline-cNODE0-1step":
-        #         hp.LR = 0.5
-        #         hp.WD = 0.0
-        #
-        #     if model_name == "baseline-cNODE1-1step":
-        #         hp.LR = 1.0
-        #         hp.WD = 0.0
-        #
-        # if dataname == "p" and hp.minibatch_examples == 16:
-        #     ## synth data batch size 16
-        #
-        #     # # baseline-SLPReplicator:
-        #     if model_name == "baseline-SLPReplicator":
-        #         hp.WD = 0.1
-        #         hp.LR = 0.032
-        #     # hp.WD = 0.1
-        #     # hp.LR = 0.032
-        #
-        #     # # cNODE2:
-        #     # if model_name == "cNODE2":
-        #     #     hp.WD = 0.33
-        #     #     hp.LR = 0.0002
-        #
-        #     # # transformer big:
-        #     # hp.WD = 0.032
-        #     # hp.LR = 0.001
-        #     # # hp.WD = 0.01
-        #     # # hp.LR = 0.00001
         
         # hp = ui.ask(hp, keys=["LR", "WD"])
         
@@ -1179,9 +1087,10 @@ def main():
         if not df_clean.empty:
             average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
             min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+            best_epoch_metrics = min_val_loss_epoch.to_dict()
         else:
             min_val_loss_epoch = None  # or handle the empty case as needed
-        best_epoch_metrics = min_val_loss_epoch.to_dict()
+            best_epoch_metrics = {"epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
         
         # write folds to log file
         for i in range(len(val_loss_optims)):
