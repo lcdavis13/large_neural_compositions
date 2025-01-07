@@ -31,6 +31,7 @@ from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
 import user_confirmation as ui
 import psutil
+from hyperparams import HyperparameterBuilder
 
 import tracemalloc
 tracemalloc.start()
@@ -756,141 +757,86 @@ def main():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
     
-    # Data
-    
-    # dataname = "P"
-    # dataname = "waimea"
-    dataname = "waimea-std"
-    # dataname = "waimea-condensed"
-    # dataname = "cNODE-paper-ocean"
-    # dataname = "cNODE-paper-ocean-std"
-    # dataname = "cNODE-paper-human-gut"
-    # dataname = "cNODE-paper-human-oral"
-    # dataname = "cNODE-paper-drosophila"
-    # dataname = "cNODE-paper-soil-vitro"
-    # dataname = "cNODE-paper-soil-vivo"
-    # dataname = "dki-synth"
-    # dataname = "dki-real"
-    
-    # data folding params
-    kfolds = 5  # -1 for leave-one-out, > 1 for k-folds
-    
-    # whichfold = -1
-    whichfold = 0
-    
-    jobid = "-1"  # -1 for no job id
-    
-    # experiment hyperparameters
-    hp = dicy()
-    
-    hp.modelnames = "cNODE-hourglass"
-    
-    hp.solver = os.getenv("SOLVER")
-    
-    hp.min_epochs = 2
-    hp.max_epochs = 1
-    hp.patience = 1100
-    hp.early_stop = True
-    
-    hp.ode_timesteps = 15
-    
-    # optimization hyperparameters
-    hp.minibatch_examples = 20
-    hp.accumulated_minibatches = 1
-    hp.LR = 0.1
-    hp.reptile_lr = 1.0
-    hp.WD_factor = 0.0
-    hp.noise = 0.075
-    hp.interpolate = True
-    
-    # model shape hyperparameters
-    hp.hidden_dim = 8
-    hp.attend_dim_per_head = 4
-    hp.num_heads = 2
-    hp.depth = 6
-    hp.ffn_dim_multiplier = 4.0
-    hp.dropout = 0.5
-    
-    # command-line arguments
-    parser = argparse.ArgumentParser(description='run')
-    parser.add_argument('--models', default=hp.modelnames, help='models to run, comma-separated list')
-    parser.add_argument('--dataname', default=dataname, help='dataset name')
-    parser.add_argument('--kfolds', default=kfolds, help='how many data folds, -1 for leave-one-out')
-    parser.add_argument('--whichfold', default=whichfold, help='which fold to run, -1 for all')
-    parser.add_argument("--jobid", default=jobid, help="job id")
-    parser.add_argument("--headless", action="store_true", help="run without plotting")
-    parser.add_argument('--epochs', default=hp.max_epochs, help='maximum number of epochs')
-    parser.add_argument('--mb', default=hp.minibatch_examples, help='minibatch size')
-    parser.add_argument('--lr', default=hp.LR, help='learning rate')
-    parser.add_argument('--reptile_rate', default=hp.reptile_lr, help='reptile outer-loop learning rate')
-    parser.add_argument('--wd_factor', default=hp.WD_factor, help='weight decay factor (multiple of LR)')
-    parser.add_argument('--noise', default=hp.noise, help='noise level')
-    parser.add_argument('--ode_steps', default=hp.ode_timesteps, help='number of ODE timesteps')
-    parser.add_argument('--interpolate', default=int(hp.interpolate), help='whether or not to use supervised interpolation steps, 0 or 1')
-    parser.add_argument('--num_heads', default=hp.num_heads, help='number of attention heads')
-    parser.add_argument('--hidden_dim', default=hp.hidden_dim, help='hidden dimension')
-    parser.add_argument('--attend_dim_per_head', default=hp.attend_dim_per_head, help='attention dimension')
-    parser.add_argument('--depth', default=hp.depth, help='depth of model')
-    parser.add_argument('--ffn_dim_multiplier', default=hp.ffn_dim_multiplier, help='multiplier for ffn dimension')
-    parser.add_argument('--dropout', default=hp.dropout, help='dropout rate')
-    
-    
-    args = parser.parse_args()
-    hp.modelnames = args.models
-    dataname = args.dataname
-    whichfold = int(args.whichfold)
-    kfolds = int(args.kfolds)
-    hp.max_epochs = int(args.epochs)
-    hp.minibatch_examples = int(args.mb)
-    hp.LR = float(args.lr)
-    hp.reptile_lr = float(args.reptile_rate)
-    hp.WD_factor = float(args.wd_factor)
-    hp.noise = float(args.noise)
-    hp.ode_timesteps = int(args.ode_steps)
-    hp.interpolate = bool(int(args.interpolate))
-    hp.num_heads = int(args.num_heads)
-    hp.hidden_dim = int(args.hidden_dim)
-    hp.attend_dim_per_head = int(args.attend_dim_per_head)
-    hp.depth = int(args.depth)
-    hp.ffn_dim_multiplier = float(args.ffn_dim_multiplier)
-    hp.dropout = float(args.dropout)
-    
-    
-    # load data
-    filepath_train = f'data/{dataname}_train.csv'
-    filepath_train_pos = f'data/{dataname}_train-pos.csv'
-    filepath_train_val = f'data/{dataname}_train-val.csv'
-    x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device)
-    data_folded = data.fold_data([x, y, xcon, ycon, idcon], kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
-    data_folded = [data_folded[whichfold]] if whichfold >= 0 else data_folded  # only run a single fold based on args
-    assert (data.check_leakage(data_folded))
-    
-    print('dataset:', filepath_train)
-    print(f'data shape: {x.shape}')
-    print(f'training data shape: {data_folded[0][0][0].shape}')
-    print(f'validation data shape: {data_folded[0][0][1].shape}')
-    print(f'condensed training shape: {data_folded[0][2][0].shape}')
-    print(f'condensed validation shape: {data_folded[0][2][1].shape}')
-    
-    
-    # computed hyperparams
-    _, hp.data_dim = x.shape
-    hp.WD = hp.LR * hp.WD_factor
-    hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
-    
-    jobid = int(args.jobid.split('_')[0])
-    jobstring = f"_job{jobid}" if jobid >= 0 else ""
-    
-    if args.headless:
-        plotstream.set_headless()
 
-    assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+    # Experiment configuration & hyperparameter space
+
+    hpbuilder = HyperparameterBuilder()
+
+    
+    hpbuilder.add_param("kfolds", 2, 
+                        help="how many data folds, -1 for leave-one-out")
+    hpbuilder.add_param("whichfold", -1, 
+                        help="which fold to run, -1 for all")
+    
+    hpbuilder.add_param("jobid", "-1", 
+                        help="job id")
+    hpbuilder.add_flag("headless", False, 
+                       help="run without plotting")
+    
+
+    hpbuilder.add_param("dataset", 
+                        # "waimea-std", 
+                        # "waimea-condensed", 
+                        "cNODE-paper-ocean", 
+                        # "cNODE-paper-ocean-std", 
+                        # "cNODE-paper-human-oral", 
+                        # "cNODE-paper-human-oral-std", 
+                        help="dataset to use")
+    hpbuilder.add_param("model_name", 
+                        'baseline-constShaped',
+                        # 'baseline-SLPMultShaped',
+                        # 'cNODE1',
+                        # 'cNODE2',
+                        # 'transformShaped',
+                        # 'transformRZShaped',
+                        # 'canODE-FitMat',
+                        'canODE-attendFit',
+                        'cNODE-hourglass',
+                        # 'baseline-cNODE0',
+                        help="model(s) to run")
+    hpbuilder.add_param("epochs", 2, 
+                        help="maximum number of epochs")
+    hpbuilder.add_param("patience", 1100, 
+                        help="patience for early stopping")
+    hpbuilder.add_param("min_epochs", 1, 
+                        help="minimum number of epochs")
+    hpbuilder.add_param("early_stop", True, 
+                        help="whether or not to use early stopping")
+    hpbuilder.add_param("ode_timesteps", 15, 
+                        help="number of ODE timesteps")
+    hpbuilder.add_param("minibatch_examples", 20, 
+                        help="minibatch size")
+    hpbuilder.add_param("accumulated_minibatches", 1, 
+                        help="number of minibatches to accumulate before stepping")
+    hpbuilder.add_param("LR", 0.1, 1.0,
+                        help="learning rate")
+    hpbuilder.add_param("reptile_lr", 1.0, 
+                        help="reptile outer-loop learning rate")
+    hpbuilder.add_param("WD_factor", 0.0, 
+                        help="weight decay factor (multiple of LR)")
+    hpbuilder.add_param("noise", 0.075, 
+                        help="noise level")
+    hpbuilder.add_param("interpolate", True, 
+                        help="whether or not to use supervised interpolation steps")
+    hpbuilder.add_param("num_heads", 2, 
+                        help="number of attention heads")
+    hpbuilder.add_param("hidden_dim", 8, 
+                        help="hidden dimension")
+    hpbuilder.add_param("attend_dim_per_head", 4, 
+                        help="attention dimension")
+    hpbuilder.add_param("depth", 6, 
+                        help="depth of model")
+    hpbuilder.add_param("ffn_dim_multiplier", 4.0, 
+                        help="multiplier for ffn dimension")
+    hpbuilder.add_param("dropout", 0.5, 
+                        help="dropout rate")
+    
+
     
     
-    reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
-    
-    # Specify model(s) for experiment
-    # Note that each must be a constructor function that takes a dictionary args. Lamda is recommended.
+
+    # Specify model constructors for experiment
+    # Note that each must be a constructor function that takes a dicy/dictionary args. Lamda is recommended.
     models = {
         # most useful models
         'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
@@ -956,181 +902,201 @@ def main():
         
         # sanity test models
         'cNODE1-GenFn': lambda args: models_cnode.cNODE2_ExternalFitnessFn(args.data_dim), # for testing, identical to cNODE1
-        'cNODE2_DKI': lambda args: models_cnode.cNODE2_DKI(args.data_dim), # sanity test, this is the same as cNODE2 but less optimized
+        'cNODE2-DKI': lambda args: models_cnode.cNODE2_DKI(args.data_dim), # sanity test, this is the same as cNODE2 but less optimized
         'cNODE2-Gen': lambda args: models_cnode.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim), nn.Linear(args.data_dim, args.data_dim))),  # sanity test, this is the same as cNODE2 but generated at runtime
         "cNODE2-static": lambda args: models_cnode.cNODE2_ExternalFitness(args.data_dim), # sanity test
         "cNODE2-FnFitness": lambda args: models_cnode.cNODE2_FnFitness(args.data_dim), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
+
+
     
-    modelnames_to_run = hp.modelnames.split(',')
-    models_to_run = {name: models[name] for name in modelnames_to_run}
-    
-    # specify loss function
-    loss_fn = loss_bc
-    # avg_richness = x.count_nonzero()/x.size(0)
-    # loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
-    score_fn = loss_bc
-    # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
-    
-    distr_error_fn = distribution_error
-    
-    # scaler = torch.amp.GradScaler(device)
-    scaler = torch.cuda.amp.GradScaler()
-    
-    # time step "data"
-    ode_timemax = 1.0
-    ode_stepsize = ode_timemax / hp.ode_timesteps
-    timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
-    
-    # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
-    # Model dictionary. Hyperparam override(s)
-    
-    # Establish baseline performance and add to plots
-    trivial_model = models_baseline.ReturnInput()
-    trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, [x, y], hp.minibatch_examples,
-                                                                       timesteps, loss_fn, score_fn, distr_error_fn,
-                                                                       device)
-    print(f"\n\nTRIVIAL MODEL loss: {trivial_loss}, score: {trivial_score}\n\n")
-    plotstream.plot_horizontal_line(f"loss {dataname}", trivial_loss, f"Trivial (in=out)")
-    plotstream.plot_horizontal_line(f"score {dataname}", trivial_score, f"Trivial (in=out)")
-    # trivial_model2 = models_baseline.ReturnZeros()
-    # trivial_loss2 = validate_epoch(trivial_model2, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)[0]
-    # plotstream.plot_horizontal_line(dataname, trivial_loss2, f"Trivial (zeros)")
-    
-    filepath_out_expt = f'results/expt/{dataname}{jobstring}_experiments.csv'
-    seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
-    print(f"Seed: {seed}")
-    for model_name, model_constr in models_to_run.items():
-        
-        # # TODO remove this: it's just to resume from where we were previously
-        # if ((attend_dim == 4 or attend_dim == 16) and model_name == 'canODE-transformer-d6' and num_heads == 4):
-        #     continue
-        
-        # try:
-        print(f"\nRunning model: {model_name}")
-        
-        # test construction and print parameter count
-        model = model_constr(hp)
-        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Number of parameters in model: {num_params}")
-        
-        # find optimal LR
-        # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-        #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
-        #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
-        # print(f"LR:{hp.LR}, WD:{hp.WD}")
-        
-        # hp = ui.ask(hp, keys=["LR", "WD"])
-        
-        # print hyperparams
-        for key, value in hp.items():
-            print(f"{key}: {value}")
-        
-        # Just for the sake of logging experiments before cross validation...
-        optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
-                "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
-                "metric": -1.0}
-        val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
-        trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
-        val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
-        trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
-        stream.stream_scores(filepath_out_expt, True, True, True,
-                             "model", model_name,
-                             "dataset", dataname,
+    for hp in hpbuilder.parse_and_generate_combinations():
+        try:
+
+            # load data
+            filepath_train = f'data/{hp.dataset}_train.csv'
+            filepath_train_pos = f'data/{hp.dataset}_train-pos.csv'
+            filepath_train_val = f'data/{hp.dataset}_train-val.csv'
+            x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device)
+            data_folded = data.fold_data([x, y, xcon, ycon, idcon], hp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
+            data_folded = [data_folded[hp.whichfold]] if hp.whichfold >= 0 else data_folded  # only run a single fold based on args
+            assert (data.check_leakage(data_folded))
+            
+            print('dataset:', filepath_train)
+            print(f'data shape: {x.shape}')
+            print(f'training data shape: {data_folded[0][0][0].shape}')
+            print(f'validation data shape: {data_folded[0][0][1].shape}')
+            print(f'condensed training shape: {data_folded[0][2][0].shape}')
+            print(f'condensed validation shape: {data_folded[0][2][1].shape}')
+            
+
+            # computed hyperparams
+            _, hp.data_dim = x.shape
+            hp.WD = hp.LR * hp.WD_factor
+            hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+            
+            jobid_substring = int(hp.jobid.split('_')[0])
+            jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
+            
+            if hp.headless:
+                plotstream.set_headless()
+
+            assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+            
+            
+            reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
+            
+            
+            model_constr = models[hp.model_name]
+            
+            # specify loss function
+            loss_fn = loss_bc
+            # avg_richness = x.count_nonzero()/x.size(0)
+            # loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
+            score_fn = loss_bc
+            # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
+            
+            distr_error_fn = distribution_error
+            
+            # scaler = torch.amp.GradScaler(device)
+            scaler = torch.cuda.amp.GradScaler()
+            
+            # time step "data"
+            ode_timemax = 1.0
+            ode_stepsize = ode_timemax / hp.ode_timesteps
+            timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
+            
+            # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
+            # Model dictionary. Hyperparam override(s)
+            
+            # Establish baseline performance and add to plots
+            trivial_model = models_baseline.ReturnInput()
+            trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, [x, y], hp.minibatch_examples,
+                                                                            timesteps, loss_fn, score_fn, distr_error_fn,
+                                                                            device)
+            print(f"\n\nTRIVIAL MODEL loss: {trivial_loss}, score: {trivial_score}\n\n")
+            plotstream.plot_horizontal_line(f"loss {hp.dataset}", trivial_loss, f"Trivial (in=out)")
+            plotstream.plot_horizontal_line(f"score {hp.dataset}", trivial_score, f"Trivial (in=out)")
+            # trivial_model2 = models_baseline.ReturnZeros()
+            # trivial_loss2 = validate_epoch(trivial_model2, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)[0]
+            # plotstream.plot_horizontal_line(dataname, trivial_loss2, f"Trivial (zeros)")
+            
+            filepath_out_expt = f'results/expt/{hp.dataset}{jobstring}_experiments.csv'
+            seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
+            print(f"Seed: {seed}")
+            
+            # test construction and print parameter count
+            print(f"\nModel construction test for: {hp.model_name}")
+            model = model_constr(hp)
+            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"Number of parameters in model: {num_params}")
+            
+            # find optimal LR
+            # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+            #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+            #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
+            # print(f"LR:{hp.LR}, WD:{hp.WD}")
+            
+            # hp = ui.ask(hp, keys=["LR", "WD"])
+            
+            # print hyperparams
+            for key, value in hp.items():
+                print(f"{key}: {value}")
+            
+            # Just for the sake of logging experiments before cross validation...
+            optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
+                    "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
+                    "metric": -1.0}
+            val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
+            trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
+            val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
+            trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
+            stream.stream_scores(filepath_out_expt, True, True, True,
+                                "mean_val_loss", -1,
+                                "mean_val_loss @ epoch", -1,
+                                "mean_val_loss @ time", -1,
+                                "mean_val_loss @ trn_loss", -1,
+                                "model parameters", num_params,
+                                "fold", -1,
+                                "device", device,
+                                *unrolldict(hp),  # unroll the hyperparams dictionary
+                                *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                            trn_score_optims[0]),
+                                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                suffix="\n=========================================================================================================================\n")
+            
+            
+            # train and test the model across multiple folds
+            val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
+                hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
+                hp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, hp,
+                hp.model_name, hp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=hp.whichfold, jobstring=jobstring
+            )
+            
+            # print all folds
+            print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')
+            print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
+            print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
+            print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
+            
+            # calculate fold summaries
+            avg_val_loss_optim = summarize(val_loss_optims)
+            avg_val_score_optim = summarize(val_score_optims)
+            avg_trn_loss_optim = summarize(trn_loss_optims)
+            avg_trn_score_optim = summarize(trn_score_optims)
+            
+            # print summariesrun.py
+            print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
+            print(f'Avg Val Score optimum: {avg_val_score_optim}')
+            print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
+            print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
+            
+            # find optimal epoch
+            # training_curves is a list of dictionaries, convert to a dataframe
+            all_data = [entry for fold in training_curves for entry in fold]
+            df = pd.DataFrame(all_data)
+            df_clean = df.dropna(subset=['val_loss'])
+            # Check if df_clean is not empty
+            if not df_clean.empty:
+                average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
+                min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+                best_epoch_metrics = min_val_loss_epoch.to_dict()
+            else:
+                min_val_loss_epoch = None  # or handle the empty case as needed
+                best_epoch_metrics = {"epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
+            
+            # write folds to log file
+            for i in range(len(val_loss_optims)):
+                stream.stream_scores(filepath_out_expt, True, True, True,
+                                    "mean_val_loss", best_epoch_metrics["val_loss"],
+                                    "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
+                                    "mean_val_loss @ time", best_epoch_metrics["time"],
+                                    "mean_val_loss @ trn_loss", best_epoch_metrics["trn_loss"],
+                                    "model parameters", num_params,
+                                    "fold", i if hp.whichfold < 0 else hp.whichfold,
+                                    "device", device,
+                                    *unrolldict(hp),  # unroll the hyperparams dictionary
+                                    *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
+                                                trn_score_optims[i]),
+                                    prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                    suffix="\n=========================================================================================================================\n")
+            
+        except Exception as e:
+            stream.stream_scores(filepath_out_expt, True, True, True,
                              "mean_val_loss", -1,
                              "mean_val_loss @ epoch", -1,
                              "mean_val_loss @ time", -1,
                              "mean_val_loss @ trn_loss", -1,
                              "model parameters", num_params,
                              "fold", -1,
-                             "k-folds", kfolds,
                              "device", device,
                              *unrolldict(hp),  # unroll the hyperparams dictionary
                              *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
                                            trn_score_optims[0]),
                              prefix="\n=======================================================EXPERIMENT========================================================\n",
                              suffix="\n=========================================================================================================================\n")
-        
-        
-        # train and test the model across multiple folds
-        val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
-            hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
-            kfolds, hp.min_epochs, hp.max_epochs, hp.minibatch_examples, model_constr, hp,
-            model_name, dataname, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-            reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=whichfold, jobstring=jobstring
-        )
-        
-        # print all folds
-        print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')
-        print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
-        print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
-        print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
-        
-        # calculate fold summaries
-        avg_val_loss_optim = summarize(val_loss_optims)
-        avg_val_score_optim = summarize(val_score_optims)
-        avg_trn_loss_optim = summarize(trn_loss_optims)
-        avg_trn_score_optim = summarize(trn_score_optims)
-        
-        # print summariesrun.py
-        print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
-        print(f'Avg Val Score optimum: {avg_val_score_optim}')
-        print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
-        print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
-        
-        # find optimal epoch
-        # training_curves is a list of dictionaries, convert to a dataframe
-        all_data = [entry for fold in training_curves for entry in fold]
-        df = pd.DataFrame(all_data)
-        df_clean = df.dropna(subset=['val_loss'])
-        # Check if df_clean is not empty
-        if not df_clean.empty:
-            average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
-            min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
-            best_epoch_metrics = min_val_loss_epoch.to_dict()
-        else:
-            min_val_loss_epoch = None  # or handle the empty case as needed
-            best_epoch_metrics = {"epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
-        
-        # write folds to log file
-        for i in range(len(val_loss_optims)):
-            stream.stream_scores(filepath_out_expt, True, True, True,
-                                 "model", model_name,
-                                 "dataset", dataname,
-                                 "mean_val_loss", best_epoch_metrics["val_loss"],
-                                 "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
-                                 "mean_val_loss @ time", best_epoch_metrics["time"],
-                                 "mean_val_loss @ trn_loss", best_epoch_metrics["trn_loss"],
-                                 "model parameters", num_params,
-                                 "fold", i if whichfold < 0 else whichfold,
-                                 "k-folds", kfolds,
-                                 "device", device,
-                                 *unrolldict(hp),  # unroll the hyperparams dictionary
-                                 *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
-                                               trn_score_optims[i]),
-                                 prefix="\n=======================================================EXPERIMENT========================================================\n",
-                                 suffix="\n=========================================================================================================================\n")
-        
-        # except Exception as e:
-        #     stream.stream_scores(filepath_out_expt, True, True, True,
-        #         "model", model_name,
-        #         "model parameters", -1,
-        #         "Validation Score", -1,
-        #         "Validation Loss", -1,
-        #         "Val @ Epoch", -1,
-        #         "Val @ Time", -1,
-        #         "Val @ Trn Loss", -1,
-        #         "Train Score", -1,
-        #         "Train Loss", -1,
-        #         "Trn @ Epoch", -1,
-        #         "Trn @ Time", -1,
-        #         "Trn @ Val Loss", -1,
-        #         "k-folds", kfolds,
-        #         "timesteps", ode_timesteps,
-        #         *list(itertools.chain(*(hp.items()))), # unroll the hyperparams dictionary
-        #         prefix="\n=======================================================EXPERIMENT========================================================\n",
-        #         suffix="\n=========================================================================================================================\n")
-        #     print(f"Model {model_name} failed with error:\n{e}")
+            print(f"Model {hp.model_name} failed with error:\n{e}")
     
     print("\n\nDONE")
     plotstream.wait_for_plot_exit()
@@ -1139,38 +1105,3 @@ def main():
 # main
 if __name__ == "__main__":
     main()
-
-# TODO: Set seed for reproducible shuffling
-# TODO: in particular we want to ensure that LR/WD search is using the same model+data on each trial, so we aren't just selecting which initialization was randomly more tolerant of high LR
-# TODO: hyperparameter optimization
-# TODO: time limit and/or time based early stopping
-# TODO: hyperparameters optimization based on loss change rate against clock time, somehow
-# TODO: Confirm that changes of t shape do not alter performance, then remove t argument to model forward for non-ODEfuncs. The t can be generated in forward to pass to odeint.
-# TODO: realtime visualization
-# TODO: Add param count to filename of logs
-# TODO: Instead of my lambda model constructors, try base_model = torchdistx.deferred_init.deferred_init(MyModel, param1, param2, ...)
-# TODO: Try muP for hyperparameter scaling: https://github.com/microsoft/mup
-
-# TODO: Try transfer learning with shared ODE but separate embed/unembed - espcially x-shaped conjoined networks for joint learning. Or Reptile for similar metalearning.
-# TODO: Create a parameterized generalized version of the canODE models so I can explore the model architectures as hyperparameters
-# TODO: Attention layers in a DEQ (deep equilibrium model) similar to the nODE to produce F(x) for the ODE
-# TODO: (Probably not a good idea) As an alternative to attention, try condensing into a high enough space that we can still use channels as IDs (minimum size would be the largest summed assemblage in the dataset) and then use a vanilla (but smaller) cNODE. The difficulty here is that the embed mapping needs to be dynamic because many input channels will map to the same embedded channels and some of those could occur at the same time. There effectively needs to be the ability to decide on the fly that "A should go in M but that's already occupied by B, so A will go in N instead, which has the same properties as M" ... which means the embedding needs to have redundancies. I guess I could hardcode there being a few redundant copies of each channel somehow (shared weights?) but I don't like that idea. In general this seems much weaker than using attention to divorce the species representations from the preferred basis, allowing them to share dynamics to exactly the extent that is helpful via independent subspaces.
-# TODO: Test baseline ODE model that does not learn F(x) at all - either it's just torch.ones() or it's a torch.random() at initialization or it's a torch.random() in the forward call.
-# TODO: Test multi-layer attention-based models that do not utilize ODEs at all.
-
-# TODO: Try all of the small models with higher parameter counts. We don't need to use such small embedding dimension.
-
-# cNODE-based models seem to get nearly unlimited ability to handle high LR the lower WD is (at least during LRRS tests), BUT the models become very stiff and therefore torchdiffeq solving is slow. Would it be better to tune our LR based on optimizing Loss vs Time, rather than Loss vs Samples?
-# ...Turns out that there is a bit of divergence after a brief optimum, but then it plateaus and usually doesn't diverge further until absurdly high LR levels. But the exponential average was masking that behavior.
-
-# TODO: I think LRRS arguments should specify the number of iterations as a hyperparameter instead of epochs, and compute epochs. Because the logic around processing and analyzing the results is very step-centric. We would get much higher end loss for low step sizes, but should still be able to identify optimal LR which is the real goal.
-
-# TODO: Try data augmentation by removing features and renormalizing
-# TODO: Try self-supervised task by masking out features (and not renormalizing) then predict the masked embedding (no need to unembed unless we have a real classification task). Allowing to learn how species interact by what is missing.
-# ACTUALLY isn't that a more direct way of estimating keystoneness?
-
-# TODO: Try using proportion as magnitude, multiplied against the species embedding, instead of concatenated or added.
-
-# TODO: Settings for training and validating on less than a full batch. Like, max number of data samples per train/val "epoch". But I would need to make sure shuffling only occurs after full epoch. Useful for training on large datasets, but even more useful for LRRS. (The latter can probably switch entirely to a number of samples config instead of epoch-based config.)
-#  Problem: K-Fold paradigm superficially seems to conflict with this. In particular the validation since we would want to use the same samples for each time step. In that case, what we really want is a "Hold X out" fold rather than a K-fold. And we can use a subsample of that for LRRS validation.
-#  One option to reduce config complexity: when K is negative, it is the number of samples to hold out for validation. When K is positive, it is the number of folds. But I will have to compute the number of folds (last of which will usually be smaller) from the number of held out samples.
