@@ -762,18 +762,7 @@ def main():
 
     hpbuilder = HyperparameterBuilder()
 
-    
-    hpbuilder.add_param("kfolds", 2, 
-                        help="how many data folds, -1 for leave-one-out")
-    hpbuilder.add_param("whichfold", -1, 
-                        help="which fold to run, -1 for all")
-    
-    hpbuilder.add_param("jobid", "-1", 
-                        help="job id")
-    hpbuilder.add_flag("headless", False, 
-                       help="run without plotting")
-    
-
+    datacat = "data"
     hpbuilder.add_param("dataset", 
                         # "waimea-std", 
                         # "waimea-condensed", 
@@ -781,7 +770,18 @@ def main():
                         # "cNODE-paper-ocean-std", 
                         # "cNODE-paper-human-oral", 
                         # "cNODE-paper-human-oral-std", 
-                        help="dataset to use")
+                        category=datacat, help="dataset to use")
+    hpbuilder.add_param("kfolds", 2, 
+                        category=datacat, help="how many data folds, -1 for leave-one-out")
+    hpbuilder.add_param("whichfold", -1, 
+                        category=datacat, help="which fold to run, -1 for all")
+    
+    hpbuilder.add_param("jobid", "-1", 
+                        help="job id")
+    hpbuilder.add_flag("headless", False, 
+                       help="run without plotting")
+    
+
     hpbuilder.add_param("model_name", 
                         'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
@@ -909,109 +909,183 @@ def main():
     }
 
 
-    
-    for hp in hpbuilder.parse_and_generate_combinations():
-        try:
+    for dp in hpbuilder.parse_and_generate_combinations(category=datacat):
 
-            # load data
-            filepath_train = f'data/{hp.dataset}_train.csv'
-            filepath_train_pos = f'data/{hp.dataset}_train-pos.csv'
-            filepath_train_val = f'data/{hp.dataset}_train-val.csv'
-            x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device)
-            data_folded = data.fold_data([x, y, xcon, ycon, idcon], hp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
-            data_folded = [data_folded[hp.whichfold]] if hp.whichfold >= 0 else data_folded  # only run a single fold based on args
-            assert (data.check_leakage(data_folded))
-            
-            print('dataset:', filepath_train)
-            print(f'data shape: {x.shape}')
-            print(f'training data shape: {data_folded[0][0][0].shape}')
-            print(f'validation data shape: {data_folded[0][0][1].shape}')
-            print(f'condensed training shape: {data_folded[0][2][0].shape}')
-            print(f'condensed validation shape: {data_folded[0][2][1].shape}')
-            
+        # load data
+        filepath_train = f'data/{dp.dataset}_train.csv'
+        filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
+        filepath_train_val = f'data/{dp.dataset}_train-val.csv'
+        x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device)
+        data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
+        data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
+        assert (data.check_leakage(data_folded))
+        
+        print('dataset:', filepath_train)
+        print(f'data shape: {x.shape}')
+        print(f'training data shape: {data_folded[0][0][0].shape}')
+        print(f'validation data shape: {data_folded[0][0][1].shape}')
+        print(f'condensed training shape: {data_folded[0][2][0].shape}')
+        print(f'condensed validation shape: {data_folded[0][2][1].shape}')
 
-            # computed hyperparams
-            _, hp.data_dim = x.shape
-            hp.WD = hp.LR * hp.WD_factor
-            hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
-            
-            jobid_substring = int(hp.jobid.split('_')[0])
-            jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
-            
-            if hp.headless:
-                plotstream.set_headless()
+        
+        # specify loss function
+        loss_fn = loss_bc
+        # avg_richness = x.count_nonzero()/x.size(0)
+        # loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
+        score_fn = loss_bc
+        # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
+        
+        distr_error_fn = distribution_error
+        
 
-            assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
-            
-            
-            reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
-            
-            
-            model_constr = models[hp.model_name]
-            
-            # specify loss function
-            loss_fn = loss_bc
-            # avg_richness = x.count_nonzero()/x.size(0)
-            # loss_fn = lambda y_pred, y_true: loss_bc_unbounded(y_pred, y_true, avg_richness)
-            score_fn = loss_bc
-            # loss_fn = lambda y_pred,y_true: loss_bc(y_pred, y_true) + distribution_error(y_pred)
-            
-            distr_error_fn = distribution_error
-            
-            # scaler = torch.amp.GradScaler(device)
-            scaler = torch.cuda.amp.GradScaler()
-            
-            # time step "data"
-            ode_timemax = 1.0
-            ode_stepsize = ode_timemax / hp.ode_timesteps
-            timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
-            
-            # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
-            # Model dictionary. Hyperparam override(s)
-            
-            # Establish baseline performance and add to plots
-            trivial_model = models_baseline.ReturnInput()
-            trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, [x, y], hp.minibatch_examples,
-                                                                            timesteps, loss_fn, score_fn, distr_error_fn,
-                                                                            device)
-            print(f"\n\nTRIVIAL MODEL loss: {trivial_loss}, score: {trivial_score}\n\n")
-            plotstream.plot_horizontal_line(f"loss {hp.dataset}", trivial_loss, f"Trivial (in=out)")
-            plotstream.plot_horizontal_line(f"score {hp.dataset}", trivial_score, f"Trivial (in=out)")
-            # trivial_model2 = models_baseline.ReturnZeros()
-            # trivial_loss2 = validate_epoch(trivial_model2, x, y, hp.minibatch_examples, timesteps, loss_fn, score_fn, distr_error_fn, device)[0]
-            # plotstream.plot_horizontal_line(dataname, trivial_loss2, f"Trivial (zeros)")
-            
-            filepath_out_expt = f'results/expt/{hp.dataset}{jobstring}_experiments.csv'
-            seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
-            print(f"Seed: {seed}")
-            
-            # test construction and print parameter count
-            print(f"\nModel construction test for: {hp.model_name}")
-            model = model_constr(hp)
-            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            print(f"Number of parameters in model: {num_params}")
-            
-            # find optimal LR
-            # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
-            #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
-            #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
-            # print(f"LR:{hp.LR}, WD:{hp.WD}")
-            
-            # hp = ui.ask(hp, keys=["LR", "WD"])
-            
-            # print hyperparams
-            for key, value in hp.items():
-                print(f"{key}: {value}")
-            
-            # Just for the sake of logging experiments before cross validation...
-            optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
-                    "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
-                    "metric": -1.0}
-            val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
-            trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
-            val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
-            trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
-            stream.stream_scores(filepath_out_expt, True, True, True,
+        # Establish baseline performance and add to plots
+        trivial_model = models_baseline.ReturnInput()
+        trivial_loss, trivial_score, trivial_distro_error = validate_epoch(trivial_model, [x, y], 100,  # TODO: using 100 instead of hp.minibatch_examples, because this model doesn't learn so the only concern is computational throughput.
+                                                                        [0.0, 1.0], loss_fn, score_fn, distr_error_fn,
+                                                                        device)
+        print(f"\n\nTRIVIAL MODEL loss: {trivial_loss}, score: {trivial_score}\n\n")
+        plotstream.plot_horizontal_line(f"loss {dp.dataset}", trivial_loss, f"Trivial (in=out)")
+        plotstream.plot_horizontal_line(f"score {dp.dataset}", trivial_score, f"Trivial (in=out)")
+
+
+        for hp in hpbuilder.parse_and_generate_combinations():
+            try:
+                # computed hyperparams
+                _, hp.data_dim = x.shape
+                hp.WD = hp.LR * hp.WD_factor
+                hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+                
+                jobid_substring = int(hp.jobid.split('_')[0])
+                jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
+                
+                if hp.headless:
+                    plotstream.set_headless()
+
+                assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+                
+                
+                reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
+                
+                
+                model_constr = models[hp.model_name]
+                
+                
+                # scaler = torch.amp.GradScaler(device)
+                scaler = torch.cuda.amp.GradScaler()
+                
+                # time step "data"
+                ode_timemax = 1.0
+                ode_stepsize = ode_timemax / hp.ode_timesteps
+                timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
+                
+                # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
+                # Model dictionary. Hyperparam override(s)
+                
+                filepath_out_expt = f'results/expt/{dp.dataset}{jobstring}_experiments.csv'
+                seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
+                print(f"Seed: {seed}")
+                
+                # test construction and print parameter count
+                print(f"\nModel construction test for: {hp.model_name}")
+                model = model_constr(hp)
+                num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                print(f"Number of parameters in model: {num_params}")
+                
+                # find optimal LR
+                # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+                #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+                #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
+                # print(f"LR:{hp.LR}, WD:{hp.WD}")
+                
+                # hp = ui.ask(hp, keys=["LR", "WD"])
+                
+                # print hyperparams
+                for key, value in hp.items():
+                    print(f"{key}: {value}")
+                
+                # Just for the sake of logging experiments before cross validation...
+                optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
+                        "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
+                        "metric": -1.0}
+                val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
+                trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
+                val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
+                trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
+                stream.stream_scores(filepath_out_expt, True, True, True,
+                                    "mean_val_loss", -1,
+                                    "mean_val_loss @ epoch", -1,
+                                    "mean_val_loss @ time", -1,
+                                    "mean_val_loss @ trn_loss", -1,
+                                    "model parameters", num_params,
+                                    "fold", -1,
+                                    "device", device,
+                                    *unrolldict(dp),  # unroll the data params dictionary
+                                    *unrolldict(hp),  # unroll the hyperparams dictionary
+                                    *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                                trn_score_optims[0]),
+                                    prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                    suffix="\n=========================================================================================================================\n")
+                
+                
+                # train and test the model across multiple folds
+                val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
+                    hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
+                    dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, hp,
+                    hp.model_name, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                    reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
+                )
+                
+                # print all folds
+                print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')
+                print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
+                print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
+                print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
+                
+                # calculate fold summaries
+                avg_val_loss_optim = summarize(val_loss_optims)
+                avg_val_score_optim = summarize(val_score_optims)
+                avg_trn_loss_optim = summarize(trn_loss_optims)
+                avg_trn_score_optim = summarize(trn_score_optims)
+                
+                # print summariesrun.py
+                print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
+                print(f'Avg Val Score optimum: {avg_val_score_optim}')
+                print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
+                print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
+                
+                # find optimal epoch
+                # training_curves is a list of dictionaries, convert to a dataframe
+                all_data = [entry for fold in training_curves for entry in fold]
+                df = pd.DataFrame(all_data)
+                df_clean = df.dropna(subset=['val_loss'])
+                # Check if df_clean is not empty
+                if not df_clean.empty:
+                    average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
+                    min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+                    best_epoch_metrics = min_val_loss_epoch.to_dict()
+                else:
+                    min_val_loss_epoch = None  # or handle the empty case as needed
+                    best_epoch_metrics = {"epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
+                
+                # write folds to log file
+                for i in range(len(val_loss_optims)):
+                    stream.stream_scores(filepath_out_expt, True, True, True,
+                                        "mean_val_loss", best_epoch_metrics["val_loss"],
+                                        "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
+                                        "mean_val_loss @ time", best_epoch_metrics["time"],
+                                        "mean_val_loss @ trn_loss", best_epoch_metrics["trn_loss"],
+                                        "model parameters", num_params,
+                                        "fold", i if dp.whichfold < 0 else dp.whichfold,
+                                        "device", device,
+                                        *unrolldict(dp),  # unroll the data params dictionary
+                                        *unrolldict(hp),  # unroll the hyperparams dictionary
+                                        *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
+                                                    trn_score_optims[i]),
+                                        prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                        suffix="\n=========================================================================================================================\n")
+                
+            except Exception as e:
+                stream.stream_scores(filepath_out_expt, True, True, True,
                                 "mean_val_loss", -1,
                                 "mean_val_loss @ epoch", -1,
                                 "mean_val_loss @ time", -1,
@@ -1019,84 +1093,13 @@ def main():
                                 "model parameters", num_params,
                                 "fold", -1,
                                 "device", device,
+                                *unrolldict(dp),  # unroll the data params dictionary
                                 *unrolldict(hp),  # unroll the hyperparams dictionary
                                 *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
                                             trn_score_optims[0]),
                                 prefix="\n=======================================================EXPERIMENT========================================================\n",
                                 suffix="\n=========================================================================================================================\n")
-            
-            
-            # train and test the model across multiple folds
-            val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = crossvalidate_model(
-                hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
-                hp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, hp,
-                hp.model_name, hp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-                reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=hp.whichfold, jobstring=jobstring
-            )
-            
-            # print all folds
-            print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')
-            print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
-            print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
-            print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
-            
-            # calculate fold summaries
-            avg_val_loss_optim = summarize(val_loss_optims)
-            avg_val_score_optim = summarize(val_score_optims)
-            avg_trn_loss_optim = summarize(trn_loss_optims)
-            avg_trn_score_optim = summarize(trn_score_optims)
-            
-            # print summariesrun.py
-            print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
-            print(f'Avg Val Score optimum: {avg_val_score_optim}')
-            print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
-            print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
-            
-            # find optimal epoch
-            # training_curves is a list of dictionaries, convert to a dataframe
-            all_data = [entry for fold in training_curves for entry in fold]
-            df = pd.DataFrame(all_data)
-            df_clean = df.dropna(subset=['val_loss'])
-            # Check if df_clean is not empty
-            if not df_clean.empty:
-                average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
-                min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
-                best_epoch_metrics = min_val_loss_epoch.to_dict()
-            else:
-                min_val_loss_epoch = None  # or handle the empty case as needed
-                best_epoch_metrics = {"epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
-            
-            # write folds to log file
-            for i in range(len(val_loss_optims)):
-                stream.stream_scores(filepath_out_expt, True, True, True,
-                                    "mean_val_loss", best_epoch_metrics["val_loss"],
-                                    "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
-                                    "mean_val_loss @ time", best_epoch_metrics["time"],
-                                    "mean_val_loss @ trn_loss", best_epoch_metrics["trn_loss"],
-                                    "model parameters", num_params,
-                                    "fold", i if hp.whichfold < 0 else hp.whichfold,
-                                    "device", device,
-                                    *unrolldict(hp),  # unroll the hyperparams dictionary
-                                    *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
-                                                trn_score_optims[i]),
-                                    prefix="\n=======================================================EXPERIMENT========================================================\n",
-                                    suffix="\n=========================================================================================================================\n")
-            
-        except Exception as e:
-            stream.stream_scores(filepath_out_expt, True, True, True,
-                             "mean_val_loss", -1,
-                             "mean_val_loss @ epoch", -1,
-                             "mean_val_loss @ time", -1,
-                             "mean_val_loss @ trn_loss", -1,
-                             "model parameters", num_params,
-                             "fold", -1,
-                             "device", device,
-                             *unrolldict(hp),  # unroll the hyperparams dictionary
-                             *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-                                           trn_score_optims[0]),
-                             prefix="\n=======================================================EXPERIMENT========================================================\n",
-                             suffix="\n=========================================================================================================================\n")
-            print(f"Model {hp.model_name} failed with error:\n{e}")
+                print(f"Model {hp.model_name} failed with error:\n{e}")
     
     print("\n\nDONE")
     plotstream.wait_for_plot_exit()
