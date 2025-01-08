@@ -106,10 +106,14 @@ class HyperparameterBuilder:
                 param_lists[name] = [config["type"](raw_value)]
 
         # Generate combinations
-        combinations = [
-            dicy(dict(zip(param_lists.keys(), values)))
-            for values in itertools.product(*param_lists.values())
-        ]
+        combinations = []
+        for idx, values in enumerate(itertools.product(*param_lists.values())):
+            combination = dicy(dict(zip(param_lists.keys(), values)))
+            # Add configid or category-specific configid
+            configid_key = f"{category}_configid" if category else "configid"
+            combination[configid_key] = idx
+            combinations.append(combination)
+
         return combinations
 
 # test
