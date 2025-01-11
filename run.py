@@ -100,6 +100,8 @@ def main():
                         # "cNODE-paper-human-oral", 
                         # "cNODE-paper-human-oral-std", 
                         category=datacat, help="dataset to use")
+    hpbuilder.add_param("data_subset", -1, 
+                        category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 2, 
                         category=datacat, help="how many data folds, -1 for leave-one-out")
     hpbuilder.add_param("whichfold", -1, 
@@ -137,11 +139,11 @@ def main():
                         help="minibatch size")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
-    hpbuilder.add_param("LR", 0.1, 1.0,
+    hpbuilder.add_param("lr", 0.1, 1.0,
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
-    hpbuilder.add_param("WD_factor", 0.0, 
+    hpbuilder.add_param("wd_factor", 0.0, 
                         help="weight decay factor (multiple of LR)")
     hpbuilder.add_param("noise", 0.075, 
                         help="noise level")
@@ -159,9 +161,6 @@ def main():
                         help="multiplier for ffn dimension")
     hpbuilder.add_param("dropout", 0.5, 
                         help="dropout rate")
-    
-
-    
     
 
     # Specify model constructors for experiment
@@ -244,7 +243,7 @@ def main():
         filepath_train = f'data/{dp.dataset}_train.csv'
         filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
         filepath_train_val = f'data/{dp.dataset}_train-val.csv'
-        x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device)
+        x, y, xcon, ycon, idcon = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=dp.data_subset)
         data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
         data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
         assert (data.check_leakage(data_folded))
@@ -281,7 +280,7 @@ def main():
             try:
                 # computed hyperparams
                 _, hp.data_dim = x.shape
-                hp.WD = hp.LR * hp.WD_factor
+                hp.WD = hp.lr * hp.wd_factor
                 hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
                 
                 jobid_substring = int(hp.jobid.split('_')[0])
@@ -321,10 +320,10 @@ def main():
                 print(f"Number of parameters in model: {num_params}")
                 
                 # find optimal LR
-                # hp.WD, hp.LR = hyperparameter_search_with_LRfinder(
+                # hp.WD, hp.lr = hyperparameter_search_with_LRfinder(
                 #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
                 #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
-                # print(f"LR:{hp.LR}, WD:{hp.WD}")
+                # print(f"LR:{hp.lr}, WD:{hp.WD}")
                 
                 # hp = ui.ask(hp, keys=["LR", "WD"])
                 
@@ -358,7 +357,7 @@ def main():
                 
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.LR, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
+                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, hp,
                     hp.model_name, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring

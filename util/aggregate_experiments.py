@@ -129,7 +129,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "../results/hpsearch_lrrs_waimea_1-4/expt/"
+    folder = "./results/hpsearch_ocean-nonstd-lastmodels_1-7/expt/"
     path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     

@@ -2,9 +2,9 @@
 # See https://slurm.schedmd.com/job_array.html
 
 #SBATCH --job-name=cnode-hpsearch
-#SBATCH --array=0-863  ## Make sure this is enough for all hyperparam/fold combos
+#SBATCH --array=0-143  ## Make sure this is enough for all hyperparam/fold combos
 
-#SBATCH --time=0-00:20:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --time=0-05:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=gpu
 #SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
@@ -19,23 +19,27 @@
 
 echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID running on $HOSTNAME"
 
+
 # -------------------------
 # 1. User Config: Toggle between parallel or single-job execution of folds
 # -------------------------
 RUN_FOLDS_IN_PARALLEL=false  # Set to 'true' to run each fold in its own job, 'false' to run all 5 folds in one job
 NUM_FOLDS=5                 # Number of folds
 
+
 # -------------------------
 # 2. Define Hyperparameters
+# Use spaces for parameters of different jobs, commas for multiple parameter values to run sequentially on the same job
 # -------------------------
 declare -A hyperparams
-hyperparams["dataname"]="cNODE-paper-ocean-std"
-hyperparams["models"]="canODE-attendFit,transformShaped"  # Spaces for different jobs, commas for multiple models on the same job
+hyperparams["dataset"]="cNODE-paper-ocean"
+hyperparams["model_name"]="canODE-attendFit,transformShaped"
 hyperparams["epochs"]="200"
-hyperparams["ode_steps"]="2"
-hyperparams["lr"]="0.0001 0.0032 0.1"
-hyperparams["reptile_rate"]="0.05 0.5 1.0"
-hyperparams["noise"]="0.0 0.075"
+hyperparams["minibatch_examples"]="20"
+hyperparams["ode_timesteps"]="15"
+hyperparams["lr"]="0.0001,0.0032,0.1"
+hyperparams["reptile_lr"]="0.05 0.5 1.0"
+hyperparams["noise"]="0.0,0.075"
 hyperparams["wd_factor"]="0.0 2.0"
 hyperparams["interpolate"]="0"
 hyperparams["num_heads"]="2 8"
@@ -44,6 +48,7 @@ hyperparams["attend_dim_per_head"]="4 6"
 hyperparams["depth"]="4 16"
 hyperparams["ffn_dim_multiplier"]="4"
 hyperparams["dropout"]="0.1 0.5 0.8"
+
 
 # -------------------------
 # 3. Calculate Total Combinations
@@ -66,6 +71,7 @@ if [[ "$SLURM_ARRAY_TASK_ID" -ge "$total_combinations" ]]; then
     exit 1
 fi
 
+
 # -------------------------
 # 4. Decompose SLURM_ARRAY_TASK_ID
 # -------------------------
@@ -87,6 +93,7 @@ for param in "${!hyperparams[@]}"; do
     current_id=$((current_id / size)) # Reduce task_id for the next hyperparam
 done
 
+
 # -------------------------
 # 5. Extract Values for Each Hyperparameter
 # -------------------------
@@ -103,6 +110,7 @@ for param in "${!hyperparam_values[@]}"; do
     echo "$param: ${hyperparam_values[$param]}"
 done
 
+
 # -------------------------
 # 6. Run the Python Script
 # -------------------------
@@ -110,12 +118,11 @@ source activate lnc
 python run.py --kfolds $NUM_FOLDS --headless \
     --jobid $SLURM_JOB_ID \
     --whichfold $fold_index \
-    --dataname ${hyperparam_values["dataname"]} \
-    --models ${hyperparam_values["models"]} \
+    --dataset ${hyperparam_values["dataset"]} \
+    --model_name ${hyperparam_values["model_name"]} \
     --epochs ${hyperparam_values["epochs"]} \
     --lr ${hyperparam_values["lr"]} \
-    --reptile_rate ${hyperparam_values["reptile_rate"]} \
-    --mb 20 \
+    --reptile_lr ${hyperparam_values["reptile_lr"]} \
     --noise ${hyperparam_values["noise"]} \
     --interpolate ${hyperparam_values["interpolate"]} \
     --num_heads ${hyperparam_values["num_heads"]} \
@@ -124,6 +131,6 @@ python run.py --kfolds $NUM_FOLDS --headless \
     --depth ${hyperparam_values["depth"]} \
     --ffn_dim_multiplier ${hyperparam_values["ffn_dim_multiplier"]} \
     --dropout ${hyperparam_values["dropout"]} \
-    --ode_steps ${hyperparam_values["ode_steps"]} \
-    --wd_factor ${hyperparam_values["wd_factor"]}
-
+    --ode_timesteps ${hyperparam_values["ode_timesteps"]} \
+    --wd_factor ${hyperparam_values["wd_factor"]} \
+    --minibatch_examples ${hyperparam_values["minibatch_examples"]} \
