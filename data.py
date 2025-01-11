@@ -92,7 +92,7 @@ def process_data(y0, transpose=False):
     return x, y
 
 
-def load_data(filepath_train, filepath_train_pos, filepath_train_val, device):
+def load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=-1):
     # Load data
     y = np.loadtxt(filepath_train, delimiter=',')
     ycon = np.loadtxt(filepath_train_val, delimiter=',')
@@ -101,7 +101,17 @@ def load_data(filepath_train, filepath_train_pos, filepath_train_val, device):
     print("uncondensed")
     x, y = process_data(y, transpose=True) 
     print("condensed")
-    xcon, ycon = process_data(ycon, transpose=False) 
+    xcon, ycon = process_data(ycon, transpose=False)
+    
+    if subset > 0:
+        if subset > len(x):
+            print("\n============\nWARNING: subset of data was requested, but exceeds number of samples in dataset\n============\n")
+
+        x = x[:subset]
+        y = y[:subset]
+        xcon = xcon[:subset]
+        ycon = ycon[:subset]
+        idcon = idcon[:subset]
 
     # print(f"shapes:\n x={x.shape}\n y={y.shape}\n xcon={xcon.shape}\n ycon={ycon.shape}\n idcon={idcon.shape}")
     
