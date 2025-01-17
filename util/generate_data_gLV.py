@@ -1,5 +1,5 @@
 # This file is based on the DKI paper repo, specifically: https://github.com/spxuw/DKI/blob/main/Simulated_data_generation.R
-import pickle
+import json
 
 import numpy as np
 import pandas as pd
@@ -62,7 +62,7 @@ def glv(N, A, r, x_0, tstart, tend, tstep):
     return result[-1]
 
 
-def generate_composition_data(N, M, A, r, N_sub, C, sigma, nu, boost_rate, path_dir, resume):
+def generate_composition_data(N, M, A, r, mean_richness, stdev_richness, C, sigma, nu, boost_rate, path_dir, resume):
     steady_state_file = f'{path_dir}/Ptrain.csv'
     
     steady_state_absolute = sp.lil_matrix((M, N))  # Change the shape to (M, N), rows = samples, cols = data points
@@ -90,9 +90,11 @@ def generate_composition_data(N, M, A, r, N_sub, C, sigma, nu, boost_rate, path_
             print(f"Processing sample {i + 1}/{M}")
         
         np.random.seed(i)
-        collection = np.random.choice(np.arange(N), N_sub, replace=False)
+        richness = int(np.random.normal(mean_richness, stdev_richness))
+        richness = max(2, min(N-1, richness))  # Ensure that richness is within [2, N-1]
+        collection = np.random.choice(np.arange(N), richness, replace=False)
         y_0 = np.zeros(N)
-        y_0[collection] = np.random.uniform(size=N_sub)
+        y_0[collection] = np.random.uniform(size=richness)
         x = glv(N, A, r, y_0, 0, 100, 100)
         
         steady_state_absolute[i, :] = x[:]
@@ -172,13 +174,13 @@ def generate_keystoneness_data(M, N, A, r, steady_state_absolute, path_dir):
 
 
 def write(obj, filename):
-    with open(filename, 'wb') as outp:
-        pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)
+    with open(filename, 'w') as outp:
+        json.dump(obj, outp, indent=4)
         
         
 def read(filename):
-    with open(filename, 'rb') as inp:
-        return pickle.load(inp)
+    with open(filename, 'r') as inp:
+        return dicy(json.load(inp))
 
 
 def params_match(p, path_params):
@@ -194,20 +196,22 @@ def params_match(p, path_params):
 def main():
     restart_computation = False
     
-    path_prefix = '../data/synth/gLV_'
+    path_prefix = './data/synth/gLV_'
     
     p = dicy()
-    p.N = 73  # number of species
+    p.N = 69  # number of species
     p.M = 10000  # number of samples
     
-    p.N_sub = p.N // 2  # richness (proportion of total species present in each sample) (1/36 ~= 2.77% for Waimea, 1/2 as the best approximation of ~68% for ocean, 1/3 ~= 32% for oral)
+    p.mean_richness = 50  # richness (proportion of total species present in each sample) (1/36 ~= 2.77% for Waimea)
+    p.stdev_richness = 8.42  # standard deviation of richness
+
     p.C = 0.05  # connectivity rate
     p.sigma = 0.01  # characteristic interaction strength
     
     p.nu = 1.0  # boosting strength
     p.boost_rate = 1.0  # boosting rate. In the original paper's repo it was hardcoded to 1, in which case the random choice effectively does nothing. Rather than removing that unused feature, I've parameterized it.
     
-    path_dir = f'{path_prefix}_N{p.N}_C{p.C}_nu{p.nu})'
+    path_dir = f'{path_prefix}_N{p.N}_C{p.C}_nu{p.nu}'
     os.makedirs(path_dir, exist_ok=True)
     
     path_params = f'{path_dir}/params.json'
@@ -221,7 +225,7 @@ def main():
 
     A, r = generate_ecosystem(p.N, p.C, p.sigma, p.nu, p.boost_rate, path_dir, resume)
     
-    steady_state_absolute, steady_state_relative = generate_composition_data(p.N, p.M, A, r, p.N_sub, p.C, p.sigma, p.nu, p.boost_rate, path_dir, resume)
+    steady_state_absolute, steady_state_relative = generate_composition_data(p.N, p.M, A, r, p.mean_richness, p.stdev_richness, p.C, p.sigma, p.nu, p.boost_rate, path_dir, resume)
     
     # generate_keystoneness_data(p.M, p.N, A, r, steady_state_absolute, path_dir)
     
