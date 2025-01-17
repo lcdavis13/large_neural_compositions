@@ -62,51 +62,63 @@ def glv(N, A, r, x_0, tstart, tend, tstep):
     return result[-1]
 
 
-def generate_composition_data(N, M, A, r, mean_richness, stdev_richness, C, sigma, nu, boost_rate, path_dir, resume):
+def generate_composition_data(N, M, A, r, mean_richness, stdev_richness, C, sigma, nu, boost_rate, path_dir, resume, batch_size=100):
+
     steady_state_file = f'{path_dir}/Ptrain.csv'
-    
+
     steady_state_absolute = sp.lil_matrix((M, N))  # Change the shape to (M, N), rows = samples, cols = data points
     steady_state_relative = sp.lil_matrix((M, N))  # Same here
-    
-    update_intervale = 1 # max(M // 100, 1)
-    
+
+    update_interval = batch_size  # max(M // 100, 1)
+
     start_sample = 0
-    
+
     if resume and os.path.exists(steady_state_file):
         print("Loading existing composition data...")
         existing_data = pd.read_csv(steady_state_file, header=None).values
         loaded_samples = existing_data.shape[0]  # Load based on rows
         steady_state_relative[:loaded_samples, :] = existing_data  # Populate loaded rows
         start_sample = loaded_samples
-        
+
         if start_sample >= M:
             return steady_state_absolute.tocsr(), steady_state_relative.tocsr()
-    
+
     print(f"Generating new composition data from sample {start_sample + 1}/{M}...")
-    
-    # Open the file in append mode to update it sample by sample:
+
+    batch_data = []  # Buffer to hold batch data
+
     for i in range(start_sample, M):
-        if i % update_intervale == 0:
+        if i % update_interval == 0:
             print(f"Processing sample {i + 1}/{M}")
-        
+
         np.random.seed(i)
         richness = int(np.random.normal(mean_richness, stdev_richness))
-        richness = max(2, min(N-1, richness))  # Ensure that richness is within [2, N-1]
+        richness = max(2, min(N - 1, richness))  # Ensure that richness is within [2, N-1]
         collection = np.random.choice(np.arange(N), richness, replace=False)
         y_0 = np.zeros(N)
         y_0[collection] = np.random.uniform(size=richness)
         x = glv(N, A, r, y_0, 0, 100, 100)
-        
+
         steady_state_absolute[i, :] = x[:]
         steady_state_relative[i, :] = x[:] / np.sum(x[:]) if np.sum(x[:]) != 0 else x[:]
-        
+
         # Ensure that the values are non-negative
         row_data = np.maximum(steady_state_relative[i, :].toarray(), 0)
-        
-        # Write the current sample (row) to the file incrementally
-        pd.DataFrame(row_data).to_csv(steady_state_file, mode='a', index=False, header=False)
-    
+
+        # Add the row data to the batch buffer
+        batch_data.append(row_data.flatten())
+
+        # Write the batch to the file when the batch size is reached
+        if i % batch_size == 0:
+            pd.DataFrame(batch_data).to_csv(steady_state_file, mode='a', index=False, header=False)
+            batch_data = []  # Clear the batch buffer
+
+    # Write any remaining data in the buffer to the file
+    if batch_data:
+        pd.DataFrame(batch_data).to_csv(steady_state_file, mode='a', index=False, header=False)
+
     return steady_state_absolute.tocsr(), steady_state_relative.tocsr()
+
 
 
 def generate_ecosystem(N, C, sigma, nu, boost_rate, path_dir, resume):
