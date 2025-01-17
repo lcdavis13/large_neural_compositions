@@ -93,9 +93,9 @@ def main():
 
     datacat = "data"
     hpbuilder.add_param("dataset", 
-                        # "waimea-std", 
-                        # "waimea-condensed", 
-                        "cNODE-paper-ocean", 
+                        # "waimea", 
+                        "waimea-std", 
+                        # "cNODE-paper-ocean", 
                         # "cNODE-paper-ocean-std", 
                         # "cNODE-paper-human-oral", 
                         # "cNODE-paper-human-oral-std", 
@@ -150,15 +150,15 @@ def main():
     hpbuilder.add_param("interpolate", True, 
                         help="whether or not to use supervised interpolation steps")
     hpbuilder.add_param("num_heads", 2, 
-                        help="number of attention heads")
+                        help="number of attention heads in transformer-based models")
     hpbuilder.add_param("hidden_dim", 8, 
                         help="hidden dimension")
     hpbuilder.add_param("attend_dim_per_head", 4, 
-                        help="attention dimension")
+                        help="dimension of attention embedding, per attention head")
     hpbuilder.add_param("depth", 6, 
                         help="depth of model")
     hpbuilder.add_param("ffn_dim_multiplier", 4.0, 
-                        help="multiplier for ffn dimension")
+                        help="multiplier for feedforward network dimension in transformer-based models")
     hpbuilder.add_param("dropout", 0.5, 
                         help="dropout rate")
     
