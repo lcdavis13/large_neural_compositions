@@ -7,7 +7,7 @@ import os
 from scipy.integrate import odeint  # could also use torchdiffeq.odeint but we don't need gradients here
 import scipy.sparse as sp
 from dotsy import dicy
-
+import pickle
 
 def glv_ode(x, t, A, r):
     """
@@ -188,15 +188,37 @@ def generate_keystoneness_data(M, N, A, r, steady_state_absolute, path_dir):
 def write(obj, filename):
     with open(filename, 'w') as outp:
         json.dump(obj, outp, indent=4)
-        
-        
+
 def read(filename):
-    with open(filename, 'r') as inp:
-        return dicy(json.load(inp))
+    """
+    Read the parameters file, detecting JSON or Pickle format based on extension.
+    """
+    if filename.endswith('.json'):
+        with open(filename, 'r') as inp:
+            d = json.load(inp)
+    elif filename.endswith('.pkl'):
+        with open(filename, 'rb') as inp:
+            d = pickle.load(inp)
+    else:
+        raise ValueError("Unsupported file format. Use '.json' or '.pkl'")
+    
+    print("Existing parameters:")
+    print(d)
+    return dicy(d)
 
-
-def params_match(p, path_params):
-    if not os.path.exists(path_params):
+def params_match(p, path_params_base):
+    """
+    Compare parameter objects, supporting both JSON and Pickle files.
+    Automatically detects and loads the available parameter file.
+    """
+    json_file = f"{path_params_base}.json"
+    pkl_file = f"{path_params_base}.pkl"
+    
+    if os.path.exists(json_file):
+        path_params = json_file
+    elif os.path.exists(pkl_file):
+        path_params = pkl_file
+    else:
         return False
     
     p2 = read(path_params)
@@ -204,18 +226,17 @@ def params_match(p, path_params):
     
     return p == p2
 
-
 def main():
     restart_computation = False
     
     path_prefix = './data/synth/gLV_'
     
     p = dicy()
-    p.N = 69  # number of species
-    p.M = 10000  # number of samples
+    p.N = 5000  # number of species
+    p.M = 100000  # number of samples
     
-    p.mean_richness = 50  # richness (proportion of total species present in each sample) (1/36 ~= 2.77% for Waimea)
-    p.stdev_richness = 8.42  # standard deviation of richness
+    p.mean_richness = 170  # richness (proportion of total species present in each sample) (1/36 ~= 2.77% for Waimea)
+    p.stdev_richness = 93  # standard deviation of richness
 
     p.C = 0.05  # connectivity rate
     p.sigma = 0.01  # characteristic interaction strength
@@ -226,12 +247,12 @@ def main():
     path_dir = f'{path_prefix}_N{p.N}_C{p.C}_nu{p.nu}'
     os.makedirs(path_dir, exist_ok=True)
     
-    path_params = f'{path_dir}/params.json'
+    path_params_base = f'{path_dir}/params'
     
-    resume = (not restart_computation) and params_match(p, path_params)
+    resume = (not restart_computation) and params_match(p, path_params_base)
     
     if not resume:
-        write(p, path_params)
+        write(p, f'{path_params_base}.json')
     else:
         print("Resuming computation")
 
@@ -244,7 +265,6 @@ def main():
 
 
 # TODO: Prune mutualistic interactions, since they cause gLV models to becaome unstable. Can maybe get away with pruning only strong symmetric mutualisms, α_ij*α_ji >= 1
-
 
 if __name__ == "__main__":
     main()
