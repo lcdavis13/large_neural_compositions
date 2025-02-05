@@ -243,3 +243,4 @@ results/*
 data/Ptrain.csv
 /analysis/interaction_determinedness
 /analysis/debug_outputs
+/data

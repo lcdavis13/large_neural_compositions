@@ -3,11 +3,12 @@ import glob
 import pandas as pd
 import re
 
+model_col = "model_name"
 
 def load_and_process_csv_files(path_pattern):
     """
     Load all CSV files from the given path pattern, process each file by removing rows with 'fold' = -1,
-    grouping rows by the 'model' column to ensure rows with different 'model' values are not averaged together,
+    grouping rows by the model_col column to ensure rows with different model_col values are not averaged together,
     averaging numeric columns within each group, and taking the first value for non-numeric columns.
     Additionally, compute summary statistics (median, standard deviation, min, and max) for the 'val_loss' column.
     Extract the job number from the filename and include it as a column.
@@ -38,12 +39,12 @@ def load_and_process_csv_files(path_pattern):
             df = pd.read_csv(file_path)
             
             # Drop rows where 'fold' = -1, if the 'fold' column exists
-            if 'fold' in df.columns:
-                df = df[df['fold'] != -1]
+            if 'mean_val_loss' in df.columns:
+                df = df[df['mean_val_loss'] >= 0.0]
             
-            # Group by 'model' if it exists, otherwise treat it as a single group
-            if 'model' in df.columns:
-                grouped = df.groupby('model')
+            # Group by model_col if it exists, otherwise treat it as a single group
+            if model_col in df.columns:
+                grouped = df.groupby(model_col)
             else:
                 grouped = [(None, df)]
             
@@ -76,8 +77,8 @@ def load_and_process_csv_files(path_pattern):
                 
                 # Add the model value and job number to the row if applicable
                 processed_row = {'job_number': job_number}
-                if 'model' in df.columns:
-                    processed_row['model'] = model_value
+                if model_col in df.columns:
+                    processed_row[model_col] = model_value
                 
                 # Combine the dictionaries into one row
                 processed_row.update(averaged_data)
@@ -97,39 +98,49 @@ def load_and_process_csv_files(path_pattern):
 def save_master_csv(master_df, output_path):
     """
     Save the master DataFrame to a CSV file.
-    
+
     Args:
         master_df (pd.DataFrame): The master DataFrame to save.
         output_path (str): The output file path for the CSV file.
     """
-    
+
     try:
-        # Define the desired column order
+        # Define the desired column order, excluding the always-last columns
         column_order = [
-            'dataset', 'model', 'mean_val_loss', 'LR', 'reptile_lr', 'noise', 'interpolate', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'WD_factor', 'ode_timesteps', 'hidden_dim', 'ffn_dim_multiplier',
-            'mean_val_loss @ epoch', 'mean_val_loss @ time',
-            'mean_val_loss @ trn_loss', 'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max', 'job_number'
+            'dataset', 'data_subset', model_col, 'mean_val_loss', 'lr', 'reptile_lr', 'noise', 'interpolate',
+            'cnode_bias', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'wd_factor', 'ode_timesteps', 'hidden_dim',
+            'ffn_dim_multiplier', 'mean_val_loss @ epoch', 'mean_val_loss @ time', 'mean_val_loss @ trn_loss',
+            'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
         ]
-        
+
+        # Define the columns that should always appear last
+        always_last_columns = [
+            'device', 'solver', 'early_stop', 'whichfold', 'batchid', 'taskid', 'jobid', 'data_configid', 'configid', 'headless'
+        ]
+
         # Reorder columns if they exist in the DataFrame
         existing_columns = [col for col in column_order if col in master_df.columns]
-        remaining_columns = [col for col in master_df.columns if col not in existing_columns]
-        ordered_columns = existing_columns + remaining_columns
-        
+        remaining_columns = [col for col in master_df.columns if col not in existing_columns + always_last_columns]
+        existing_last_columns = [col for col in always_last_columns if col in master_df.columns]
+
+        # Create the final ordered list of columns
+        ordered_columns = existing_columns + remaining_columns + existing_last_columns
         master_df = master_df[ordered_columns]
-        
-        # Sort by 'mean_val_loss' in ascending order
+
+        # Sort by 'mean_val_loss' in ascending order if it exists
         if 'mean_val_loss' in master_df.columns:
             master_df = master_df.sort_values(by='mean_val_loss', ascending=True)
-        
+
+        # Save the DataFrame to a CSV file
         master_df.to_csv(output_path, index=False)
         print(f"Master CSV file saved successfully at {output_path}")
     except Exception as e:
         print(f"Failed to save master CSV file: {e}")
 
 
+
 def main():
-    folder = "./results/hpsearch_ocean-nonstd-lastmodels_1-7/expt/"
+    folder = "./results/batchsize-test_2-3-25/expt/"
     path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     
