@@ -103,10 +103,12 @@ def load_data(filepath_train, filepath_train_pos, filepath_train_val, device, su
     print("condensed")
     xcon, ycon = process_data(ycon, transpose=False)
     
+    data_fraction = 1.0
     if subset > 0:
         if subset > len(x):
             print("\n============\nWARNING: subset of data was requested, but exceeds number of samples in dataset\n============\n")
 
+        data_fraction = subset / len(x)
         x = x[:subset]
         y = y[:subset]
         xcon = xcon[:subset]
@@ -123,7 +125,7 @@ def load_data(filepath_train, filepath_train_pos, filepath_train_val, device, su
         ycon = ycon.to(device)
         idcon = idcon.to(device)
     
-    return x, y, xcon, ycon, idcon
+    return x, y, xcon, ycon, idcon, data_fraction
 
 
 def fold_data(datasets, k=5):
