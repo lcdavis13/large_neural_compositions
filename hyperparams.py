@@ -2,6 +2,44 @@ import argparse
 import itertools
 from typing import Any, List, Dict, Optional
 from dotsy import dicy
+import random
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("true", "1", "yes"):
+        return True
+    elif value.lower() in ("false", "0", "no"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected (true/false, 1/0, yes/no).")
+    
+
+def parse_random_value(value: str, expected_type: type) -> Any:
+    """
+    Parse values of the formats either "[X]", "[A...B]", or "[A^^^B]" and return a random value. 
+    If the expected_type is a boolean, it will attempt to interpret the interior of the brackets as a single float X representing probability for the True condition. If the value cannot be interpreted this way, it will default to 0.5. 
+    If the expected_type is a numeric type, it will interpret the interior of the brackets as a range of values from A to B which will be sampled uniformly. If using "..." the range is sampled linearly, if using "^^^" the range is sampled logarithmically.
+    Otherwise it raises an error.
+    """
+    if not value.startswith("[") or not value.endswith("]"):
+        raise ValueError(f"Value '{value}' must be enclosed in brackets.")
+
+    value = value[1:-1]
+    if "..." in value:
+        start, end = map(expected_type, value.split("..."))
+        return expected_type(random.uniform(start, end))
+    elif "^^^" in value:
+        start, end = map(expected_type, value.split("^^^"))
+        return expected_type(start * (end / start) ** random.uniform(0.0, 1.0))
+    else:
+        if expected_type == bool:
+            try:
+                return expected_type(float(value))
+            except ValueError:
+                return False
+        else:
+            return expected_type(value)
 
 def str2bool(value):
     if isinstance(value, bool):
@@ -109,9 +147,13 @@ class HyperparameterBuilder:
             raw_value = args[name]
 
             if config["multiple"]:
-                # Parse comma-separated values
-                values = raw_value.split(",")
-                param_lists[name] = [config["type"](v) for v in values]
+                if isinstance(raw_value, str) and raw_value.startswith("[") and raw_value.endswith("]"):
+                    # Parse random value range
+                    param_lists[name] = [parse_random_value(raw_value, config["type"])]
+                else:
+                    # Parse comma-separated values
+                    values = raw_value.split(",")
+                    param_lists[name] = [config["type"](v) for v in values]
             else:
                 # Single value for flags
                 param_lists[name] = [config["type"](raw_value)]
