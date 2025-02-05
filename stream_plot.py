@@ -6,7 +6,7 @@ import time
 import matplotlib
 
 # Use a backend that supports threading (e.g., TkAgg, Qt5Agg)
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')
 
 
 class PlotStreamer:

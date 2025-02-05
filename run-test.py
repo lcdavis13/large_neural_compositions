@@ -23,9 +23,9 @@ import torch.nn as nn
 import data
 import epoch_managers
 import lr_schedule
-import models_cnode
+import models
 import models_baseline
-import models_embedded
+import models_condensed
 import stream
 from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
@@ -110,6 +110,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     total_distr_error = 0.0
     total_samples = x_val.size(0)
     minibatches = ceildiv(total_samples, minibatch_examples)
+    current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
         z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0,
@@ -209,7 +210,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             end_time = time.time()
             examples_per_second = stream_examples / max(end_time - prev_time,
                                                         0.0001)  # TODO: Find a better way to handle div by zero, or at least a more appropriate nonzero value
-            stream.stream_results(filepath_out_incremental, verbosity > 0, verbosity > 0, verbosity > -1,
+            stream.stream_results(filepath_out_incremental, verbosity > 0,
                                   "fold", fold,
                                   "epoch", epoch_num + 1,
                                   "minibatch", mb + 1,
@@ -289,7 +290,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     gpu_memory_reserved = torch.cuda.memory_reserved(device)
     _, cpuRam = tracemalloc.get_traced_memory()
-    stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
+    stream.stream_results(filepath_out_epoch, verbosity > 0,
                           "fold", fold,
                           "epoch", 0,
                           "training examples", 0,
@@ -361,8 +362,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         _, cpuRam = tracemalloc.get_traced_memory()
         
-        stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
-                          "fold", fold,
+        stream.stream_results(filepath_out_epoch, verbosity > 0,
+                              "fold", fold,
                               "epoch", manager.epoch + 1,
                               "training examples", train_examples_seen,
                               "Avg Training Loss", l_trn,
@@ -410,7 +411,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
-def train_and_evaluate_model(LR, scaler, accumulated_minibatches, x_train, y_train, x_test, y_test,  noise, interpolate, device,
+def train_and_evaluate_model(LR, scaler, accumulated_minibatches, x_train, y_train, x_test, y_test, noise, interpolate, device,
                              min_epochs, max_epochs, minibatch_examples, model_constr, model_args, model_name,
                              timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, verbosity=1):
     model = model_constr(model_args).to(device)
@@ -425,7 +426,7 @@ def train_and_evaluate_model(LR, scaler, accumulated_minibatches, x_train, y_tra
 
     # Train the model
     run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate,
-               scaler, x_train, y_train, x_train[0:1], y_train[1:2], timesteps, model_name, "", 0, loss_fn, score_fn, distr_error_fn, device,
+               scaler, x_train, y_train, x_train[0:1], y_train[0:1], timesteps, model_name, "", 0, loss_fn, score_fn, distr_error_fn, device,
                outputs_per_epoch=10, verbosity=verbosity)
 
     # Evaluate the model
@@ -446,9 +447,8 @@ def main():
 
     # Command-line argument for index
     parser = argparse.ArgumentParser(description='run')
-    parser.add_argument('--index', type=int, required=False, help='Index for the configuration to use')
+    parser.add_argument('--index', type=int, required=True, help='Index for the configuration to use')
     args = parser.parse_args()
-    args.index = 0
 
     # Predefined configurations
     configurations = [
@@ -506,6 +506,9 @@ def main():
 
     print(f'Training data shape: {x_train.shape}')
     print(f'Testing data shape: {x_test.shape}')
+
+    # Select a single sample for evaluation
+    sample_data = (x_train[0:1], y_train[0:1])
 
     # Set hyperparameters from config
     model_name = config["model"]
