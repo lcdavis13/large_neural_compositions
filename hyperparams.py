@@ -41,15 +41,6 @@ def parse_random_value(value: str, expected_type: type) -> Any:
         else:
             return expected_type(value)
 
-def str2bool(value):
-    if isinstance(value, bool):
-        return value
-    if value.lower() in ("true", "1", "yes"):
-        return True
-    elif value.lower() in ("false", "0", "no"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected (true/false, 1/0, yes/no).")
 
 class HyperparameterBuilder:
     def __init__(self):
