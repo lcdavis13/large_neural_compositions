@@ -116,10 +116,8 @@ def main():
                         # "cNODE-paper-ocean-std", 
                         # "cNODE-paper-human-oral", 
                         # "cNODE-paper-human-oral-std", 
-                        "gLV__N69_C0.05",
-                        # "gLV__N69_C0.5",
-                        # "gLV__N69_C0.95",
-                        # "gLV__N5000_C0.05",
+                        "69@4_48_richness50",
+                        # "5000@7_48_richness170",
                         category=datacat, help="dataset to use")
     hpbuilder.add_param("data_subset", 50, 
                         category=datacat, help="number of data samples to use, -1 for all")
