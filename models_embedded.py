@@ -281,6 +281,23 @@ class cAttentionMultihead(nn.Module):
         fx = self.decode(h1).squeeze()
         
         return fx
+    
+    
+class cAttentionMultihead_AbundanceEncoded(nn.Module):
+    def __init__(self, id_embed_dim, num_heads):
+        super().__init__()
+        self.attend = nn.MultiheadAttention(id_embed_dim, num_heads, batch_first=True, dropout=0.0)
+        self.decode = nn.Linear(id_embed_dim,1)  # because pytorch's implementation doesn't support using a different embedding dim for V+Output than for Q+K
+        self.abundance_encode = nn.Linear(1, id_embed_dim)
+    
+    def forward(self, val, id_embed):
+        abund_encoding = self.abundance_encode(val)
+        h0 = id_embed + abund_encoding
+        
+        h1 = self.attend(h0, h0, h0, need_weights=False)[0]
+        fx = self.decode(h1).squeeze()
+        
+        return fx
 
 
 class canODE_attentionMultihead(nn.Module): # compositional attention nODE
@@ -516,6 +533,52 @@ class canODE_ReplicatorAttendFit(nn.Module):
         return y
 
 
+class canODE_ReplicatorAttendFit_AbundanceEncoded(nn.Module):
+    '''
+    Version of canODE that encodes the OTUs with a transformer, then uses an attention layer as the fitness function for the replicator ODE.
+    
+    1. Create condensed embedding
+    2. Enrich embeddings with transformer encoder
+    3. Define the fitness function : encode the abundance to the same dimension as the encoded embeddings, sum them, and run a single layer of attention.
+    4. Run the Replicator ODE using the computed fitness function
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout):
+        self.USES_ODEINT = True
+        self.USES_CONDENSED = True
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
+        
+        # define the transformer
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+        # linear layers to map abundance and the enriched ID embedding into the same space
+        self.id_compress = nn.Linear(id_embed_dim, fitness_qk_dim)
+        self.abundance_encoding = nn.Linear(1, fitness_qk_dim)
+        
+        attend = cAttentionMultihead_AbundanceEncoded(fitness_qk_dim, num_heads)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
+    
+    def forward(self, t, val, pos):
+        # val, pos = condense(x)
+        
+        # modify v
+        id_embed = self.embed(pos)
+        id_embed = self.transform(id_embed)
+        
+        # compress transformer embeddings for the ODE attention mechanism
+        id_embed = self.id_compress(id_embed)
+        
+        y = odeint(lambda xo, to: self.func(xo, to, id_embed), val, t)
+        
+        # y = decondense(y, pos, self.data_dim)
+        return y
+
+
 # class canODE_AttendODE(nn.Module):
 #     '''
 #     Version of canODE that encodes the OTUs with a transformer, then uses an attention layer as the ODE
@@ -594,6 +657,57 @@ class TransformerNormalized(nn.Module):
         
         # concatenate the value onto the id embedding
         h0 = torch.cat((val.unsqueeze(-1), id_embed), -1)
+        
+        h = self.transform(h0)
+        
+        # extract the value from the transformer output
+        y_raw = h[..., 0]
+        
+        # softmax
+        y = self.masked_softmax(pos, y_raw)
+        
+        # y = decondense(y, pos, self.data_dim)
+        return y
+    
+    def masked_softmax(self, pos, y_raw):
+        # Mask out elements where pos is 0
+        mask = (pos != 0)
+        masked_y_raw = y_raw.masked_fill(~mask, float('-inf'))
+        # Normalize the output to sum to 1 (excluding masked elements)
+        y = nn.functional.softmax(masked_y_raw, dim=-1)
+        # Set masked elements to 0
+        y = y * mask.float()
+        return y
+    
+class TransformerNormalized_AbundanceEncoded(nn.Module):
+    '''
+    Use a transformer to directly predict the final relative abundances from the input.
+    This model normalizes the output to sum to 1 in addition to the following:
+    - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
+    - We condense & decondense the sequence if applicable
+    '''
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+        self.USES_CONDENSED = True
+        super().__init__()
+        
+        self.data_dim = data_dim
+        self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
+        self.abund_encode = nn.Linear(1, id_embed_dim)
+        
+        # define the transformer
+        encoder_layer = nn.TransformerEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
+                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
+                                                   activation="gelu", batch_first=True, dropout=dropout)
+        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        
+    
+    def forward(self, val, pos):
+        # val, pos = condense(x)
+        
+        id_embed = self.embed(pos)
+        abund_encoding = self.abund_encode(val)
+
+        h0 = id_embed + abund_encoding
         
         h = self.transform(h0)
         

@@ -95,7 +95,7 @@ def main():
                         # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
                         # 'transformShaped',
                         # 'transformShaped-AbundEncoding',
@@ -105,6 +105,8 @@ def main():
                         # "canODE-FitMat-AbundEncoding", 
                         # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
+                        "transformShaped-AbundEncoding",
+                        "canODE-FitMat-AbundEncoding",
                         help="model(s) to run")
 
     # data params
@@ -199,15 +201,23 @@ def main():
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         ),
-        'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
+        'transformShaped-AbundEncoding': lambda args: models_embedded.TransformerNormalized_AbundanceEncoded(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         ),
+        # 'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
+        #     data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+        #     ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        # ),
         'canODE-FitMat': lambda args: models_embedded.canODE_GenerateFitMat(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, bias=args.cnode_bias
         ),
         'canODE-attendFit': lambda args: models_embedded.canODE_ReplicatorAttendFit(
+            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
+        ),
+        'canODE-FitMat-AbundEncoding': lambda args: models_embedded.canODE_ReplicatorAttendFit_AbundanceEncoded(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
         ),
