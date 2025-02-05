@@ -99,7 +99,7 @@ def load_data(filepath_train, filepath_train_pos, filepath_train_val, device, su
     idcon = np.loadtxt(filepath_train_pos, delimiter=',')
     idcon = torch.from_numpy(idcon).long()
     print("uncondensed")
-    x, y = process_data(y, transpose=True) 
+    x, y = process_data(y, transpose=False) # No longer transposing data, ensure that all data is in correct format (samples as rows) in pre-processing
     print("condensed")
     xcon, ycon = process_data(ycon, transpose=False)
     
