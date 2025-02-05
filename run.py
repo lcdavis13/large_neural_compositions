@@ -39,6 +39,14 @@ def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.mean(torch.sum(torch.abs(y_pred - y_true), dim=-1) / torch.sum(torch.abs(y_pred) + torch.abs(y_true), dim=-1))
 
 
+def loss_logbc(y_pred, y_true):  # Bray-Curtis Dissimilarity on log-transformed data to emphasize loss of rare species
+    return loss_bc(torch.log(y_pred + 1), torch.log(y_true + 1))
+
+
+def loss_loglogbc(y_pred, y_true):  # Bray-Curtis Dissimilarity on log-log-transformed data to emphasize loss of rare species even more
+    return loss_logbc(torch.log(y_pred + 1), torch.log(y_true + 1))
+
+
 def loss_bc_old(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))
 
