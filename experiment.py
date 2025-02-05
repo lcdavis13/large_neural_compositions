@@ -9,6 +9,7 @@ import stream
 from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
 import time
+from dotsy import dicy
 
 
 import copy
@@ -539,7 +540,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise, interpolate, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs,
-                        minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn,
+                        minibatch_examples, model_constr, hp, model_name, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
                         whichfold=-1, jobstring=""):
     filepath_out_fold = f'results/folds/{model_name}_{dataname}{jobstring}_folds.csv'
@@ -556,6 +557,10 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
     for fold_num, data_fold in enumerate(data_folded):
         if whichfold >= 0:
             fold_num = whichfold
+        model_args = dicy(hp)
+        if model_name == "baseline-TrainingMixture":
+            model_args.train_samples = data_fold[0][1].size(0)
+            model_args.train_y = data_fold[0][1]
         model = model_constr(model_args).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR * LR_start_factor, weight_decay=weight_decay)
         # optimizer = torch.optim.SGD(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)

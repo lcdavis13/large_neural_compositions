@@ -92,10 +92,10 @@ def main():
     hpbuilder = HyperparameterBuilder()
 
     hpbuilder.add_param("model_name", 
-                        # "junk", 
+                        "baseline-TrainingMixture", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
                         # 'transformShaped',
                         # 'transformShaped-AbundEncoding',
@@ -119,7 +119,7 @@ def main():
                         "69@4_48_richness50",
                         # "5000@7_48_richness170",
                         category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 50, 
+    hpbuilder.add_param("data_subset", 1000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 2, 
                         category=datacat, help="how many data folds, -1 for leave-one-out")
@@ -137,7 +137,7 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 2, 
+    hpbuilder.add_param("epochs", 20, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
@@ -191,6 +191,7 @@ def main():
     # Note that each must be a constructor function that takes a dicy/dictionary args. Lamda is recommended.
     models = {
         # most useful models
+        'baseline-TrainingMixture': lambda args: models_baseline.ReturnTrainingSampleMixture(args.data_dim, args.data_dim, args.train_samples, args.train_y),
         'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
         'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim),
         'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, args.cnode_bias),
@@ -355,7 +356,11 @@ def main():
                 
                 # test construction and print parameter count
                 print(f"\nModel construction test for: {hp.model_name}")
-                model = model_constr(hp)
+                mp = dicy(hp)
+                if mp.model_name == "baseline-TrainingMixture":
+                    mp.train_samples = y.size(0)
+                    mp.train_y = y
+                model = model_constr(mp)
                 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
                 print(f"Number of parameters in model: {num_params}")
                 

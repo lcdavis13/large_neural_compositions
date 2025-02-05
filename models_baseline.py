@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import models_cnode
 from ode_solver import odeint
@@ -12,6 +13,59 @@ class ReturnInput(nn.Module):
     
     def forward(self, x):
         return x
+    
+
+class ReturnTrainingSampleMixture(nn.Module):
+    def __init__(self, data_dim, hidden_dim, num_samples, Y_train):
+        """
+        :param input_dim: Dimensionality of X
+        :param hidden_dim: Number of hidden units in classifier
+        :param num_samples: Number of training samples (N)
+        :param output_dim: Dimensionality of Y
+        :param Y_train: Tensor of shape (N, D) containing Y values
+        """
+        super().__init__()
+
+        self.num_samples = num_samples  # N
+        self.Y_train = nn.Parameter(Y_train, requires_grad=False)  # Store training Y values (N, D) as non-trainable
+
+        # Classifier network that predicts logits over indices
+        self.classifier = nn.Sequential(
+            nn.Linear(data_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_samples)  # Output logits for N classes
+        )
+
+    def forward(self, x):
+        """
+        Predicts Y values using soft index retrieval.
+        :param x: Input tensor (batch_size, input_dim)
+        :return: Predicted Y tensor (batch_size, output_dim)
+        """
+        # Predict class logits
+        logits = self.classifier(x)  # (batch_size, N)
+
+        # Convert logits to soft probabilities
+        soft_indices = F.softmax(logits, dim=1)  # (batch_size, N)
+
+        # Retrieve Y as weighted sum of all Y_train samples (differentiable)
+        retrieved_Y = torch.matmul(soft_indices, self.Y_train)  # (batch_size, D)
+
+        # Apply mask: we need to do this for each batch element separately
+        mask = x != 0  # Shape: (batch_size, input_dim)
+        
+        # Masking and normalization per batch element
+        y = torch.zeros_like(retrieved_Y)  # This will hold the output
+        
+        batch_size = x.shape[0]
+        for i in range(batch_size):
+            f_selected = retrieved_Y[i, mask[i]]  # Select only the unmasked values for this batch element
+            if f_selected.numel() > 0:  # If there are any unmasked elements
+                f_normalized = f_selected / f_selected.sum()  # Normalize
+                y[i, mask[i]] = f_normalized  # Assign normalized values back
+
+        return y 
+
 
 class SingleConst(nn.Module):
     # This model returns the input as the output. Since our inputs are fixed value for all nonzero features, this model is equivalent to returning a uniform distribution of the species in the assemblage.
