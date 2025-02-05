@@ -163,16 +163,28 @@ def main():
     # Optimizer params
     hpbuilder.add_param("lr", 0.1,
                         help="learning rate")
+    hpbuilder.add_param("beta1", 0.9,
+                        help="beta1 for AdamW optimizer")
+    hpbuilder.add_param("beta2", 0.999,
+                        help="beta2 for AdamW optimizer")
+    hpbuilder.add_param("use_reptile", False,
+                        help="whether or not to use reptile meta-learning as a form of regularization")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd_factor", 0.0, 
                         help="weight decay factor (multiple of LR)")
-    hpbuilder.add_param("noise", 0.075, 
-                        help="noise level")
     
     # Data augmentation params
     hpbuilder.add_param("ode_timesteps", 15, 
                         help="number of ODE timesteps")
+    hpbuilder.add_param("use_noise_x", False,
+                        help="whether or not to use noise augmentation for the inputs")
+    hpbuilder.add_param("noise_x", 0.075, 
+                        help="noise level for the inputs")
+    hpbuilder.add_param("use_noise_y", False,
+                        help="whether or not to use noise augmentation for the supervisory signal")
+    hpbuilder.add_param("noise_y", 0.075, 
+                        help="noise level for the supervisory signal")
     hpbuilder.add_param("interpolate", False, 
                         help="whether or not to use supervised interpolation steps")
     hpbuilder.add_param("interpolate_noise", False,
