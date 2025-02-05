@@ -3,6 +3,15 @@ import itertools
 from typing import Any, List, Dict, Optional
 from dotsy import dicy
 
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("true", "1", "yes"):
+        return True
+    elif value.lower() in ("false", "0", "no"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected (true/false, 1/0, yes/no).")
 
 class HyperparameterBuilder:
     def __init__(self):
@@ -26,6 +35,9 @@ class HyperparameterBuilder:
         if not all(isinstance(value, param_type) for value in default_values):
             raise ValueError(f"All default values for '{name}' must be of the same type.")
 
+        if param_type == bool:
+            param_type = str2bool  # Use custom bool parsing
+
         self.params[name] = {
             "type": param_type,
             "defaults": default_values,
@@ -34,7 +46,6 @@ class HyperparameterBuilder:
             "category": category,
         }
 
-        # Add to category
         if category not in self.categories:
             self.categories[category] = []
         self.categories[category].append(name)
@@ -43,7 +54,7 @@ class HyperparameterBuilder:
         self.parser.add_argument(
             f"--{name}",
             default=",".join(map(str, default_values)),
-            type=str,
+            type=str if param_type == str2bool else str,
             help=f"{help} (default: {','.join(map(str, default_values))})",
         )
         return self
