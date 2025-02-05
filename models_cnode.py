@@ -5,11 +5,11 @@ import torch.nn as nn
 from ode_solver import odeint
 
 class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
-    def __init__(self, N):
+    def __init__(self, N, bias):
         super().__init__()
-        self.fcc1 = nn.Linear(N, N)
+        self.fcc1 = nn.Linear(N, N, bias=bias)
         # self.bn1 = nn.BatchNorm1d(N)
-        self.fcc2 = nn.Linear(N, N)
+        self.fcc2 = nn.Linear(N, N, bias=bias)
     
     def forward(self, t, x):
         fx = self.fcc1(x)  # B x N
@@ -24,11 +24,11 @@ class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
     
     
 class cNODE2(nn.Module):
-    def __init__(self, N):
+    def __init__(self, N, bias):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODE2(N)
+        self.func = ODEFunc_cNODE2(N, bias=bias)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -36,9 +36,9 @@ class cNODE2(nn.Module):
 
 
 class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
-    def __init__(self, N):
+    def __init__(self, N, bias):
         super().__init__()
-        self.fcc1 = nn.Linear(N, N)
+        self.fcc1 = nn.Linear(N, N, bias=bias)
     
     def forward(self, t, x):
         fx = self.fcc1(x)  # B x N
@@ -54,11 +54,11 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
 
 
 class cNODE1(nn.Module):
-    def __init__(self, N):
+    def __init__(self, N, bias):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODE1(N)
+        self.func = ODEFunc_cNODE1(N, bias=bias)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -93,12 +93,12 @@ class cNODEGen_ConstructedFitness(nn.Module):
 
 
 class cNODE_HourglassFitness(nn.Module):
-    def __init__(self, data_dim, hidden_dim, depth):
+    def __init__(self, data_dim, hidden_dim, depth, bias=True):
         self.USES_ODEINT = True
         super().__init__()
         
         self.func = ODEFunc_cNODEGen_ConstructedFitness(
-            lambda: self.construct_fitness(data_dim, hidden_dim, depth)
+            lambda: self.construct_fitness(data_dim, hidden_dim, depth, bias)
         )
     
     def forward(self, t, x):
@@ -106,11 +106,11 @@ class cNODE_HourglassFitness(nn.Module):
         return y
     
     @staticmethod
-    def construct_fitness(data_dim, hidden_dim, depth):
+    def construct_fitness(data_dim, hidden_dim, depth, bias):
         depth = depth + 1 # Add 1 to account for the input layer
 
         if depth < 3:
-            raise ValueError("Depth must be at least 3 for a valid autoencoder structure.")
+            raise ValueError("Depth must be at least 2 for a valid autoencoder structure.")
         
         layers = []
         half_depth = (depth - 1) // 2  # Exclude the input and output layers in the interpolation
@@ -132,7 +132,7 @@ class cNODE_HourglassFitness(nn.Module):
         dims = down_dims + up_dims
 
         for i in range(len(dims) - 1):
-            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            layers.append(nn.Linear(dims[i], dims[i + 1], bias=bias))
             if i < len(dims) - 2:  # Add ReLU for all but the last layer
                 layers.append(nn.ReLU())
 
@@ -183,13 +183,13 @@ class ODEFunc_cNODEGen_FnFitness_Args(nn.Module):  # cNODE2 with generalized f(x
 
     
 class cNODE2_FnFitness(nn.Module):
-    def __init__(self, N):
+    def __init__(self, N, bias):
         self.USES_ODEINT = True
         
         super().__init__()
         f = nn.Sequential(
-            nn.Linear(N, N),
-            nn.Linear(N, N)
+            nn.Linear(N, N, bias=bias),
+            nn.Linear(N, N, bias=bias)
         )
         self.func = ODEFunc_cNODEGen_FnFitness(f)
     
@@ -213,13 +213,13 @@ class ODEFunc_cNODEGen_ExternalFitness(nn.Module):  # cNODE2 with generalized f(
 
 
 class cNODE2_ExternalFitness(nn.Module):
-    def __init__(self, N):
+    def __init__(self, N, bias):
         self.USES_ODEINT = True
         
         super().__init__()
         self.func = ODEFunc_cNODEGen_ExternalFitness()
-        self.fcc1 = nn.Linear(N, N)
-        self.fcc2 = nn.Linear(N, N)
+        self.fcc1 = nn.Linear(N, N, bias=bias)
+        self.fcc2 = nn.Linear(N, N, bias=bias)
     
     def forward(self, t, x):
         fx = self.fcc1(x)
@@ -245,12 +245,12 @@ class ODEFunc_cNODEGen_ExternalFitnessFn(nn.Module):
 
 
 class cNODE2_ExternalFitnessFn(nn.Module):
-    def __init__(self, N):
+    def __init__(self, N, bias):
         self.USES_ODEINT = True
         
         super().__init__()
         self.func = ODEFunc_cNODEGen_ExternalFitnessFn()
-        self.Fn = nn.Linear(N, N)
+        self.Fn = nn.Linear(N, N, bias=bias)
     
     def forward(self, t, x):
         y = odeint(lambda x,t: self.func(x,t,self.Fn), x, t)
@@ -258,10 +258,10 @@ class cNODE2_ExternalFitnessFn(nn.Module):
 
 
 # class ODEFunc_cNODE2_DKI_unbatched(nn.Module):  # original DKI implementation of cNODE2, but will crash if you send batched data
-#     def __init__(self, N):
+#     def __init__(self, N, bias):
 #         super(ODEFunc_cNODE2_DKI_unbatched, self).__init__()
-#         self.fcc1 = nn.Linear(N, N)
-#         self.fcc2 = nn.Linear(N, N)
+#         self.fcc1 = nn.Linear(N, N, bias=bias)
+#         self.fcc2 = nn.Linear(N, N, bias=bias)
 #
 #     def forward(self, t, y):
 #         out = self.fcc1(y)
@@ -270,10 +270,10 @@ class cNODE2_ExternalFitnessFn(nn.Module):
 #         return torch.mul(y, out - torch.transpose(f, 0, 1))
 
 class ODEFunc_cNODE2_DKI(nn.Module): # DKI implementation of cNODE2 modified to allow batches
-    def __init__(self, N):
+    def __init__(self, N, bias):
         super().__init__()
-        self.fcc1 = nn.Linear(N, N)
-        self.fcc2 = nn.Linear(N, N)
+        self.fcc1 = nn.Linear(N, N, bias=bias)
+        self.fcc2 = nn.Linear(N, N, bias=bias)
 
     def forward(self, t, y):
         y = y.unsqueeze(1)  # B x 1 x N

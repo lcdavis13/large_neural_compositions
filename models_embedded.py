@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-from rezero.transformer import RZTXEncoderLayer
+# from rezero.transformer import RZTXEncoderLayer
 from ode_solver import odeint
 import models_cnode
 
@@ -420,12 +420,13 @@ class canODE_GenerateFitMat(nn.Module):
     5. Compose the fitness function as F(x) = M * x + b
     6. Run cNODE1 using the computed fitness function
     '''
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout):
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout, bias):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         super().__init__()
         
         self.data_dim = data_dim
+        self.bias = bias  # Store bias setting
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
         
         # define the transformer
@@ -438,7 +439,11 @@ class canODE_GenerateFitMat(nn.Module):
         self.fitmatrix_Q = nn.Linear(id_embed_dim, fitness_qk_dim)
         self.fitmatrix_K = nn.Linear(id_embed_dim, fitness_qk_dim)
         self.fitmatrix_scalefactor = fitness_qk_dim ** -0.5
-        self.fitbias = nn.Parameter(torch.zeros(data_dim + 1)) # Add 1 to account for placeholder ID
+        
+        if bias:
+            self.fitbias = nn.Parameter(torch.zeros(data_dim + 1))  # Add 1 to account for placeholder ID
+        else:
+            self.fitbias = None  # No bias parameter if bias=False
         
         # define the ODE function
         self.ode_func = models_cnode.ODEFunc_cNODEGen_ExternalFitnessFn()
@@ -453,8 +458,13 @@ class canODE_GenerateFitMat(nn.Module):
         q = self.fitmatrix_Q(id_embed)
         k = self.fitmatrix_K(id_embed)
         fitmatrix = torch.einsum('...id , ...jd -> ...ij', q, k) * self.fitmatrix_scalefactor
-        fitbias = self.fitbias[pos]
-        fitnessFn = lambda h: torch.einsum('...ij, ...i -> ...j', fitmatrix, h) + fitbias
+        
+        # Conditionally include bias term
+        if self.bias:
+            fitbias = self.fitbias[pos]
+            fitnessFn = lambda h: torch.einsum('...ij, ...i -> ...j', fitmatrix, h) + fitbias
+        else:
+            fitnessFn = lambda h: torch.einsum('...ij, ...i -> ...j', fitmatrix, h)
         
         y = odeint(lambda xo, to: self.ode_func(xo, to, fitnessFn), val, t)
         

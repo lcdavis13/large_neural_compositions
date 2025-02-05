@@ -312,9 +312,9 @@ class SingleLayerFilteredSummed(nn.Module):
 class cNODE1_singlestep(nn.Module):
     # cNODE1, but instead of solving the ODE fixed point, it takes one single step of the replicator equation.
     
-    def __init__(self, N):
+    def __init__(self, N, bias):
         super().__init__()
-        self.func = models_cnode.ODEFunc_cNODE1(N)
+        self.func = models_cnode.ODEFunc_cNODE1(N, bias)
     
     def forward(self, x):
         dxdt = self.func([0.0], x)
@@ -359,7 +359,7 @@ class cNODE0(nn.Module):
         self.func = ODEFunc_cNODE0(N)
     
     def forward(self, t, x):
-        y = odeint(self.func, x, t)[-1]
+        y = odeint(self.func, x, t)
         return y
 
 
