@@ -39,6 +39,14 @@ def loss_bc(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.mean(torch.sum(torch.abs(y_pred - y_true), dim=-1) / torch.sum(torch.abs(y_pred) + torch.abs(y_true), dim=-1))
 
 
+def loss_logbc(y_pred, y_true):  # Bray-Curtis Dissimilarity on log-transformed data to emphasize loss of rare species
+    return loss_bc(torch.log(y_pred + 1), torch.log(y_true + 1))
+
+
+def loss_loglogbc(y_pred, y_true):  # Bray-Curtis Dissimilarity on log-log-transformed data to emphasize loss of rare species even more
+    return loss_logbc(torch.log(y_pred + 1), torch.log(y_true + 1))
+
+
 def loss_bc_old(y_pred, y_true):  # Bray-Curtis Dissimilarity
     return torch.sum(torch.abs(y_pred - y_true)) / torch.sum(torch.abs(y_pred) + torch.abs(y_true))
 
@@ -91,40 +99,11 @@ def main():
 
     hpbuilder = HyperparameterBuilder()
 
-    datacat = "data"
-    hpbuilder.add_param("dataset", 
-                        # "waimea", 
-                        # "waimea-std", 
-                        # "cNODE-paper-ocean", 
-                        # "cNODE-paper-ocean-std", 
-                        # "cNODE-paper-human-oral", 
-                        # "cNODE-paper-human-oral-std", 
-                        "gLV__N69_C0.05",
-                        "gLV__N69_C0.5",
-                        "gLV__N69_C0.95",
-                        category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 50, 
-                        category=datacat, help="number of data samples to use, -1 for all")
-    hpbuilder.add_param("kfolds", 2, 
-                        category=datacat, help="how many data folds, -1 for leave-one-out")
-    hpbuilder.add_param("whichfold", 0, 
-                        category=datacat, help="which fold to run, -1 for all")
-    
-    hpbuilder.add_param("batchid", 0,
-                        help="slurm array job id")
-    hpbuilder.add_param("taskid", 0,
-                        help="slurm array task id")
-    hpbuilder.add_param("jobid", "-1", 
-                        help="slurm job id")
-    hpbuilder.add_flag("headless", False, 
-                       help="run without plotting")
-    
-
     hpbuilder.add_param("model_name", 
-                        "junk", 
+                        # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        # 'cNODE1',
+                        'cNODE1',
                         # 'cNODE2',
                         # 'transformShaped',
                         # 'transformShaped-AbundEncoding',
@@ -135,6 +114,37 @@ def main():
                         # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
+
+    # data params
+    datacat = "data"
+    hpbuilder.add_param("dataset", 
+                        # "waimea", 
+                        # "waimea-std", 
+                        # "cNODE-paper-ocean", 
+                        # "cNODE-paper-ocean-std", 
+                        # "cNODE-paper-human-oral", 
+                        # "cNODE-paper-human-oral-std", 
+                        "69@4_48_richness50",
+                        # "5000@7_48_richness170",
+                        category=datacat, help="dataset to use")
+    hpbuilder.add_param("data_subset", 50, 
+                        category=datacat, help="number of data samples to use, -1 for all")
+    hpbuilder.add_param("kfolds", 2, 
+                        category=datacat, help="how many data folds, -1 for leave-one-out")
+    hpbuilder.add_param("whichfold", 0, 
+                        category=datacat, help="which fold to run, -1 for all")
+    
+    # slurm params
+    hpbuilder.add_param("batchid", 0,
+                        help="slurm array job id")
+    hpbuilder.add_param("taskid", 0,
+                        help="slurm array task id")
+    hpbuilder.add_param("jobid", "-1", 
+                        help="slurm job id")
+    hpbuilder.add_flag("headless", False, 
+                       help="run without plotting")
+    
+    # experiment params
     hpbuilder.add_param("epochs", 2, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
@@ -145,12 +155,12 @@ def main():
                         help="minimum number of epochs")
     hpbuilder.add_param("early_stop", True, 
                         help="whether or not to use early stopping")
-    hpbuilder.add_param("ode_timesteps", 15, 
-                        help="number of ODE timesteps")
     hpbuilder.add_param("minibatch_examples", 100, 
                         help="minibatch size")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
+    
+    # Optimizer params
     hpbuilder.add_param("lr", 0.1,
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
@@ -159,8 +169,16 @@ def main():
                         help="weight decay factor (multiple of LR)")
     hpbuilder.add_param("noise", 0.075, 
                         help="noise level")
+    
+    # Data augmentation params
+    hpbuilder.add_param("ode_timesteps", 15, 
+                        help="number of ODE timesteps")
     hpbuilder.add_param("interpolate", False, 
                         help="whether or not to use supervised interpolation steps")
+    hpbuilder.add_param("interpolate_noise", False,
+                        help="whether or not to use independent noise for interpolation")
+    
+    # Model architecture params
     hpbuilder.add_param("cnode_bias", False, 
                         help="whether or not to use a bias term when predicting fitness in cNODE and similar models")
     hpbuilder.add_param("num_heads", 2, 
@@ -173,7 +191,7 @@ def main():
                         help="depth of model")
     hpbuilder.add_param("ffn_dim_multiplier", 4.0, 
                         help="multiplier for feedforward network dimension in transformer-based models")
-    hpbuilder.add_param("dropout", 0.5, 
+    hpbuilder.add_param("dropout", 0.1, 
                         help="dropout rate")
     
 
@@ -189,23 +207,15 @@ def main():
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         ),
-        'transformShaped-AbundEncoding': lambda args: models_embedded.TransformerNormalized_AbundanceEncoded(
+        'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         ),
-        # 'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
-        #     data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-        #     ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
-        # ),
         'canODE-FitMat': lambda args: models_embedded.canODE_GenerateFitMat(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, bias=args.cnode_bias
         ),
         'canODE-attendFit': lambda args: models_embedded.canODE_ReplicatorAttendFit(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
-        ),
-        'canODE-FitMat-AbundEncoding': lambda args: models_embedded.canODE_ReplicatorAttendFit_AbundanceEncoded(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
         ),
@@ -265,9 +275,6 @@ def main():
         filepath_train = f'data/{dp.dataset}_train.csv'
         filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
         filepath_train_val = f'data/{dp.dataset}_train-val.csv'
-        filepath_test = f'data/{dp.dataset}_test.csv'
-        filepath_test_pos = f'data/{dp.dataset}_test-pos.csv'
-        filepath_test_val = f'data/{dp.dataset}_test-val.csv'
         x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=dp.data_subset)
         xtest, ytest, xcontest, ycontest, idcontest, _ = data.load_data(filepath_test, filepath_test_pos, filepath_test_val, device, subset=-1)
         testdata = [xtest, ytest, xcontest, ycontest, idcontest]

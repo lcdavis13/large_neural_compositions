@@ -23,9 +23,9 @@ import torch.nn as nn
 import data
 import epoch_managers
 import lr_schedule
-import models
+import models_cnode
 import models_baseline
-import models_condensed
+import models_embedded
 import stream
 from optimum import Optimum, summarize, unrolloptims
 from stream_plot import plotstream
@@ -210,7 +210,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
             end_time = time.time()
             examples_per_second = stream_examples / max(end_time - prev_time,
                                                         0.0001)  # TODO: Find a better way to handle div by zero, or at least a more appropriate nonzero value
-            stream.stream_results(filepath_out_incremental, verbosity > 0,
+            stream.stream_results(filepath_out_incremental, verbosity > 0, verbosity > 0, verbosity > -1,
                                   "fold", fold,
                                   "epoch", epoch_num + 1,
                                   "minibatch", mb + 1,
@@ -290,7 +290,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     gpu_memory_reserved = torch.cuda.memory_reserved(device)
     _, cpuRam = tracemalloc.get_traced_memory()
-    stream.stream_results(filepath_out_epoch, verbosity > 0,
+    stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
                           "fold", fold,
                           "epoch", 0,
                           "training examples", 0,
@@ -362,8 +362,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         gpu_memory_reserved = torch.cuda.memory_reserved(device)
         _, cpuRam = tracemalloc.get_traced_memory()
         
-        stream.stream_results(filepath_out_epoch, verbosity > 0,
-                              "fold", fold,
+        stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
+                          "fold", fold,
                               "epoch", manager.epoch + 1,
                               "training examples", train_examples_seen,
                               "Avg Training Loss", l_trn,
@@ -447,8 +447,9 @@ def main():
 
     # Command-line argument for index
     parser = argparse.ArgumentParser(description='run')
-    parser.add_argument('--index', type=int, required=True, help='Index for the configuration to use')
+    parser.add_argument('--index', type=int, required=False, help='Index for the configuration to use')
     args = parser.parse_args()
+    args.index = 0
 
     # Predefined configurations
     configurations = [
