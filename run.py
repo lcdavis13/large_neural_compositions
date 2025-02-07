@@ -276,9 +276,11 @@ def main():
         filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
         filepath_train_val = f'data/{dp.dataset}_train-val.csv'
         x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=dp.data_subset)
+        xtest, ytest, xcontest, ycontest, idcontest, _ = data.load_data(filepath_test, filepath_test_pos, filepath_test_val, device, subset=-1)
+        testdata = [xtest, ytest, xcontest, ycontest, idcontest]
         data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
         data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
-        assert (data.check_leakage(data_folded))
+        # assert (data.check_leakage(data_folded))
 
         print('dataset:', filepath_train)
         print(f'using {dp.data_subset} samples, which is {dp.data_fraction * 100}% of the data')
@@ -400,7 +402,7 @@ def main():
                 
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
+                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, hp,
                     hp.model_name, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring

@@ -391,7 +391,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     return optimal_weight_decay, optimal_lr
 
 
-def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, scaler, data_train, data_valid, t,
+def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, scaler, data_train, data_valid, data_test, t,
                model_name, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train=False, jobstring=""):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
@@ -406,6 +406,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     old_lr = scheduler.get_last_lr()
     
     filepath_out_epoch = f'results/epochs/{model_name}_{dataname}{jobstring}_epochs.csv'
+    filepath_out_test = f'results/tests/{model_name}_{dataname}{jobstring}_tests.csv'
     # filepath_out_model = f'results/logs/{model_name}_{dataname}_model.pth'
     filepath_out_incremental = f'results/incr/{model_name}_{dataname}{jobstring}_incremental.csv'
     
@@ -448,6 +449,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         outer_optimizer.lr = reptile_rate
     
     training_curve = []
+    has_backup = False
     while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, data_train, minibatch_examples,
                                                         accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
@@ -528,7 +530,26 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         old_lr = new_lr
         
         # check if we should continue
-        if manager.should_stop(last_opt):
+        model_path = f'results/models/{model_name}_{dataname}_fold{fold}_job{jobstring}.pt'
+        should_stop = manager.should_stop(last_opt)
+        if should_stop and has_backup:
+            model.load_state_dict(torch.load(model_path, weights_only=True))
+        else:
+            torch.save(model.state_dict(), model_path)
+            has_backup = True
+        if should_stop:
+            l_test, score_test, p_test = validate_epoch(model, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+            stream.stream_results(filepath_out_test, True, True, True,
+                          "fold", fold,
+                          "epoch", manager.epoch - 1,
+                          "Avg Test Loss", l_test,
+                          "Avg DKI Test Loss", score_test,
+                          "Avg Test Distr Error", p_test,
+                          "Elapsed Time", elapsed_time,
+                          "VRAM (GB)", gpu_memory_reserved / (1024 ** 3),
+                          "Peak RAM (GB)", cpuRam / (1024 ** 3),
+                          prefix="==================TESTING=================\n",
+                          suffix="\n=============================================\n")
             break
     
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
@@ -537,7 +558,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
 
-def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise, interpolate, device, early_stop, patience, kfolds,
+def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testdata, noise, interpolate, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs,
                         minibatch_examples, model_constr, model_args, model_name, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
@@ -560,7 +581,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR * LR_start_factor, weight_decay=weight_decay)
         # optimizer = torch.optim.SGD(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
         # manager = epoch_managers.FixedManager(max_epochs=min_epochs)
-        manager = epoch_managers.ExplosionManager(memory=0.5, threshold=1.0, mode="rel", max_epochs=max_epochs)
+        # manager = epoch_managers.ExplosionManager(memory=0.5, threshold=1.0, mode="rel", max_epochs=max_epochs)
+        manager = epoch_managers.EarlyStopManager(memory=0.0, threshold=0.0, mode="rel", max_epochs=max_epochs)
         # manager = epoch_managers.ConvergenceManager(memory=0.1, threshold=0.001, mode="const", min_epochs=min_epochs, max_epochs=max_epochs)
         
         # x_train, y_train, x_valid, y_valid = data_fold
@@ -568,9 +590,11 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         if not requires_condensed:
             data_train = [data_fold[0][0], data_fold[1][0]]
             data_valid = [data_fold[0][1], data_fold[1][1]]
+            data_test = [testdata[0], testdata[1]]
         else:
             data_train = [data_fold[2][0], data_fold[3][0], data_fold[4][0]]
             data_valid = [data_fold[2][1], data_fold[3][1], data_fold[4][1]]
+            data_test = [testdata[2], testdata[3], testdata[4]]
 
         
         steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
@@ -585,7 +609,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, noise,
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(model, optimizer, scheduler, manager,
                                                                             minibatch_examples, accumulated_minibatches, noise, interpolate,
-                                                                            scaler, data_train, data_valid, 
+                                                                            scaler, data_train, data_valid, data_test,
                                                                             timesteps, model_name,
                                                                             dataname, fold_num, loss_fn, score_fn,
                                                                             distr_error_fn, device,
