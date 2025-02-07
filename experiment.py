@@ -538,18 +538,19 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
             torch.save(model.state_dict(), model_path)
             has_backup = True
         if should_stop:
-            l_test, score_test, p_test = validate_epoch(model, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
-            stream.stream_results(filepath_out_test, True, True, True,
-                          "fold", fold,
-                          "epoch", manager.epoch - 1,
-                          "Avg Test Loss", l_test,
-                          "Avg DKI Test Loss", score_test,
-                          "Avg Test Distr Error", p_test,
-                          "Elapsed Time", elapsed_time,
-                          "VRAM (GB)", gpu_memory_reserved / (1024 ** 3),
-                          "Peak RAM (GB)", cpuRam / (1024 ** 3),
-                          prefix="==================TESTING=================\n",
-                          suffix="\n=============================================\n")
+            if data_test:
+                l_test, score_test, p_test = validate_epoch(model, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+                stream.stream_results(filepath_out_test, True, True, True,
+                            "fold", fold,
+                            "epoch", manager.epoch - 1,
+                            "Avg Test Loss", l_test,
+                            "Avg DKI Test Loss", score_test,
+                            "Avg Test Distr Error", p_test,
+                            "Elapsed Time", elapsed_time,
+                            "VRAM (GB)", gpu_memory_reserved / (1024 ** 3),
+                            "Peak RAM (GB)", cpuRam / (1024 ** 3),
+                            prefix="==================TESTING=================\n",
+                            suffix="\n=============================================\n")
             break
     
     # TODO: Check if this is the best model of a given name, and if so, save the weights and logs to a separate folder for that model name
@@ -590,11 +591,17 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
         if not requires_condensed:
             data_train = [data_fold[0][0], data_fold[1][0]]
             data_valid = [data_fold[0][1], data_fold[1][1]]
-            data_test = [testdata[0], testdata[1]]
+            if testdata:
+                data_test = [testdata[0], testdata[1]]
+            else:
+                data_test = None
         else:
             data_train = [data_fold[2][0], data_fold[3][0], data_fold[4][0]]
             data_valid = [data_fold[2][1], data_fold[3][1], data_fold[4][1]]
-            data_test = [testdata[2], testdata[3], testdata[4]]
+            if testdata:
+                data_test = [testdata[2], testdata[3], testdata[4]]
+            else:
+                data_test = None
 
         
         steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)

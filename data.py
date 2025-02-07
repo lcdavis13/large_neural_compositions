@@ -128,7 +128,29 @@ def load_data(filepath_train, filepath_train_pos, filepath_train_val, device, su
     return x, y, xcon, ycon, idcon, data_fraction
 
 
+def split_data(datasets, validation_samples):
+    # output dimensions are (kfolds (singleton for this function), datasets, train vs valid, ...)
+
+    # Ensure datasets is a list of tensors/arrays with matching lengths
+    dataset_lengths = [len(dataset) for dataset in datasets]
+    if not all(length == dataset_lengths[0] for length in dataset_lengths):
+        raise ValueError("All datasets must have the same length.")
+    
+    # Split data into training and validation sets
+    data = []
+    for dataset in datasets:
+        train_data = dataset[:-validation_samples]
+        valid_data = dataset[-validation_samples:]
+        data.append((train_data, valid_data))
+
+    return [data]
+
+    
+
+
 def fold_data(datasets, k=5):
+    # output dimensions are (kfolds, datasets, train vs valid, ...)
+
     # Ensure datasets is a list of tensors/arrays with matching lengths
     dataset_lengths = [len(dataset) for dataset in datasets]
     if not all(length == dataset_lengths[0] for length in dataset_lengths):

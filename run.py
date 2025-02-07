@@ -130,9 +130,11 @@ def main():
     hpbuilder.add_param("data_subset", 50, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 2, 
-                        category=datacat, help="how many data folds, -1 for leave-one-out")
+                        category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
     hpbuilder.add_param("whichfold", 0, 
                         category=datacat, help="which fold to run, -1 for all")
+    hpbuilder.add_param("data_validation_samples", 0,
+                        category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
     
     # slurm params
     hpbuilder.add_param("batchid", 0,
@@ -159,6 +161,8 @@ def main():
                         help="minibatch size")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
+    hpbuilder.add_param("run_test", False,
+                        category=datacat, help="run the test set after training")
     
     # Optimizer params
     hpbuilder.add_param("lr", 0.1,
@@ -275,20 +279,38 @@ def main():
         filepath_train = f'data/{dp.dataset}_train.csv'
         filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
         filepath_train_val = f'data/{dp.dataset}_train-val.csv'
-        x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=dp.data_subset)
-        xtest, ytest, xcontest, ycontest, idcontest, _ = data.load_data(filepath_test, filepath_test_pos, filepath_test_val, device, subset=-1)
-        testdata = [xtest, ytest, xcontest, ycontest, idcontest]
-        data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
-        data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
+        filepath_test = f'data/{dp.dataset}_test.csv'
+        filepath_test_pos = f'data/{dp.dataset}_test-pos.csv'
+        filepath_test_val = f'data/{dp.dataset}_test-val.csv'
+        if dp.data_validation_samples > 0 and dp.data_subset < 0:
+            samples_to_load = dp.data_subset + dp.data_validation_samples
+        else:
+            samples_to_load = dp.data_subset
+        x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=samples_to_load)
+        if dp.run_test:
+            xtest, ytest, xcontest, ycontest, idcontest, _ = data.load_data(filepath_test, filepath_test_pos, filepath_test_val, device, subset=-1)
+            testdata = [xtest, ytest, xcontest, ycontest, idcontest]
+        else:
+            testdata = None
+        if dp.data_validation_samples > 0:
+            data_folded = data.split_data([x, y, xcon, ycon, idcon], dp.data_validation_samples)
+        else:
+            data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  
+            data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
+        # whether in K-Folds or split validation set, data_folded dimensions are (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
+        
         # assert (data.check_leakage(data_folded))
 
         print('dataset:', filepath_train)
         print(f'using {dp.data_subset} samples, which is {dp.data_fraction * 100}% of the data')
-        print(f'data shape: {x.shape}')
+        print(f'data shape: {x.shape}\n')
         print(f'training data shape: {data_folded[0][0][0].shape}')
+        print(f'condensed training shape: {data_folded[0][2][0].shape}\n')
         print(f'validation data shape: {data_folded[0][0][1].shape}')
-        print(f'condensed training shape: {data_folded[0][2][0].shape}')
-        print(f'condensed validation shape: {data_folded[0][2][1].shape}')
+        print(f'condensed validation shape: {data_folded[0][2][1].shape}\n')
+        if dp.run_test:
+            print(f'test data shape: {xtest.shape}')
+            print(f'test condensed data shape: {xcontest.shape}\n')
 
         
         # specify loss function
