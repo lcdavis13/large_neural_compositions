@@ -24,24 +24,19 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
     
     if not isinstance(mean_values, torch.Tensor):
         raise TypeError("mean_values must be a torch.Tensor")
-        
-        # Handle edge cases for mean values near 0 and 1
-    near_zero_mask = mean_values <= 0
-    near_one_mask = mean_values >= 1
+    
     
     # Replace invalid values with temporary safe values for Beta computation
-    safe_means = mean_values.clone()
-    safe_means[near_zero_mask] = 0.5
-    safe_means[near_one_mask] = 0.5
+    original_vals = mean_values.clone()
     
     # Compute standard deviation and variance
-    stddev = torch.sin(safe_means * torch.pi) * peak_stddev
+    stddev = torch.sin(mean_values * torch.pi) * peak_stddev
     var = stddev.square()
     
     # Compute Beta parameters
-    k = safe_means * (1 - safe_means) / var - 1
-    alpha = safe_means * k
-    beta_param = (1 - safe_means) * k
+    k = mean_values * (1 - mean_values) / var - 1
+    alpha = mean_values * k
+    beta_param = (1 - mean_values) * k
     
     # Handle invalid Beta parameters (NaNs or negative values)
     valid_mask = (alpha > 0) & (beta_param > 0)
@@ -52,9 +47,15 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
     beta_dist = torch.distributions.Beta(alpha, beta_param)
     sampled_values = beta_dist.sample()
     
-    # Restore original 0 and 1 for edge cases
-    sampled_values[near_zero_mask] = 0.0
-    sampled_values[near_one_mask] = 1.0
+    # Restore original values for any edge cases that go outside our precision
+    invalid_mask = (
+        torch.isnan(sampled_values) |  # Detect NaNs
+        torch.isinf(sampled_values) |  # Detect Infinities
+        (sampled_values <= 0) |        # Detect values ≤ 0
+        (sampled_values >= 1)          # Detect values ≥ 1
+    )
+    sampled_values[invalid_mask] = original_vals[invalid_mask]
+    sampled_values[~valid_mask] = original_vals[~valid_mask]
     
     return sampled_values
 
@@ -199,6 +200,21 @@ def check_leakage(folded_data):
     # If no leakage detected in any fold
     # print("No leakage detected in any fold.")
     return True
+
+
+def check_simplex(y, tol=1e-6):
+    """
+    Checks if the input tensor is a valid probability distribution by verifying that each row sums to 1.
+    """
+    # Check if the sum of each row is close to 1
+    row_sums = y.sum(dim=-1)
+    is_simplex = torch.allclose(row_sums, torch.ones_like(row_sums), atol=tol)
+    
+    return is_simplex
+
+
+def check_finite(y):
+    return torch.all(torch.isfinite(y)) and not torch.any(torch.isnan(y))
 
 
 def get_batch(data, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True):

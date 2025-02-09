@@ -129,7 +129,7 @@ def main():
                         "69@4_48_richness50",
                         # "5000@7_48_richness170",
                         category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 500, 
+    hpbuilder.add_param("data_subset", 1000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -171,13 +171,13 @@ def main():
                         help="patience for early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 10.0, 1.0, 0.1, 0.01,  
+    hpbuilder.add_param("lr", 0.1, 0.032, 0.01,  
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd_factor", 0.0, 
                         help="weight decay factor (multiple of LR)")
-    hpbuilder.add_param("noise", 0.075, 
+    hpbuilder.add_param("noise", 0.0, 0.075,   
                         help="noise level")
     
     # Data augmentation params
@@ -313,6 +313,8 @@ def main():
         # whether in K-Folds or split validation set, data_folded dimensions are (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
         
         # assert (data.check_leakage(data_folded))
+        # assert(data.check_simplex(y))
+        # assert(data.check_finite(y))
 
         print('dataset:', filepath_train)
         print(f'using {dp.data_subset} samples, which is {dp.data_fraction * 100}% of the data')
@@ -442,7 +444,7 @@ def main():
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
                     hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=2,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
                 )
                 

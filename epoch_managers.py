@@ -243,17 +243,105 @@ class AdaptiveValPlateauManager(EpochManager):
         self.min_epochs = min_epochs
         self.max_epochs = max_epochs
         self.memory = memory
-        self.rate = None
         self.best_rate = 0.0
         self.threshold = 0.0
         self.rate_threshold_factor = rate_threshold_factor
+        self.patience = patience
+        self.failed_times = 0
+        self.inf_score = 1e10 ## not infinity to ensure I can end experiment if we reach infinity
+        self.rate = None
+        self.ema = None
+        self.prev_ema = None
+        
+    def set_baseline(self, metrics):
+        self.ema = metrics.val_loss
+        self.prev_ema = self.ema
+    
+    def update_ema(self, value):
+        if self.ema is None:
+            self.ema = value
+        else:
+            self.ema = (1.0 - self.memory) * value + self.memory * self.ema
+        
+        return self.ema
+    
+    def should_stop(self, metrics):
+        self.epoch += 1
+        
+        current_score = metrics.val_loss
+        
+        # abort in case of infinity
+        if (not is_finite_number(current_score)) or current_score > self.inf_score or current_score < -self.inf_score:
+            print(f"Stopping due to infinite score {current_score}")
+            return True
+        
+        # tracked stats
+        self.update_ema(current_score)
+        if self.prev_ema:
+            self.rate = self.ema - self.prev_ema
+            self.best_rate = min(self.best_rate, self.rate)
+            self.threshold = self.best_rate * self.rate_threshold_factor
+            cant_eval_yet = False
+        else:
+            cant_eval_yet = True
+        self.prev_ema = self.ema
+        
+        # min/max epochs
+        if self.max_epochs is not None and self.epoch >= self.max_epochs:
+            print(f"Stopping after {self.epoch} epochs due to max_epochs")
+            return True
+        if cant_eval_yet or (self.min_epochs is not None and self.epoch < self.min_epochs):
+            return False
+        
+        failed = self.rate > self.threshold
+
+        if failed:
+            self.failed_times += 1
+        else:
+            self.failed_times = 0
+        
+        result = self.failed_times >= self.patience
+
+        if result:
+            print(f"Stopping after {self.epoch} epochs, rate={self.rate}, threshold={self.threshold}, best_rate={self.best_rate}, failed_times={self.failed_times}, patience={self.patience}")
+
+        return result
+    
+    def get_metric(self):
+        return self.rate
+    
+    def get_threshold(self):
+        return self.threshold
+    
+    def get_supplemental(self):
+        return {"val_EMA": self.ema}
+
+
+class AdaptiveValDEMAPlateauManager(EpochManager):
+    """Manager that stops training when the rate of (smoothed) validation loss decrease becomes low relative to its highest value"""
+    
+    def __init__(self, memory, rate_threshold_factor, min_epochs=0, max_epochs=None, patience=0):
+        self.epoch = 0
+        self.min_epochs = min_epochs
+        self.max_epochs = max_epochs
+        self.memory = memory
+        self.best_rate = 0.0
+        self.threshold = 0.0
+        self.rate_threshold_factor = rate_threshold_factor
+        self.patience = patience
+        self.failed_times = 0
+        self.inf_score = 1e10 ## not infinity to ensure I can end experiment if we reach infinity
+        self.rate = None
         self.ema1 = None
         self.ema2 = None
         self.dema = None
         self.prev_dema = None
-        self.patience = patience
-        self.failed_times = 0
-        self.inf_score = 1e10 ## not infinity to ensure I can end experiment if we reach infinity
+        
+    def set_baseline(self, metrics):
+        self.ema1 = metrics.val_loss
+        self.ema2 = metrics.val_loss
+        self.dema = 2.0 * self.ema1 - self.ema2
+        self.prev_dema = self.dema
     
     def update_dema(self, value):
         if self.ema1 is None:

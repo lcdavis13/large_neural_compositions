@@ -93,6 +93,8 @@ def run_test(model, epoch, minibatch_examples, data_test, t, fold, loss_fn, scor
                             prefix="==================TESTING=================\n",
                             suffix="\n=============================================\n")
 
+def is_finite_number(number):
+    return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
 def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
                 outputs_per_epoch,
@@ -137,7 +139,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
             y_pred = y_pred[-1:]
             y_true = z[-1:]
         y_pred = y_pred.to(device)
-        
+
         loss = loss_fn(y_pred, y_true)
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches  # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
@@ -167,8 +169,8 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
                                                         0.0001)  # TODO: Find a better way to handle div by zero, or at least a more appropriate nonzero value
             stream.stream_results(filepath_out_incremental, verbosity > 0, verbosity > 0, verbosity > -1,
                                   "fold", fold,
-                                  "epoch", epoch_num + 1,
-                                  "minibatch", mb + 1,
+                                  "epoch", epoch_num,
+                                  "minibatch", mb,
                                   "total examples seen", prev_examples + new_examples,
                                   "Avg Loss", stream_loss / stream_examples,
                                   "Avg Distr Error", stream_penalty / stream_examples,
@@ -452,7 +454,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", 0, l_trn, l_val, add_point=False)
     # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", 0, score_trn, score_val, add_point=False)
     plotstream.plot(f"stopmetric {dataname}", "epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
-    plotstream.plot(f"Validation Loss DEMA {dataname}", "epoch", "metric", [f"val_DEMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_DEMA"]], add_point=False)
+    plotstream.plot(f"Validation Loss EMA {dataname}", "epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
     # plotstream.plot(dataname, "epoch", "loss", [f"{model_config} fold {fold} - Val", f"{model_config} fold {fold} - Trn", f"{model_config} fold {fold} - DKI Val", f"{model_config} fold {fold} - DKI Trn"], 0, [l_val, None, score_val, None], add_point=False)
     
     train_examples_seen = 0
@@ -467,6 +469,20 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     
     training_curve = []
     has_backup = False
+
+    # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
+    dict = {"epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val,
+            "val_score": score_val, "lr": old_lr, "time": start_time, "gpu_memory": gpu_memory_reserved,
+            "metric": p_val, "stop_metric": manager.get_metric(), "stop_threshold": manager.get_threshold()}
+    # track various optima
+    model_path = f'results/models/{model_config}_{dataname}_fold{fold}_job{jobstring}.pt'
+    val_opt.track_best(dict, model=model, model_path=model_path)
+    valscore_opt.track_best(dict)
+    trn_opt.track_best(dict)
+    trnscore_opt.track_best(dict)
+    last_opt.track_best(dict)
+    manager.set_baseline(last_opt)
+
     while True:
         l_trn, p_trn, train_examples_seen = train_epoch(model, data_train, minibatch_examples,
                                                         accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
@@ -547,7 +563,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                              add_point=add_point)
         # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", manager.epoch, score_trn, score_val, add_point=add_point)
         plotstream.plot(f"stopmetric {dataname}", "epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
-        plotstream.plot(f"Validation Loss DEMA {dataname}", "epoch", "metric", [f"val_DEMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_DEMA"]], add_point=False)
+        plotstream.plot(f"Validation Loss EMA {dataname}", "epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
         # plotstream.plot(dataname, "epoch", "loss", [f"{model_config} fold {fold} - Val", f"{model_config} fold {fold} - Trn", f"{model_config} fold {fold} - DKI Val", f"{model_config} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, score_val, score_trn], add_point=add_point)
         # if l_val != score_val:
         #     print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
@@ -703,15 +719,15 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
         trn_time = trn_opt.time
         
         stream.stream_results(filepath_out_fold, verbosity > 0, verbosity > 0, verbosity > -1,
-                              "fold", fold_num + 1,
+                              "fold", fold_num,
                               "Validation Loss", val_loss,
                               "Validation Score", val_score,
-                              "Val @ epoch0s", val_epoch + 1,
+                              "Val @ epoch0s", val_epoch,
                               "Val @ time", val_time,
                               "Val @ training loss", val_trn_loss,
                               "Training Loss", trn_loss,
                               "Training Score", trn_score,
-                              "Trn @ epochs", trn_epoch + 1,
+                              "Trn @ epochs", trn_epoch,
                               "Trn @ time", trn_time,
                               "Trn @ validation loss", trn_val_loss,
                               prefix="\n========================================FOLD=========================================\n",
