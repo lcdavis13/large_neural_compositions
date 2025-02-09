@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import math
 
 #
 # # holt winters
@@ -18,6 +19,14 @@ class EpochManager(ABC):
     def get_metric(self):
         pass
 
+    @abstractmethod
+    def get_threshold(self):
+        pass
+
+    @abstractmethod
+    def get_supplemental(self):
+        pass
+
 
 class FixedManager(EpochManager):
     """Manager that runs for a fixed number of epochs"""
@@ -31,7 +40,17 @@ class FixedManager(EpochManager):
         return self.epoch >= self.max_epochs
     
     def get_metric(self):
-        return self.epoch / self.max_epochs
+        return self.epoch
+    
+    def get_threshold(self):
+        return self.max_epochs
+    
+    def get_supplemental(self):
+        return {}
+
+
+def is_finite_number(number):
+    return number and math.isfinite(number) and not math.isnan(number)
 
 
 class MovingAverageEpochManager(EpochManager):
@@ -77,7 +96,7 @@ class MovingAverageEpochManager(EpochManager):
             self.initial_score = current_score
             
         # abort in case of infinity
-        if current_score > self.inf_score:
+        if (not is_finite_number(current_score)) or current_score > self.inf_score or current_score < -self.inf_score:
             return True
         
         # min/max epochs
@@ -105,6 +124,13 @@ class MovingAverageEpochManager(EpochManager):
         if self.ema1 is None:
             return None
         return 2.0 * self.ema1 - self.ema2
+    
+    def get_threshold(self):
+        return self.threshold
+    
+    def get_supplemental(self):
+        return {}
+    
 
 
 class EarlyStopManager(MovingAverageEpochManager):
@@ -114,21 +140,21 @@ class EarlyStopManager(MovingAverageEpochManager):
         super().__init__(memory, threshold, mode, criterion='earlystop', min_epochs=min_epochs, max_epochs=max_epochs)
 
 
-class DivergenceManager(MovingAverageEpochManager):
+class TrainDivergenceManager(MovingAverageEpochManager):
     """Manager that stops training when the training loss starts increasing"""
     
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
         super().__init__(memory, threshold, mode, criterion='divergence', min_epochs=min_epochs, max_epochs=max_epochs)
 
 
-class ExplosionManager(MovingAverageEpochManager):
+class TrainExplosionManager(MovingAverageEpochManager):
     """Manager that stops training when the training loss becomes worse than its starting value"""
     
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
         super().__init__(memory, threshold, mode, criterion='explosion', min_epochs=min_epochs, max_epochs=max_epochs)
 
 
-class ConvergenceManager(EpochManager):
+class TrainConvergenceManager(EpochManager):
     """Manager that stops training when the rate of training loss decrease becomes low"""
     
     def __init__(self, memory, threshold, mode='rel', min_epochs=0, max_epochs=None):
@@ -172,7 +198,7 @@ class ConvergenceManager(EpochManager):
             return False  # Can't compute slope until 2nd epoch. Inconsequential bug: if max_epochs is 1, this will cause it to run 2 epochs instead.
         
         # abort in case of infinity
-        if current_score > self.inf_score:
+        if (not is_finite_number(current_score)) or current_score > self.inf_score or current_score < -self.inf_score:
             return True
         
         # tracked stats
@@ -201,6 +227,98 @@ class ConvergenceManager(EpochManager):
         if self.ema1 is None:
             return None
         return 2.0 * self.ema1 - self.ema2
+    
+    def get_threshold(self):
+        return self.threshold
+    
+    def get_supplemental(self):
+        return {}
+
+
+class AdaptiveValPlateauManager(EpochManager):
+    """Manager that stops training when the rate of (smoothed) validation loss decrease becomes low relative to its highest value"""
+    
+    def __init__(self, memory, rate_threshold_factor, min_epochs=0, max_epochs=None, patience=0):
+        self.epoch = 0
+        self.min_epochs = min_epochs
+        self.max_epochs = max_epochs
+        self.memory = memory
+        self.rate = None
+        self.best_rate = 0.0
+        self.threshold = 0.0
+        self.rate_threshold_factor = rate_threshold_factor
+        self.ema1 = None
+        self.ema2 = None
+        self.dema = None
+        self.prev_dema = None
+        self.patience = patience
+        self.failed_times = 0
+        self.inf_score = 1e10 ## not infinity to ensure I can end experiment if we reach infinity
+    
+    def update_dema(self, value):
+        if self.ema1 is None:
+            self.ema1 = value
+        else:
+            self.ema1 = (1.0 - self.memory) * value + self.memory * self.ema1
+        
+        if self.ema2 is None:
+            self.ema2 = self.ema1
+        else:
+            self.ema2 = (1.0 - self.memory) * self.ema1 + self.memory * self.ema2
+        
+        self.dema = 2.0 * self.ema1 - self.ema2
+        return self.dema
+    
+    def should_stop(self, metrics):
+        self.epoch += 1
+        
+        current_score = metrics.val_loss
+        
+        # abort in case of infinity
+        if (not is_finite_number(current_score)) or current_score > self.inf_score or current_score < -self.inf_score:
+            print(f"Stopping due to infinite score {current_score}")
+            return True
+        
+        # tracked stats
+        self.update_dema(current_score)
+        if self.prev_dema:
+            self.rate = self.dema - self.prev_dema
+            self.best_rate = min(self.best_rate, self.rate)
+            self.threshold = self.best_rate * self.rate_threshold_factor
+            cant_eval_yet = False
+        else:
+            cant_eval_yet = True
+        self.prev_dema = self.dema
+        
+        # min/max epochs
+        if self.max_epochs is not None and self.epoch >= self.max_epochs:
+            print(f"Stopping after {self.epoch} epochs due to max_epochs")
+            return True
+        if cant_eval_yet or (self.min_epochs is not None and self.epoch < self.min_epochs):
+            return False
+        
+        failed = self.rate > self.threshold
+
+        if failed:
+            self.failed_times += 1
+        else:
+            self.failed_times = 0
+        
+        result = self.failed_times >= self.patience
+
+        if result:
+            print(f"Stopping after {self.epoch} epochs, rate={self.rate}, threshold={self.threshold}, best_rate={self.best_rate}, failed_times={self.failed_times}, patience={self.patience}")
+
+        return result
+    
+    def get_metric(self):
+        return self.rate
+    
+    def get_threshold(self):
+        return self.threshold
+    
+    def get_supplemental(self):
+        return {"val_DEMA": self.dema}
 
 
 if __name__ == "__main__":

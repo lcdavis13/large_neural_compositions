@@ -1,5 +1,6 @@
 import numpy as np
 from dotsy import ency
+import torch
 
 
 class Optimum(ency):
@@ -19,7 +20,7 @@ class Optimum(ency):
             
         super().__init__(["dict"])  # initialize data for ency dot-access
 
-    def track_best(self, dict):
+    def track_best(self, dict, model=None, model_path="optimum_model.pth"):
         if self.metric_name is None or self.metric_name not in self.dict:
             best = True
         else:
@@ -37,6 +38,8 @@ class Optimum(ency):
 
         if best:
             self.dict = dict.copy()
+            if model is not None:
+                torch.save(model.state_dict(), model_path)  # Save model parameters
             
         return best
     
