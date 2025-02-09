@@ -129,7 +129,7 @@ def main():
                         "69@4_48_richness50",
                         # "5000@7_48_richness170",
                         category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 1000, 
+    hpbuilder.add_param("data_subset", 500, 1000, 2000,  
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -149,7 +149,7 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 30, 
+    hpbuilder.add_param("epochs", 100, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
@@ -171,13 +171,13 @@ def main():
                         help="patience for early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 0.1, 0.032, 0.01,  
+    hpbuilder.add_param("lr", 0.032,  
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd_factor", 0.0, 
                         help="weight decay factor (multiple of LR)")
-    hpbuilder.add_param("noise", 0.0, 0.075,   
+    hpbuilder.add_param("noise", 0.0,   
                         help="noise level")
     
     # Data augmentation params
@@ -369,7 +369,7 @@ def main():
                 _, hp.data_dim = x.shape
                 hp.WD = hp.lr * hp.wd_factor
                 hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
-                hp.model_config = f"{hp.model_name}_{hp.configid}"
+                hp.model_config = f"{hp.model_name}_{dp.data_configid}x{hp.configid}"
 
                 # conditionally adjust epochs to compensate for subset size
                 if hp.subset_increases_epochs:
