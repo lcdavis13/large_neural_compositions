@@ -1,5 +1,7 @@
 import os
 
+import epoch_managers
+
 # Set a default value if the environment variable is not specified
 # os.environ.setdefault("SOLVER", "torchdiffeq")
 # os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
@@ -127,12 +129,14 @@ def main():
                         "69@4_48_richness50",
                         # "5000@7_48_richness170",
                         category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 50, 
+    hpbuilder.add_param("data_subset", 1000, 
                         category=datacat, help="number of data samples to use, -1 for all")
-    hpbuilder.add_param("kfolds", 2, 
-                        category=datacat, help="how many data folds, -1 for leave-one-out")
-    hpbuilder.add_param("whichfold", 0, 
+    hpbuilder.add_param("kfolds", 5, 
+                        category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
+    hpbuilder.add_param("whichfold", -1, 
                         category=datacat, help="which fold to run, -1 for all")
+    hpbuilder.add_param("data_validation_samples", 200,
+                        category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
     
     # slurm params
     hpbuilder.add_param("batchid", 0,
@@ -145,29 +149,35 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 2, 
+    hpbuilder.add_param("epochs", 30, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
-    hpbuilder.add_param("patience", 1100, 
-                        help="patience for early stopping")
     hpbuilder.add_param("min_epochs", 1, 
                         help="minimum number of epochs")
-    hpbuilder.add_param("early_stop", True, 
-                        help="whether or not to use early stopping")
     hpbuilder.add_param("minibatch_examples", 100, 
                         help="minibatch size")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
+    hpbuilder.add_param("run_test", True,
+                        category=datacat, help="run the test set after training")
+    
+    hpbuilder.add_param("epoch_manager", "AdaptiveValPlateau",
+                        help="which type of epoch manager to use")
+
+    hpbuilder.add_param("early_stop", True, 
+                        help="whether or not to use early stopping")
+    hpbuilder.add_param("patience", 5, 
+                        help="patience for early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 0.1,
+    hpbuilder.add_param("lr", 0.1, 0.032, 0.01,  
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd_factor", 0.0, 
                         help="weight decay factor (multiple of LR)")
-    hpbuilder.add_param("noise", 0.075, 
+    hpbuilder.add_param("noise", 0.0, 0.075,   
                         help="noise level")
     
     # Data augmentation params
@@ -268,6 +278,13 @@ def main():
         "cNODE2-FnFitness": lambda args: models_cnode.cNODE2_FnFitness(args.data_dim, args.cnode_bias), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
 
+    # Epoch managers
+    # TODO: make all of these args accessible to command line
+    epoch_mngr_constructors = {
+        "Fixed": lambda args: epoch_managers.FixedManager(max_epochs=args.epochs),
+        "AdaptiveValPlateau": lambda args: epoch_managers.AdaptiveValPlateauManager(memory=0.85, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
+    }
+
 
     for dp in hpbuilder.parse_and_generate_combinations(category=datacat):
 
@@ -275,18 +292,40 @@ def main():
         filepath_train = f'data/{dp.dataset}_train.csv'
         filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
         filepath_train_val = f'data/{dp.dataset}_train-val.csv'
-        x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=dp.data_subset)
-        data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  # shape is (kfolds, datasets (x,y,xcon,...), train vs valid, n, d)
-        data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
-        assert (data.check_leakage(data_folded))
+        filepath_test = f'data/{dp.dataset}_test.csv'
+        filepath_test_pos = f'data/{dp.dataset}_test-pos.csv'
+        filepath_test_val = f'data/{dp.dataset}_test-val.csv'
+        if dp.data_validation_samples > 0 and dp.data_subset > 0:
+            samples_to_load = dp.data_subset + dp.data_validation_samples
+        else:
+            samples_to_load = dp.data_subset
+        x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=samples_to_load)
+        if dp.run_test:
+            xtest, ytest, xcontest, ycontest, idcontest, _ = data.load_data(filepath_test, filepath_test_pos, filepath_test_val, device, subset=-1)
+            testdata = [xtest, ytest, xcontest, ycontest, idcontest]
+        else:
+            testdata = None
+        if dp.data_validation_samples > 0:
+            data_folded = data.split_data([x, y, xcon, ycon, idcon], dp.data_validation_samples)
+        else:
+            data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  
+            data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
+        # whether in K-Folds or split validation set, data_folded dimensions are (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
+        
+        # assert (data.check_leakage(data_folded))
+        # assert(data.check_simplex(y))
+        # assert(data.check_finite(y))
 
         print('dataset:', filepath_train)
         print(f'using {dp.data_subset} samples, which is {dp.data_fraction * 100}% of the data')
-        print(f'data shape: {x.shape}')
+        print(f'data shape: {x.shape}\n')
         print(f'training data shape: {data_folded[0][0][0].shape}')
+        print(f'condensed training shape: {data_folded[0][2][0].shape}\n')
         print(f'validation data shape: {data_folded[0][0][1].shape}')
-        print(f'condensed training shape: {data_folded[0][2][0].shape}')
-        print(f'condensed validation shape: {data_folded[0][2][1].shape}')
+        print(f'condensed validation shape: {data_folded[0][2][1].shape}\n')
+        if dp.run_test:
+            print(f'test data shape: {xtest.shape}')
+            print(f'test condensed data shape: {xcontest.shape}\n')
 
         
         # specify loss function
@@ -306,7 +345,7 @@ def main():
                                                                         device)
         print(f"\n\nIDENTITY MODEL loss: {identity_loss}, score: {identity_score}\n\n")
         plotstream.plot_horizontal_line(f"loss {dp.dataset}", identity_loss, f"Identity")
-        plotstream.plot_horizontal_line(f"score {dp.dataset}", identity_score, f"Identity")
+        # plotstream.plot_horizontal_line(f"score {dp.dataset}", identity_score, f"Identity")
 
 
         for hp in hpbuilder.parse_and_generate_combinations():
@@ -318,17 +357,19 @@ def main():
             num_params = -1
             optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
                     "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
-                    "metric": -1.0}
+                    "metric": -1.0, "stop_metric": -1.0, "stop_threshold": -1.0}
             val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
             trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
             val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
             trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
 
-            try:
+            # try:
+            if True:
                 # computed hyperparams
                 _, hp.data_dim = x.shape
                 hp.WD = hp.lr * hp.wd_factor
                 hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+                hp.model_config = f"{hp.model_name}_{hp.configid}"
 
                 # conditionally adjust epochs to compensate for subset size
                 if hp.subset_increases_epochs:
@@ -341,10 +382,11 @@ def main():
                 assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
                 
                 
-                reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
+                reeval_train = True # False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
                 
                 
                 model_constr = models[hp.model_name]
+                epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
                 
                 
                 # scaler = torch.amp.GradScaler(device)
@@ -362,7 +404,7 @@ def main():
                 print(f"Seed: {seed}")
                 
                 # test construction and print parameter count
-                print(f"\nModel construction test for: {hp.model_name}")
+                print(f"\nModel construction test for: {hp.model_config}")
                 model = model_constr(hp)
                 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
                 print(f"Number of parameters in model: {num_params}")
@@ -400,9 +442,9 @@ def main():
                 
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
-                    dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, hp,
-                    hp.model_name, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
+                    dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
+                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=2,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
                 )
                 
@@ -457,24 +499,24 @@ def main():
                                         prefix="\n=======================================================EXPERIMENT========================================================\n",
                                         suffix="\n=========================================================================================================================\n")
                 
-            except Exception as e:
-                stream.stream_scores(filepath_out_expt, True, True, True,
-                                "mean_val_loss", -1,
-                                "mean_val_loss @ epoch", -1,
-                                "mean_val_loss @ time", -1,
-                                "mean_val_loss @ trn_loss", -1,
-                                "identity loss", identity_loss,
-                                "model parameters", num_params,
-                                "fold", -1,
-                                "device", device,
-                                "solver", os.environ["SOLVER"],
-                                *unrolldict(dp),  # unroll the data params dictionary
-                                *unrolldict(hp),  # unroll the hyperparams dictionary
-                                *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-                                            trn_score_optims[0]),
-                                prefix="\n=======================================================EXPERIMENT========================================================\n",
-                                suffix="\n=========================================================================================================================\n")
-                print(f"Model {hp.model_name} failed with error:\n{e}")
+            # except Exception as e:
+            #     stream.stream_scores(filepath_out_expt, True, True, True,
+            #                     "mean_val_loss", -1,
+            #                     "mean_val_loss @ epoch", -1,
+            #                     "mean_val_loss @ time", -1,
+            #                     "mean_val_loss @ trn_loss", -1,
+            #                     "identity loss", identity_loss,
+            #                     "model parameters", num_params,
+            #                     "fold", -1,
+            #                     "device", device,
+            #                     "solver", os.environ["SOLVER"],
+            #                     *unrolldict(dp),  # unroll the data params dictionary
+            #                     *unrolldict(hp),  # unroll the hyperparams dictionary
+            #                     *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+            #                                 trn_score_optims[0]),
+            #                     prefix="\n=======================================================EXPERIMENT========================================================\n",
+            #                     suffix="\n=========================================================================================================================\n")
+            #     print(f"Model {hp.model_name} failed with error:\n{e}")
     
     print("\n\nDONE")
     plotstream.wait_for_plot_exit()

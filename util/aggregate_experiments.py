@@ -3,7 +3,7 @@ import glob
 import pandas as pd
 import re
 
-model_col = "model_name"
+model_col = "model_config"
 
 def load_and_process_csv_files(path_pattern):
     """
@@ -107,7 +107,7 @@ def save_master_csv(master_df, output_path):
     try:
         # Define the desired column order, excluding the always-last columns
         column_order = [
-            'dataset', 'data_subset', model_col, 'mean_val_loss', 'lr', 'reptile_lr', 'noise', 'interpolate',
+            'dataset', 'data_subset', model_col, 'model_name', 'mean_val_loss', 'lr', 'reptile_lr', 'noise', 'interpolate',
             'cnode_bias', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'wd_factor', 'ode_timesteps', 'hidden_dim',
             'ffn_dim_multiplier', 'mean_val_loss @ epoch', 'mean_val_loss @ time', 'mean_val_loss @ trn_loss',
             'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'

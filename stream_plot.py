@@ -4,10 +4,13 @@ import threading
 import queue
 import time
 import matplotlib
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 # Use a backend that supports threading (e.g., TkAgg, Qt5Agg)
 matplotlib.use('TkAgg')
 
+UPDATE_INTERVAL = 1.0  # Update interval for redrawing the plots, in seconds
+WAIT_INTERVAL = 1.0  # Wait interval when checking for plot exit, in seconds
 
 class PlotStreamer:
     _instance = None
@@ -26,6 +29,8 @@ class PlotStreamer:
         self.queue = queue.Queue()  # Queue to handle data between threads
         self.plotting_thread = threading.Thread(target=self._plotting_loop, daemon=True)
         self.plotting_thread.start()
+        self.skip_plots = []
+        self.last_dummy_fig = None
     
     def plot(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False, x_log=False, y_log=False,
              hline=None, vline=None):
@@ -67,14 +72,19 @@ class PlotStreamer:
                     # Process each data point in batch but do not plot after each one
                     # Unpacking new hline and vline arguments
                     title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline, vline = data
+                    if title in self.skip_plots:
+                        continue
                     self._update_data(title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log,
                                       hline, vline)
                 
                 # Now update the plot after processing all data in the queue
                 self._draw_plots()
+
+            # Remove closed figures from the dictionary
+            self.figs = {title: fig_ax for title, fig_ax in self.figs.items() if plt.fignum_exists(fig_ax[0].number)}
             
             # Keep figures responsive
-            plt.pause(0.001)
+            plt.pause(UPDATE_INTERVAL)
     
     def _update_data(self, title, xlabel, ylabel, line_labels, x_value, y_values, add_point, x_log, y_log, hline,
                      vline):
@@ -83,14 +93,32 @@ class PlotStreamer:
         """
         Update data for the plots, including optional horizontal and vertical lines.
         """
+
+        if title in self.skip_plots:
+            return # Skip plotting if this figure was closed
+        
         if title in self.figs and not plt.fignum_exists(self.figs[title][0].number):
-            self.figs[title] = None
+            self.skip_plots.append(title)
+            print(f"\n\nSkipping plot for '{title}' as the figure was closed.\n\n")
             return
         
         if title not in self.figs:
             fig, ax = plt.subplots()
             self.figs[title] = (fig, ax)
             self.color_cycle_positions[title] = 0  # Initialize color cycle position for new plot
+
+            # Create an extra invisible figure using a non-GUI backend
+            dummy_fig = plt.figure()
+            try:
+                # Move window far off-screen (e.g., 10,000 pixels to the right)
+                dummy_fig.canvas.manager.window.geometry("+10000+10000")
+            except AttributeError:
+                pass  # If running on a non-GUI backend, ignore the error
+            
+            # Close previous dummy figure if it exists
+            if self.last_dummy_fig is not None and self.last_dummy_fig in plt.get_fignums():
+                plt.close(self.last_dummy_fig)
+            self.last_dummy_fig = dummy_fig.number
         
         fig, ax = self.figs[title]
         
@@ -179,9 +207,12 @@ class PlotStreamer:
     def wait_for_plot_exit(self):
         if self.headless:
             return
+        
+        fignums = len(plt.get_fignums())
+
         """Block the main thread until all plot windows are closed."""
-        while plt.get_fignums():  # Check if any figures are open
-            time.sleep(0.1)
+        while fignums > 0 and len(plt.get_fignums()) == fignums:  # Wait until at least one figure is closed
+            time.sleep(WAIT_INTERVAL)
     
     # ----------------- Convenience Methods ----------------- #
     
