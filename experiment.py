@@ -79,9 +79,11 @@ def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, di
     return avg_loss, avg_score, avg_penalty
 
 
-def run_test(model, epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
+def run_test(model, model_name, model_config, epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
     l_test, score_test, p_test = validate_epoch(model, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_test, True, True, True,
+                            "model_name", model_name,
+                            "model_config", model_config,
                             "fold", fold,
                             "epoch", epoch,
                             "Avg Test Loss", l_test,
@@ -423,7 +425,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     old_lr = scheduler.get_last_lr()
     
     filepath_out_epoch = f'results/epochs/{model_name}_{dataname}{jobstring}_epochs.csv'
-    filepath_out_test = f'results/tests/{model_config}_{dataname}{jobstring}_tests.csv'
+    filepath_out_test = f'results/tests/{dataname}{jobstring}_tests.csv'
     # filepath_out_model = f'results/logs/{model_config}_{dataname}_model.pth'
     filepath_out_incremental = f'results/incr/{model_config}_{dataname}{jobstring}_incremental.csv'
     
@@ -572,7 +574,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         if should_stop:
             if data_test:
                 model.load_state_dict(torch.load(model_path, weights_only=True))
-                run_test(model, val_opt.epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
+                run_test(model, model_name, model_config, val_opt.epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
             break
     
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve

@@ -149,7 +149,7 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 1000, 
+    hpbuilder.add_param("epochs", 30, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
@@ -159,7 +159,7 @@ def main():
                         help="minibatch size")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
-    hpbuilder.add_param("run_test", False,
+    hpbuilder.add_param("run_test", True,
                         category=datacat, help="run the test set after training")
     
     hpbuilder.add_param("epoch_manager", "AdaptiveValPlateau",
