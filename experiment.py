@@ -58,7 +58,7 @@ def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, di
     current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
-        z, ids, current_index = data.get_batch(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
+        z, ids, current_index = data.get_batch_raw(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
         x, y = z[0], z[-1]
         mb_examples = x.size(0)
         
@@ -98,20 +98,25 @@ def run_test(model, model_name, model_config, epoch, minibatch_examples, data_te
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
-def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
-                outputs_per_epoch,
-                prev_examples, fold, epoch_num, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
-                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
+def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
+                outputs_per_mini_epoch,
+                prev_examples, fold, epoch_num, mini_epoch_num, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
+                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1, mini_epoch_size=-1):
     model.train()
     
     total_loss = 0
     total_penalty = 0
     total_samples = data_train[0].size(0)
-    minibatches = ceildiv(total_samples, minibatch_examples)
+
+    if mini_epoch_size > 0:
+        minibatches = ceildiv(mini_epoch_size, minibatch_examples)
+    else:
+        minibatches = ceildiv(total_samples, minibatch_examples)
+    
     current_index = 0  # Initialize current index to start of dataset
     new_examples = 0
     
-    stream_interval = max(1, minibatches // outputs_per_epoch)
+    stream_interval = max(1, minibatches // outputs_per_mini_epoch)
     
     optimizer.zero_grad()
     
@@ -121,17 +126,13 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
     stream_penalty = 0
     stream_examples = 0
     
-    # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, ids, current_index = data.get_batch(data_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, requires_timesteps=supervise_steps)  #
-        mb_examples = z.shape[-2]
+        z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=independent_epochs, shuffle=True)
         
-        if current_index >= total_samples:
-            current_index = 0  # Reset index if end of dataset is reached
-            data_train = data.shuffle_data(data_train)
+        mb_examples = z.shape[-2]
         
         y_pred = eval_model(model, z[0], t, ids)
         if supervise_steps:
@@ -150,7 +151,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
         if scaled_loss.requires_grad and scaled_loss.grad_fn is not None:
             scaled_loss.backward()
         else:
-            print(f"GRADIENT ERROR: Loss at epoch {epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
+            print(f"GRADIENT ERROR: Loss at epoch {epoch_num} mini-epoch {mini_epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
         
         distr_error = distr_error_fn(y_pred)
         actual_penalty = distr_error.item() * mb_examples
@@ -172,6 +173,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
             stream.stream_results(filepath_out_incremental, verbosity > 0, verbosity > 0, verbosity > -1,
                                   "fold", fold,
                                   "epoch", epoch_num,
+                                  "mini-epoch", mini_epoch_num,
                                   "minibatch", mb,
                                   "total examples seen", prev_examples + new_examples,
                                   "Avg Loss", stream_loss / stream_examples,
@@ -180,10 +182,10 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
                                   "Learning Rate", scheduler.get_last_lr(),
                                   )
             if lr_plot:
-                plotstream.plot_single(lr_plot, "epochs", "LR", f"{model_config} fold {fold}",
-                                       epoch_num + mb / minibatches, scheduler.get_last_lr(), False, y_log=False)
+                plotstream.plot_single(lr_plot, "mini-epochs", "LR", f"{model_config} fold {fold}",
+                                       mini_epoch_num + mb / minibatches, scheduler.get_last_lr(), False, y_log=False)
             if loss_plot:
-                plotstream.plot_loss(loss_plot, f"{model_config} fold {fold}", epoch_num + mb / minibatches,
+                plotstream.plot_loss(loss_plot, f"{model_config} fold {fold}", mini_epoch_num + mb / minibatches,
                                      stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
                 plotstream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_config} fold {fold}",
@@ -204,7 +206,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
     avg_loss = total_loss / total_samples
     avg_penalty = total_penalty / total_samples
     new_total_examples = prev_examples + new_examples
-    return avg_loss, avg_penalty, new_total_examples
+    return avg_loss, avg_penalty, new_total_examples, epoch_num
 
 
 # backup model parameters for reptile
@@ -268,7 +270,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     done = False
     while not done:
-        x_batch, y_batch, current_index = data.get_batch(x, y, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
+        x_batch, y_batch, current_index = data.get_batch_raw(x, y, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
         if current_index >= total_samples:
             current_index = 0
             x, y = data.shuffle_data(x, y)
@@ -486,7 +488,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     manager.set_baseline(last_opt)
 
     while True:
-        l_trn, p_trn, train_examples_seen = train_epoch(model, data_train, minibatch_examples,
+        l_trn, p_trn, train_examples_seen = train_mini_epoch(model, data_train, minibatch_examples,
                                                         accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
                                                         outputs_per_epoch, train_examples_seen,
                                                         fold, manager.epoch, model_config, dataname, loss_fn, score_fn,

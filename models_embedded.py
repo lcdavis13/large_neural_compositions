@@ -725,7 +725,7 @@ if __name__ == '__main__': # test
     # real test data
     import data
     x_all,y_all = data.load_data('data/cNODE-paper-drosophila_train.csv', None)
-    x,y,_ = data.get_batch(x_all, y_all, B, 0)
+    x,y,_ = data.get_batch_raw(x_all, y_all, B, 0)
     _, N = x.shape
     
     print(y)

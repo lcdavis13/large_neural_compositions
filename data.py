@@ -217,7 +217,7 @@ def check_finite(y):
     return torch.all(torch.isfinite(y)) and not torch.any(torch.isnan(y))
 
 
-def get_batch(data, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True):
+def get_batch_raw(data, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True):
     """Returns a batch of data of size `mb_size` starting from `current_index`,
     with optional noise augmentation for x and y, and returns a tensor z with interpolation according to t."""
     if len(data) == 3:
@@ -255,6 +255,25 @@ def get_batch(data, t, mb_size, current_index, noise_level_x=0.0, noise_level_y=
 
     return z, ids_batch, end_index
 
+
+def get_batch(data, t, mb_size, current_index, total_samples, epoch, noise_level_x=0.0, noise_level_y=0.0, interpolate_noise=False, requires_timesteps=True, loop=False, shuffle=True):
+    
+    z, ids, current_index = data.get_batch(data_train, t, mb_size, current_index, noise_level_x=noise_level_x, noise_level_y=noise_level_y, interpolate_noise=interpolate_noise, requires_timesteps=requires_timesteps)  #
+    
+    if current_index >= total_samples:
+        current_index = 0  # Reset index if end of dataset is reached
+
+        if shuffle:
+            data_train = shuffle_data(data_train)
+
+        if loop: # get another batch from the new epoch, of the right size to complete this batch
+            retrieved = z.shape[-2]
+            z2, ids2, current_index = data.get_batch(data_train, t, mb_size - retrieved, current_index, noise_level_x=noise_level_x, noise_level_y=noise_level_y, interpolate_noise=interpolate_noise, requires_timesteps=requires_timesteps)
+            z = torch.cat((z, z2), dim=-2)
+            ids = torch.cat((ids, ids2), dim=-2)
+            epoch += 1
+
+    return z, ids, current_index, epoch
 
 
 def shuffle_data(datasets):
