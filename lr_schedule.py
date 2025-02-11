@@ -1,6 +1,17 @@
 import torch
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
+class ConstantLR(torch.optim.lr_scheduler.LRScheduler): 
+    """
+    Constant learning rate scheduler.
+    """
+    
+    def __init__(self, optimizer, last_epoch=-1):
+        super().__init__(optimizer, last_epoch)
+    
+    def get_lr(self):
+        return [group['lr'] for group in self.optimizer.param_groups]
+
 
 class ExponentialLR(torch.optim.lr_scheduler.LRScheduler):
     """
