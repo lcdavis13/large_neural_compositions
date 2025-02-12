@@ -105,7 +105,7 @@ def main():
                         # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
                         'transformShaped',
                         # 'transformShaped-AbundEncoding',
@@ -113,7 +113,7 @@ def main():
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        # 'cNODE-hourglass',
+                        'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 
@@ -164,7 +164,7 @@ def main():
     
     hpbuilder.add_param("epoch_manager", "AdaptiveValPlateau",
                         help="which type of epoch manager to use")
-    hpbuilder.add_param("mini_epoch_size", 100,
+    hpbuilder.add_param("mini_epoch_size", 500,
                         help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
 
     hpbuilder.add_param("early_stop", True, 
@@ -447,7 +447,7 @@ def main():
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
                     hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=2,
+                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
                 )
                 

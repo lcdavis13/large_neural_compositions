@@ -100,8 +100,8 @@ def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
 def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
-                outputs_per_mini_epoch,
-                prev_examples, fold, epoch_num, mini_epoch_num, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
+                outputs_per_mini_epoch, 
+                prev_examples, fold, epoch_num, mini_epoch_num, current_index, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
                 filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1, mini_epoch_size=-1):
     model.train()
     
@@ -111,12 +111,11 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
 
     if mini_epoch_size > 0:
         minibatches = ceildiv(mini_epoch_size, minibatch_examples)
-        independent_epochs = False
+        loop_batches = True
     else:
         minibatches = ceildiv(total_samples, minibatch_examples)
-        independent_epochs = True
+        loop_batches = False
     
-    current_index = 0  # Initialize current index to start of dataset
     new_examples = 0
     
     stream_interval = max(1, minibatches // outputs_per_mini_epoch)
@@ -133,7 +132,7 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=independent_epochs, shuffle=True)
+        z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=loop_batches, shuffle=True)
         
         mb_examples = z.shape[-2]
         
@@ -209,7 +208,7 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
     avg_loss = total_loss / total_samples
     avg_penalty = total_penalty / total_samples
     new_total_examples = prev_examples + new_examples
-    return avg_loss, avg_penalty, new_total_examples, epoch_num
+    return avg_loss, avg_penalty, new_total_examples, epoch_num, current_index
 
 
 # backup model parameters for reptile
@@ -421,6 +420,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
     epoch = 0
+    current_sample_index = 0
     
     # track stats at various definitions of the "best" epoch
     val_opt = Optimum('val_loss', 'min')
@@ -494,10 +494,10 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     manager.set_baseline(last_opt)
 
     while True:
-        l_trn, p_trn, train_examples_seen, epoch = train_mini_epoch(model, data_train, minibatch_examples,
+        l_trn, p_trn, train_examples_seen, epoch, current_sample_index = train_mini_epoch(model, data_train, minibatch_examples,
                                                         accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
                                                         outputs_per_epoch, train_examples_seen,
-                                                        fold, epoch, manager.epoch, model_config, dataname, loss_fn, score_fn,
+                                                        fold, epoch, manager.epoch, current_sample_index, model_config, dataname, loss_fn, score_fn,
                                                         distr_error_fn, device, filepath_out_incremental,
                                                         lr_plot="Learning Rate", verbosity=verbosity - 1, mini_epoch_size=mini_epoch_size)
         if reptile_rate > 0.0:

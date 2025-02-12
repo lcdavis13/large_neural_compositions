@@ -262,6 +262,7 @@ def get_batch(data, t, mb_size, current_index, total_samples, epoch, noise_level
     
     if current_index >= total_samples:
         current_index = 0  # Reset index if end of dataset is reached
+        epoch += 1
 
         if shuffle:
             data = shuffle_data(data)
@@ -272,7 +273,6 @@ def get_batch(data, t, mb_size, current_index, total_samples, epoch, noise_level
             z = torch.cat((z, z2), dim=-2)
             if ids is not None:
                 ids = torch.cat((ids, ids2), dim=-2)
-            epoch += 1
 
     return z, ids, current_index, epoch
 
