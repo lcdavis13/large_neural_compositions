@@ -112,7 +112,7 @@ def validate_epoch(model, x_val, y_val, minibatch_examples, t, loss_fn, score_fn
     minibatches = ceildiv(total_samples, minibatch_examples)
     
     for mb in range(minibatches):
-        z, current_index = data.get_batch(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0,
+        z, current_index = data.get_batch_raw(x_val, y_val, t, minibatch_examples, current_index, noise_level_x=0.0,
                                           noise_level_y=0.0)
         x, y = z[0], z[-1]
         mb_examples = x.size(0)
@@ -164,7 +164,7 @@ def train_epoch(model, x_train, y_train, minibatch_examples, accumulated_minibat
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, current_index = data.get_batch(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise,
+        z, current_index = data.get_batch_raw(x_train, y_train, t, minibatch_examples, current_index, noise_level_x=noise,
                                           noise_level_y=noise)  #
         mb_examples = z.shape[-2]
         

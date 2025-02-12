@@ -58,7 +58,7 @@ def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, di
     current_index = 0  # Initialize current index to start of dataset
     
     for mb in range(minibatches):
-        z, ids, current_index = data.get_batch(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
+        z, ids, current_index = data.get_batch_raw(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
         x, y = z[0], z[-1]
         mb_examples = x.size(0)
         
@@ -79,13 +79,14 @@ def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, di
     return avg_loss, avg_score, avg_penalty
 
 
-def run_test(model, model_name, model_config, epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
+def run_test(model, model_name, model_config, epoch, mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
     l_test, score_test, p_test = validate_epoch(model, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_test, True, True, True,
                             "model_name", model_name,
                             "model_config", model_config,
                             "fold", fold,
                             "epoch", epoch,
+                            "mini-epoch", mini_epoch,
                             "Avg Test Loss", l_test,
                             "Avg DKI Test Loss", score_test,
                             "Avg Test Distr Error", p_test,
@@ -98,20 +99,26 @@ def run_test(model, model_name, model_config, epoch, minibatch_examples, data_te
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
-def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
-                outputs_per_epoch,
-                prev_examples, fold, epoch_num, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
-                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
+def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
+                outputs_per_mini_epoch, 
+                prev_examples, fold, epoch_num, mini_epoch_num, current_index, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
+                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1, mini_epoch_size=-1):
     model.train()
     
     total_loss = 0
     total_penalty = 0
     total_samples = data_train[0].size(0)
-    minibatches = ceildiv(total_samples, minibatch_examples)
-    current_index = 0  # Initialize current index to start of dataset
+
+    if mini_epoch_size > 0:
+        minibatches = ceildiv(mini_epoch_size, minibatch_examples)
+        loop_batches = True
+    else:
+        minibatches = ceildiv(total_samples, minibatch_examples)
+        loop_batches = False
+    
     new_examples = 0
     
-    stream_interval = max(1, minibatches // outputs_per_epoch)
+    stream_interval = max(1, minibatches // outputs_per_mini_epoch)
     
     optimizer.zero_grad()
     
@@ -121,17 +128,13 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
     stream_penalty = 0
     stream_examples = 0
     
-    # TODO: shuffle the data before starting an epoch
     for mb in range(minibatches):
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, ids, current_index = data.get_batch(data_train, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise, requires_timesteps=supervise_steps)  #
-        mb_examples = z.shape[-2]
+        z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=loop_batches, shuffle=True)
         
-        if current_index >= total_samples:
-            current_index = 0  # Reset index if end of dataset is reached
-            data_train = data.shuffle_data(data_train)
+        mb_examples = z.shape[-2]
         
         y_pred = eval_model(model, z[0], t, ids)
         if supervise_steps:
@@ -150,7 +153,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
         if scaled_loss.requires_grad and scaled_loss.grad_fn is not None:
             scaled_loss.backward()
         else:
-            print(f"GRADIENT ERROR: Loss at epoch {epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
+            print(f"GRADIENT ERROR: Loss at epoch {epoch_num} mini-epoch {mini_epoch_num} minibatch {mb} does not require gradient. Computation graph detached?")
         
         distr_error = distr_error_fn(y_pred)
         actual_penalty = distr_error.item() * mb_examples
@@ -172,6 +175,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
             stream.stream_results(filepath_out_incremental, verbosity > 0, verbosity > 0, verbosity > -1,
                                   "fold", fold,
                                   "epoch", epoch_num,
+                                  "mini-epoch", mini_epoch_num,
                                   "minibatch", mb,
                                   "total examples seen", prev_examples + new_examples,
                                   "Avg Loss", stream_loss / stream_examples,
@@ -180,10 +184,10 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
                                   "Learning Rate", scheduler.get_last_lr(),
                                   )
             if lr_plot:
-                plotstream.plot_single(lr_plot, "epochs", "LR", f"{model_config} fold {fold}",
-                                       epoch_num + mb / minibatches, scheduler.get_last_lr(), False, y_log=False)
+                plotstream.plot_single(lr_plot, "mini-epochs", "LR", f"{model_config} fold {fold}",
+                                       mini_epoch_num + mb / minibatches, scheduler.get_last_lr(), False, y_log=False)
             if loss_plot:
-                plotstream.plot_loss(loss_plot, f"{model_config} fold {fold}", epoch_num + mb / minibatches,
+                plotstream.plot_loss(loss_plot, f"{model_config} fold {fold}", mini_epoch_num + mb / minibatches,
                                      stream_loss / stream_examples, None, add_point=False)
             if lr_loss_plot:
                 plotstream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_config} fold {fold}",
@@ -204,7 +208,7 @@ def train_epoch(model, data_train, minibatch_examples, accumulated_minibatches, 
     avg_loss = total_loss / total_samples
     avg_penalty = total_penalty / total_samples
     new_total_examples = prev_examples + new_examples
-    return avg_loss, avg_penalty, new_total_examples
+    return avg_loss, avg_penalty, new_total_examples, epoch_num, current_index
 
 
 # backup model parameters for reptile
@@ -268,7 +272,7 @@ def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_example
     
     done = False
     while not done:
-        x_batch, y_batch, current_index = data.get_batch(x, y, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
+        x_batch, y_batch, current_index = data.get_batch_raw(x, y, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
         if current_index >= total_samples:
             current_index = 0
             x, y = data.shuffle_data(x, y)
@@ -410,10 +414,13 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     return optimal_weight_decay, optimal_lr
 
 
-def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, scaler, data_train, data_valid, data_test, t,
-               model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, outputs_per_epoch=10, verbosity=1,
+def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
+               model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train=False, jobstring=""):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
+
+    epoch = 0
+    current_sample_index = 0
     
     # track stats at various definitions of the "best" epoch
     val_opt = Optimum('val_loss', 'min')
@@ -440,6 +447,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
                           "fold", fold,
                           "epoch", 0,
+                          "mini-epoch", 0,
                           "training examples", 0,
                           "Avg Training Loss", l_trn,
                           "Avg DKI Trn Loss", score_trn,
@@ -455,8 +463,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                           suffix="\n=============================================\n")
     plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", 0, l_trn, l_val, add_point=False)
     # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", 0, score_trn, score_val, add_point=False)
-    plotstream.plot(f"stopmetric {dataname}", "epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
-    plotstream.plot(f"Validation Loss EMA {dataname}", "epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
+    plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
+    plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
     # plotstream.plot(dataname, "epoch", "loss", [f"{model_config} fold {fold} - Val", f"{model_config} fold {fold} - Trn", f"{model_config} fold {fold} - DKI Val", f"{model_config} fold {fold} - DKI Trn"], 0, [l_val, None, score_val, None], add_point=False)
     
     train_examples_seen = 0
@@ -473,7 +481,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     has_backup = False
 
     # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
-    dict = {"epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val,
+    dict = {"epoch": epoch, "mini_epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val,
             "val_score": score_val, "lr": old_lr, "time": start_time, "gpu_memory": gpu_memory_reserved,
             "metric": p_val, "stop_metric": manager.get_metric(), "stop_threshold": manager.get_threshold()}
     # track various optima
@@ -486,12 +494,12 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     manager.set_baseline(last_opt)
 
     while True:
-        l_trn, p_trn, train_examples_seen = train_epoch(model, data_train, minibatch_examples,
-                                                        accumulated_minibatches, noise, interpolate, optimizer, scheduler, scaler, t,
+        l_trn, p_trn, train_examples_seen, epoch, current_sample_index = train_mini_epoch(model, data_train, minibatch_examples,
+                                                        accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
                                                         outputs_per_epoch, train_examples_seen,
-                                                        fold, manager.epoch, model_config, dataname, loss_fn, score_fn,
+                                                        fold, epoch, manager.epoch, current_sample_index, model_config, dataname, loss_fn, score_fn,
                                                         distr_error_fn, device, filepath_out_incremental,
-                                                        lr_plot="Learning Rate", verbosity=verbosity - 1)
+                                                        lr_plot="Learning Rate", verbosity=verbosity - 1, mini_epoch_size=mini_epoch_size)
         if reptile_rate > 0.0:
             # Meta-update logic
             with torch.no_grad():
@@ -526,7 +534,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         _, cpuRam = tracemalloc.get_traced_memory()
         
         # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
-        dict = {"epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val,
+        dict = {"epoch": epoch, "mini_epoch": manager.epoch, "trn_loss": l_trn, "trn_score": score_trn, "val_loss": l_val,
                 "val_score": score_val, "lr": old_lr, "time": elapsed_time, "gpu_memory": gpu_memory_reserved,
                 "metric": p_val, "stop_metric": manager.get_metric(), "stop_threshold": manager.get_threshold()}
         # track various optima
@@ -537,7 +545,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         trnscore_opt.track_best(dict)
         last_opt.track_best(dict)
         
-        training_curve.append({"fold": fold, "epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "time": elapsed_time})
+        training_curve.append({"fold": fold, "epoch":epoch, "mini_epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "time": elapsed_time})
         
         old_lr = new_lr
         
@@ -547,7 +555,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         # log results (after updating manager so we can log stats from the manager itself)
         stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
                               "fold", fold,
-                              "epoch", manager.epoch,
+                              "epoch", epoch,
+                              "mini-epoch", manager.epoch,
                               "training examples", train_examples_seen,
                               "Avg Training Loss", l_trn,
                               "Avg DKI Trn Loss", -1.0,
@@ -564,8 +573,8 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", manager.epoch, l_trn, l_val,
                              add_point=add_point)
         # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", manager.epoch, score_trn, score_val, add_point=add_point)
-        plotstream.plot(f"stopmetric {dataname}", "epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
-        plotstream.plot(f"Validation Loss EMA {dataname}", "epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
+        plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
+        plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
         # plotstream.plot(dataname, "epoch", "loss", [f"{model_config} fold {fold} - Val", f"{model_config} fold {fold} - Trn", f"{model_config} fold {fold} - DKI Val", f"{model_config} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, score_val, score_trn], add_point=add_point)
         # if l_val != score_val:
         #     print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
@@ -574,14 +583,14 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
         if should_stop:
             if data_test:
                 model.load_state_dict(torch.load(model_path, weights_only=True))
-                run_test(model, model_name, model_config, val_opt.epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
+                run_test(model, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
             break
     
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
 
-def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testdata, noise, interpolate, device, early_stop, patience, kfolds,
-                        min_epochs, max_epochs,
+def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testdata, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
+                        min_epochs, max_epochs, mini_epoch_size, 
                         minibatch_examples, model_constr, epoch_manager_constr, model_args, model_name, model_config, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
                         whichfold=-1, jobstring=""):
@@ -628,8 +637,9 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
 
         
         steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
-        base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
-                                           threshold_mode='rel', threshold=0.01)
+        base_scheduler = lr_schedule.ConstantLR(optimizer)
+        # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
+        #                                    threshold_mode='rel', threshold=0.01)
         # base_scheduler = OneCycleLR(
         #     optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
         #     final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
@@ -638,11 +648,11 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
         print(f"Fold {fold_num + 1}/{kfolds}")
         
         val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(model, optimizer, scheduler, manager,
-                                                                            minibatch_examples, accumulated_minibatches, noise, interpolate,
+                                                                            minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise,
                                                                             scaler, data_train, data_valid, data_test,
                                                                             timesteps, model_name, model_config, 
                                                                             dataname, fold_num, loss_fn, score_fn,
-                                                                            distr_error_fn, device,
+                                                                            distr_error_fn, device, mini_epoch_size,
                                                                             outputs_per_epoch=10,
                                                                             verbosity=verbosity - 1,
                                                                             reptile_rate=reptile_rewind,
@@ -708,30 +718,20 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
         trn_score_optims.append(trnscore_opt)
         final_optims.append(last_opt)
         
-        # To Do: refactor this, we don't need all these variables
-        val_loss = val_opt.val_loss
-        val_score = val_opt.val_score
-        val_trn_loss = val_opt.trn_loss
-        val_epoch = val_opt.epoch
-        val_time = val_opt.time
-        trn_loss = trn_opt.trn_loss
-        trn_score = trn_opt.trn_score
-        trn_val_loss = trn_opt.val_loss
-        trn_epoch = trn_opt.epoch
-        trn_time = trn_opt.time
-        
         stream.stream_results(filepath_out_fold, verbosity > 0, verbosity > 0, verbosity > -1,
                               "fold", fold_num,
-                              "Validation Loss", val_loss,
-                              "Validation Score", val_score,
-                              "Val @ epoch0s", val_epoch,
-                              "Val @ time", val_time,
-                              "Val @ training loss", val_trn_loss,
-                              "Training Loss", trn_loss,
-                              "Training Score", trn_score,
-                              "Trn @ epochs", trn_epoch,
-                              "Trn @ time", trn_time,
-                              "Trn @ validation loss", trn_val_loss,
+                              "Validation Loss", val_opt.val_loss,
+                              "Validation Score", val_opt.val_score,
+                              "Val @ epochs", val_opt.epoch,
+                              "Val @ mini-epochs", val_opt.mini_epoch,
+                              "Val @ time", val_opt.time,
+                              "Val @ training loss", val_opt.trn_loss,
+                              "Training Loss", trn_opt.trn_loss,
+                              "Training Score", trn_opt.trn_score,
+                              "Trn @ epochs", trn_opt.epoch,
+                              "Trn @ mini-epochs", trn_opt.mini_epoch,
+                              "Trn @ time", trn_opt.time,
+                              "Trn @ validation loss", trn_opt.val_loss,
                               prefix="\n========================================FOLD=========================================\n",
                               suffix="\n=====================================================================================\n")
     

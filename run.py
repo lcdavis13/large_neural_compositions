@@ -105,15 +105,15 @@ def main():
                         # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
-                        # 'transformShaped',
+                        'transformShaped',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        # 'cNODE-hourglass',
+                        'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 
@@ -129,7 +129,7 @@ def main():
                         "69@4_48_richness50",
                         # "5000@7_48_richness170",
                         category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 500, 1000, 2000,  
+    hpbuilder.add_param("data_subset", 2000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -149,7 +149,7 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 100, 
+    hpbuilder.add_param("epochs", 2000, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
@@ -164,6 +164,8 @@ def main():
     
     hpbuilder.add_param("epoch_manager", "AdaptiveValPlateau",
                         help="which type of epoch manager to use")
+    hpbuilder.add_param("mini_epoch_size", 500,
+                        help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
 
     hpbuilder.add_param("early_stop", True, 
                         help="whether or not to use early stopping")
@@ -171,7 +173,7 @@ def main():
                         help="patience for early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 0.032,  
+    hpbuilder.add_param("lr", 0.032, 0.001, 0.00032,   
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
@@ -282,7 +284,7 @@ def main():
     # TODO: make all of these args accessible to command line
     epoch_mngr_constructors = {
         "Fixed": lambda args: epoch_managers.FixedManager(max_epochs=args.epochs),
-        "AdaptiveValPlateau": lambda args: epoch_managers.AdaptiveValPlateauManager(memory=0.85, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
+        "AdaptiveValPlateau": lambda args: epoch_managers.AdaptiveValPlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
     }
 
 
@@ -355,7 +357,7 @@ def main():
             jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
             filepath_out_expt = f'results/expt/{dp.dataset}{jobstring}_experiments.csv'
             num_params = -1
-            optdict = {"epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
+            optdict = {"epoch": -1, "mini_epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
                     "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
                     "metric": -1.0, "stop_metric": -1.0, "stop_threshold": -1.0}
             val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
@@ -425,6 +427,7 @@ def main():
                 stream.stream_scores(filepath_out_expt, True, True, True,
                                     "mean_val_loss", -1,
                                     "mean_val_loss @ epoch", -1,
+                                    "mean_val_loss @ mini-epoch", -1,
                                     "mean_val_loss @ time", -1,
                                     "mean_val_loss @ trn_loss", -1,
                                     "identity loss", identity_loss,
@@ -442,9 +445,9 @@ def main():
                 
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, device, hp.early_stop, hp.patience,
-                    dp.kfolds, hp.min_epochs, hp.epochs, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=2,
+                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
+                    dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
+                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
                 )
                 
@@ -466,25 +469,26 @@ def main():
                 print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
                 print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
                 
-                # find optimal epoch
+                # find optimal mini-epoch
                 # training_curves is a list of dictionaries, convert to a dataframe
                 all_data = [entry for fold in training_curves for entry in fold]
                 df = pd.DataFrame(all_data)
                 df_clean = df.dropna(subset=['val_loss'])
                 # Check if df_clean is not empty
                 if not df_clean.empty:
-                    average_metrics = df_clean.groupby('epoch').mean(numeric_only=True).reset_index()
+                    average_metrics = df_clean.groupby('mini_epoch').mean(numeric_only=True).reset_index()
                     min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
                     best_epoch_metrics = min_val_loss_epoch.to_dict()
                 else:
                     min_val_loss_epoch = None  # or handle the empty case as needed
-                    best_epoch_metrics = {"epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
+                    best_epoch_metrics = {"epoch": -1, "mini_epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
                 
                 # write folds to log file
                 for i in range(len(val_loss_optims)):
                     stream.stream_scores(filepath_out_expt, True, True, True,
                                         "mean_val_loss", best_epoch_metrics["val_loss"],
                                         "mean_val_loss @ epoch", best_epoch_metrics["epoch"],
+                                        "mean_val_loss @ mini-epoch", best_epoch_metrics["mini_epoch"],
                                         "mean_val_loss @ time", best_epoch_metrics["time"],
                                         "mean_val_loss @ trn_loss", best_epoch_metrics["trn_loss"],
                                         "identity loss", identity_loss,
@@ -503,6 +507,7 @@ def main():
             #     stream.stream_scores(filepath_out_expt, True, True, True,
             #                     "mean_val_loss", -1,
             #                     "mean_val_loss @ epoch", -1,
+            #                     "mean_val_loss @ mini-epoch", -1,
             #                     "mean_val_loss @ time", -1,
             #                     "mean_val_loss @ trn_loss", -1,
             #                     "identity loss", identity_loss,
