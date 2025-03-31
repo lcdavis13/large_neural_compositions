@@ -1,6 +1,7 @@
 import os
 
 import epoch_managers
+import lr_schedule
 
 # Set a default value if the environment variable is not specified
 # os.environ.setdefault("SOLVER", "torchdiffeq")
@@ -103,18 +104,18 @@ def main():
 
     hpbuilder.add_param("model_name", 
                         # "junk", 
-                        # 'baseline-constShaped',
-                        # 'baseline-SLPMultShaped',
-                        # 'cNODE1',
-                        # 'cNODE2',
-                        'transformShaped',
-                        # 'transformShaped-AbundEncoding',
-                        # 'transformRZShaped',
-                        # 'canODE-FitMat',
-                        # 'canODE-attendFit',
+                        # 'baseline-constShaped', 
+                        # 'baseline-SLPMultShaped', 
+                        # 'cNODE1', 
+                        # 'cNODE2', 
+                        'transformShaped', 
+                        # 'transformShaped-AbundEncoding', 
+                        # 'transformRZShaped', 
+                        # 'canODE-FitMat', 
+                        # 'canODE-attendFit', 
                         # "canODE-FitMat-AbundEncoding", 
-                        'cNODE-hourglass',
-                        # 'baseline-cNODE0',
+                        # 'cNODE-hourglass', 
+                        # 'baseline-cNODE0', 
                         help="model(s) to run")
 
     # data params
@@ -126,10 +127,10 @@ def main():
                         # "cNODE-paper-ocean-std", 
                         # "cNODE-paper-human-oral", 
                         # "cNODE-paper-human-oral-std", 
-                        "69@4_48_richness50",
-                        # "5000@7_48_richness170",
+                        "69@4_48_richness50", 
+                        # "5000@7_48_richness170", 
                         category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 2000, 
+    hpbuilder.add_param("data_subset", 25000,  
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -149,37 +150,51 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 2000, 
-                        help="maximum number of epochs")
+    hpbuilder.add_param("mini_epoch_size", 500,
+                        help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
+    hpbuilder.add_param("epochs", 1000, 
+                        help="maximum number of epochs / mini epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
-    hpbuilder.add_param("min_epochs", 1, 
-                        help="minimum number of epochs")
-    hpbuilder.add_param("minibatch_examples", 100, 
-                        help="minibatch size")
-    hpbuilder.add_param("accumulated_minibatches", 1, 
-                        help="number of minibatches to accumulate before stepping")
+    hpbuilder.add_param("min_epochs", 125, 
+                        help="minimum number of epochs / mini epochs")
     hpbuilder.add_param("run_test", True,
                         category=datacat, help="run the test set after training")
     
-    hpbuilder.add_param("epoch_manager", "AdaptiveValPlateau",
+    hpbuilder.add_param("epoch_manager", 
+                        "FixedEpochs", 
+                        # "AdaptiveValPlateau", 
+                        # "AdaptiveValOverLRPlateau", 
+                        # "AdaptiveValOverLR2Plateau", 
                         help="which type of epoch manager to use")
-    hpbuilder.add_param("mini_epoch_size", 500,
-                        help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
-
-    hpbuilder.add_param("early_stop", True, 
-                        help="whether or not to use early stopping")
+    
     hpbuilder.add_param("patience", 5, 
-                        help="patience for early stopping")
+                        help="patience for epoch manager's early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 0.032, 0.001, 0.00032,   
+    hpbuilder.add_param("minibatch_examples", 100, 
+                        help="minibatch size")
+    hpbuilder.add_param("accumulated_minibatches", 1, 
+                        help="number of minibatches to accumulate before stepping the optimizer")
+    hpbuilder.add_param("lr", 0.02,  
                         help="learning rate")
+    hpbuilder.add_param("base_lr_schedule", 
+                        "StableFixedEpochs", # Does not use early stopping 
+                        # "DirectToZero", # Does not use early stopping 
+                        # "Cosine", # Annealed LR proportion is extra parameter, although 0.1 is standard. Does not use early stopping 
+                        # "Stable", # Uses early stopping 
+                        # "Rational", # Uses early stopping 
+                        # "Exponential", # Uses early stopping. Requires an extra parameter for decay rate
+                        help="Learning rate schedule. Note that some schedules utilize early stopping (with conditions determined by the epoch manager and relevant parameters), while some do not.")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
-    hpbuilder.add_param("wd_factor", 0.0, 
-                        help="weight decay factor (multiple of LR)")
-    hpbuilder.add_param("noise", 0.0,   
+    hpbuilder.add_param("es_warmup_epochs", 20,
+                        help="number of epochs to warm up the learning rate for LR schedules that utilize early stopping")
+    hpbuilder.add_param("warmup_epoch_factor", 20,
+                        help="proportion of epochs to spend warming up the learning rate for LR schedules that do NOT utilize early stopping")
+    hpbuilder.add_param("wd", 20.0, 
+                        help="AdamW weight decay rate")
+    hpbuilder.add_param("noise", 0.0, 
                         help="noise level")
     
     # Data augmentation params
@@ -285,6 +300,14 @@ def main():
     epoch_mngr_constructors = {
         "Fixed": lambda args: epoch_managers.FixedManager(max_epochs=args.epochs),
         "AdaptiveValPlateau": lambda args: epoch_managers.AdaptiveValPlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
+        "AdaptiveValOverLRPlateau": lambda args: epoch_managers.AdaptiveValOverLRPlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
+        "AdaptiveValOverLR2Plateau": lambda args: epoch_managers.AdaptiveValOverLRSquarePlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
+    }
+
+    lr_scheduler_constructors = {
+        "Stable": lambda args, optimizer: lr_schedule.ConstantLR(optimizer),
+        "DirectToZero": lambda args, optimizer: lr_schedule.DirectToZeroLR(optimizer, hp.lr, warmup_steps=hp.warmup_epochs*steps_per_epoch, decay_steps=(hp.min_epochs - hp.warmup_epochs)*steps_per_epoch), 
+        "Rational": lambda args, optimizer: lr_schedule.RationalLR(optimizer, hp.lr, warmup_steps=hp.warmup_epochs*steps_per_epoch, wd=hp.wd), 
     }
 
 
@@ -364,12 +387,12 @@ def main():
             trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
             val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
             trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
+            final_optims = [Optimum(metric=None, dict=optdict)]
 
-            # try:
-            if True:
+            try:
+                # if True:
                 # computed hyperparams
                 _, hp.data_dim = x.shape
-                hp.WD = hp.lr * hp.wd_factor
                 hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
                 hp.model_config = f"{hp.model_name}_{dp.data_configid}x{hp.configid}"
 
@@ -389,6 +412,7 @@ def main():
                 
                 model_constr = models[hp.model_name]
                 epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
+                lr_scheduler_constr = lr_scheduler_constructors[hp.lr_schedule]
                 
                 
                 # scaler = torch.amp.GradScaler(device)
@@ -438,16 +462,16 @@ def main():
                                     *unrolldict(dp),  # unroll the data params dictionary
                                     *unrolldict(hp),  # unroll the hyperparams dictionary
                                     *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-                                                trn_score_optims[0]),
+                                                trn_score_optims[0], final_optims[0]),
                                     prefix="\n=======================================================EXPERIMENT========================================================\n",
                                     suffix="\n=========================================================================================================================\n")
                 
                 
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
-                    dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                    hp, dp, scaler, data_folded, testdata, device, 
+                    model_constr, epoch_manager_constr, 
+                    timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
                 )
                 
@@ -456,18 +480,21 @@ def main():
                 print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
                 print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
                 print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
+                print(f'Final optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(final_optims)]}\n')
                 
                 # calculate fold summaries
                 avg_val_loss_optim = summarize(val_loss_optims)
                 avg_val_score_optim = summarize(val_score_optims)
                 avg_trn_loss_optim = summarize(trn_loss_optims)
                 avg_trn_score_optim = summarize(trn_score_optims)
+                avg_final_optim = summarize(final_optims)
                 
-                # print summariesrun.py
+                # print summaries
                 print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
                 print(f'Avg Val Score optimum: {avg_val_score_optim}')
                 print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
                 print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
+                print(f'Avg Final optimum: {avg_final_optim}')
                 
                 # find optimal mini-epoch
                 # training_curves is a list of dictionaries, convert to a dataframe
@@ -499,29 +526,29 @@ def main():
                                         *unrolldict(dp),  # unroll the data params dictionary
                                         *unrolldict(hp),  # unroll the hyperparams dictionary
                                         *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
-                                                    trn_score_optims[i]),
+                                                    trn_score_optims[i], final_optims[i]),
                                         prefix="\n=======================================================EXPERIMENT========================================================\n",
                                         suffix="\n=========================================================================================================================\n")
                 
-            # except Exception as e:
-            #     stream.stream_scores(filepath_out_expt, True, True, True,
-            #                     "mean_val_loss", -1,
-            #                     "mean_val_loss @ epoch", -1,
-            #                     "mean_val_loss @ mini-epoch", -1,
-            #                     "mean_val_loss @ time", -1,
-            #                     "mean_val_loss @ trn_loss", -1,
-            #                     "identity loss", identity_loss,
-            #                     "model parameters", num_params,
-            #                     "fold", -1,
-            #                     "device", device,
-            #                     "solver", os.environ["SOLVER"],
-            #                     *unrolldict(dp),  # unroll the data params dictionary
-            #                     *unrolldict(hp),  # unroll the hyperparams dictionary
-            #                     *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-            #                                 trn_score_optims[0]),
-            #                     prefix="\n=======================================================EXPERIMENT========================================================\n",
-            #                     suffix="\n=========================================================================================================================\n")
-            #     print(f"Model {hp.model_name} failed with error:\n{e}")
+            except Exception as e:
+                stream.stream_scores(filepath_out_expt, True, True, True,
+                                "mean_val_loss", -1,
+                                "mean_val_loss @ epoch", -1,
+                                "mean_val_loss @ mini-epoch", -1,
+                                "mean_val_loss @ time", -1,
+                                "mean_val_loss @ trn_loss", -1,
+                                "identity loss", identity_loss,
+                                "model parameters", num_params,
+                                "fold", -1,
+                                "device", device,
+                                "solver", os.environ["SOLVER"],
+                                *unrolldict(dp),  # unroll the data params dictionary
+                                *unrolldict(hp),  # unroll the hyperparams dictionary
+                                *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                            trn_score_optims[0]),
+                                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                suffix="\n=========================================================================================================================\n")
+                print(f"Model {hp.model_name} failed with error:\n{e}")
     
     print("\n\nDONE")
     plotstream.wait_for_plot_exit()
