@@ -287,7 +287,11 @@ def main():
         "AdaptiveValPlateau": lambda args: epoch_managers.AdaptiveValPlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
     }
 
+    # load timesteps from file
+    time_path = "t.csv"
+    timesteps = pd.read_csv(time_path, header=None).values.flatten()
 
+    # loop through possible combinations of dataset hyperparams
     for dp in hpbuilder.parse_and_generate_combinations(category=datacat):
 
         # load data
@@ -349,7 +353,7 @@ def main():
         plotstream.plot_horizontal_line(f"loss {dp.dataset}", identity_loss, f"Identity")
         # plotstream.plot_horizontal_line(f"score {dp.dataset}", identity_score, f"Identity")
 
-
+        # loop through possible combinations of generic hyperparams
         for hp in hpbuilder.parse_and_generate_combinations():
         
             # things that are needed for reporting an exception, so they go before the try block
@@ -394,10 +398,10 @@ def main():
                 # scaler = torch.amp.GradScaler(device)
                 scaler = torch.cuda.amp.GradScaler()
                 
-                # time step "data"
-                ode_timemax = 1.0
-                ode_stepsize = ode_timemax / hp.ode_timesteps
-                timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
+                # time steps for ODE solvers (currently unused due to precomputing them and loading from file)
+                # ode_timemax = 1.0
+                # ode_stepsize = ode_timemax / hp.ode_timesteps
+                # timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
                 
                 # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
                 # Model dictionary. Hyperparam override(s)
