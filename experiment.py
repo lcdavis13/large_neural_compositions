@@ -1,5 +1,6 @@
 
 import numpy as np
+import chunked_dataset
 import epoch_managers
 import lr_schedule
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
@@ -7,7 +8,7 @@ import data
 import torch
 import stream
 from optimum import Optimum, summarize, unrolloptims
-from stream_plot import plotstream
+import stream_plot as plotstream
 import time
 
 
@@ -35,7 +36,7 @@ def eval_model(model, x, timesteps, ids):
     else:
         # Call models that do not require the timesteps argument
         if requires_condensed:
-            y = model(x, ids)
+            y = model(x, ids)  # problem is that the IDs is being loaded as float in the data loader
         else:
             y = model(x)
         y_steps = y.unsqueeze(0)
@@ -47,21 +48,36 @@ def ceildiv(a, b):
     return -(a // -b)
 
 
-def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device):
+def validate_epoch(model, requires_condensed, data_val, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device):
     model.eval()
     
     total_loss = 0.0
     total_score = 0.0
     total_distr_error = 0.0
-    total_samples = data_val[0].size(0)
-    minibatches = ceildiv(total_samples, minibatch_examples)
-    current_index = 0  # Initialize current index to start of dataset
-    
-    for mb in range(minibatches):
-        z, ids, current_index = data.get_batch_raw(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
-        x, y = z[0], z[-1]
-        mb_examples = x.size(0)
+    # total_samples = data_val[chunked_dataset.DK_X].size(0)
+    # minibatches = ceildiv(total_samples, minibatch_examples)
+    # current_index = 0  # Initialize current index to start of dataset
+
+    total_samples = 0
+
+    for mb in data_val:
+        x, y, x_sparse, y_sparse, ids = mb[chunked_dataset.DK_X], mb[chunked_dataset.DK_Y], mb[chunked_dataset.DK_XSPARSE], mb[chunked_dataset.DK_YSPARSE], mb[chunked_dataset.DK_IDS]
         
+        if requires_condensed:
+            x = x_sparse.to(device)
+            y = y_sparse.to(device)
+            ids = ids.to(device)
+        else:
+            x = x.to(device)
+            y = y.to(device)
+
+        # TODO: Currently hacked to only work with the Identity model. Need to generalize it.
+
+        # z, ids, current_index = data.get_batch_raw(data_val, t, minibatch_examples, current_index, noise_level_x=0.0, noise_level_y=0.0, requires_timesteps=False)
+        # x, y = z[0], z[-1]
+        mb_examples = x.size(0)
+        total_samples += mb_examples
+
         with torch.no_grad():
             y_pred = eval_model(model, x, t, ids)[-1]
             y_pred = y_pred.to(device)
@@ -72,15 +88,16 @@ def validate_epoch(model, data_val, minibatch_examples, t, loss_fn, score_fn, di
             total_loss += loss.item() * mb_examples  # Multiply loss by batch size
             total_score += score.item() * mb_examples
             total_distr_error += distr_error.item() * mb_examples
-    
+
+
     avg_loss = total_loss / total_samples
     avg_score = total_score / total_samples
     avg_penalty = total_distr_error / total_samples
     return avg_loss, avg_score, avg_penalty
 
 
-def run_test(model, model_name, model_config, epoch, mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
-    l_test, score_test, p_test = validate_epoch(model, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+def run_test(model, requires_condensed, model_name, model_config, epoch, mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
+    l_test, score_test, p_test = validate_epoch(model, requires_condensed, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_test, True, True, True,
                             "model_name", model_name,
                             "model_config", model_config,
@@ -99,24 +116,26 @@ def run_test(model, model_name, model_config, epoch, mini_epoch, minibatch_examp
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
-def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
+def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
                 outputs_per_mini_epoch, 
-                prev_examples, fold, epoch_num, mini_epoch_num, current_index, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
+                prev_examples, prev_updates, fold, epoch_num, mini_epoch_num, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
                 filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1, mini_epoch_size=-1):
     model.train()
     
     total_loss = 0
     total_penalty = 0
-    total_samples = data_train[0].size(0)
 
     if mini_epoch_size > 0:
         minibatches = ceildiv(mini_epoch_size, minibatch_examples)
         loop_batches = True
     else:
-        minibatches = ceildiv(total_samples, minibatch_examples)
+        # total_samples = data_train[0].size(0)
+        epoch_sample_num = 0  # TODO: fix
+        minibatches = ceildiv(epoch_sample_num, minibatch_examples)
         loop_batches = False
     
     new_examples = 0
+    new_updates = 0
     
     stream_interval = max(1, minibatches // outputs_per_mini_epoch)
     
@@ -129,20 +148,36 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
     stream_examples = 0
     
     for mb in range(minibatches):
+        try: 
+            batch = next(epoch_data_iterator)
+        except StopIteration:
+            epoch_num += 1
+            epoch_data_iterator = iter(data_train)
+            batch = next(epoch_data_iterator)
+
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
         supervise_steps = interpolate and model_requires_timesteps
         
-        z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=loop_batches, shuffle=True)
+        # z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=loop_batches, shuffle=True)
+        x, y, x_sparse, y_sparse, ids = batch[chunked_dataset.DK_X], batch[chunked_dataset.DK_Y], batch[chunked_dataset.DK_XSPARSE], batch[chunked_dataset.DK_YSPARSE], batch[chunked_dataset.DK_IDS]
+        if requires_condensed:
+            x = x_sparse.to(device)
+            y = y_sparse.to(device)
+            ids = ids.to(device)
+        else:
+            x = x.to(device)
+            y = y.to(device)
+
+        # mb_examples = z.shape[-2]
+        mb_examples = x.size(0)
         
-        mb_examples = z.shape[-2]
-        
-        y_pred = eval_model(model, z[0], t, ids)
+        y_pred = eval_model(model, x, t, ids)
         if supervise_steps:
             y_pred = y_pred[1:]
-            y_true = z[1:]
+            y_true = z[1:]  # TODO: supervised interpolation with new data source
         else:
             y_pred = y_pred[-1:]
-            y_true = z[-1:]
+            y_true = y.unsqueeze(0)  # TODO: may not need this unsqueeze if we stop supporting supervised interpolation
         y_pred = y_pred.to(device)
 
         loss = loss_fn(y_pred, y_true)
@@ -163,6 +198,7 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
         total_loss += actual_loss
         total_penalty += actual_penalty
         new_examples += mb_examples
+        new_updates += 1
         
         stream_loss += actual_loss
         stream_penalty += actual_penalty
@@ -178,6 +214,7 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
                                   "mini-epoch", mini_epoch_num,
                                   "minibatch", mb,
                                   "total examples seen", prev_examples + new_examples,
+                                  "total updates", prev_updates + new_updates,
                                   "Avg Loss", stream_loss / stream_examples,
                                   "Avg Distr Error", stream_penalty / stream_examples,
                                   "Examples per second", examples_per_second,
@@ -205,10 +242,13 @@ def train_mini_epoch(model, data_train, minibatch_examples, accumulated_minibatc
         
         # del x, y
     
-    avg_loss = total_loss / total_samples
-    avg_penalty = total_penalty / total_samples
+
+
+    avg_loss = total_loss / new_examples  # This used to be divided by total_samples which is dataset size, that's wrong isn't it?
+    avg_penalty = total_penalty / new_examples
     new_total_examples = prev_examples + new_examples
-    return avg_loss, avg_penalty, new_total_examples, epoch_num, current_index
+    new_total_updates = prev_updates + new_updates
+    return avg_loss, avg_penalty, new_total_examples, new_total_updates, epoch_num, epoch_data_iterator
 
 
 # backup model parameters for reptile
@@ -414,7 +454,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
     return optimal_weight_decay, optimal_lr
 
 
-def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
+def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
                model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train=False, jobstring=""):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
@@ -437,9 +477,9 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     filepath_out_incremental = f'results/incr/{model_config}_{dataname}{jobstring}_incremental.csv'
     
     # initial validation benchmark
-    l_val, score_val, p_val = validate_epoch(model, data_valid, minibatch_examples, t, loss_fn, score_fn,
+    l_val, score_val, p_val = validate_epoch(model, requires_condensed, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
-    l_trn, score_trn, p_trn = validate_epoch(model, data_train, minibatch_examples, t, loss_fn, score_fn,
+    l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
     
     gpu_memory_reserved = torch.cuda.memory_reserved(device)
@@ -449,6 +489,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                           "epoch", 0,
                           "mini-epoch", 0,
                           "training examples", 0,
+                          "update steps", 0,
                           "Avg Training Loss", l_trn,
                           "Avg DKI Trn Loss", score_trn,
                           "Avg Training Distr Error", p_trn,
@@ -464,10 +505,11 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", 0, l_trn, l_val, add_point=False)
     # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", 0, score_trn, score_val, add_point=False)
     plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
-    plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
+    # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
     # plotstream.plot(dataname, "epoch", "loss", [f"{model_config} fold {fold} - Val", f"{model_config} fold {fold} - Trn", f"{model_config} fold {fold} - DKI Val", f"{model_config} fold {fold} - DKI Trn"], 0, [l_val, None, score_val, None], add_point=False)
     
     train_examples_seen = 0
+    update_steps = 0
     start_time = time.time()
     
     if reptile_rate > 0.0:
@@ -493,13 +535,17 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
     last_opt.track_best(dict)
     manager.set_baseline(last_opt)
 
+    epoch_data_iterator = iter(data_train)
+
     while True:
-        l_trn, p_trn, train_examples_seen, epoch, current_sample_index = train_mini_epoch(model, data_train, minibatch_examples,
-                                                        accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
-                                                        outputs_per_epoch, train_examples_seen,
-                                                        fold, epoch, manager.epoch, current_sample_index, model_config, dataname, loss_fn, score_fn,
-                                                        distr_error_fn, device, filepath_out_incremental,
-                                                        lr_plot="Learning Rate", verbosity=verbosity - 1, mini_epoch_size=mini_epoch_size)
+        l_trn, p_trn, train_examples_seen, update_steps, epoch, epoch_data_iterator = train_mini_epoch(
+            model, requires_condensed, epoch_data_iterator, data_train, minibatch_examples,
+            accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
+            outputs_per_epoch, train_examples_seen, update_steps, 
+            fold, epoch, manager.epoch, model_config, dataname, loss_fn, score_fn,
+            distr_error_fn, device, filepath_out_incremental,
+            lr_plot="Learning Rate", verbosity=verbosity - 1, mini_epoch_size=mini_epoch_size
+        )
         if reptile_rate > 0.0:
             # Meta-update logic
             with torch.no_grad():
@@ -514,13 +560,18 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                 # Synchronize the inner model with the updated meta-model weights
                 model.load_state_dict(meta_model.state_dict())
         
-        l_val, score_val, p_val = validate_epoch(model, data_valid, minibatch_examples, t, loss_fn, score_fn,
+        l_val, score_val, p_val = validate_epoch(model, requires_condensed, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                                  distr_error_fn, device)
-        if reeval_train:
-            l_trn, score_trn, p_trn = validate_epoch(model, data_train, minibatch_examples, t, loss_fn, score_fn,
-                                                     distr_error_fn, device)
-        else:
-            score_trn = -1.0
+        
+        #TODO: This is hanging for a long time (forever?). I think it's either trying to run the entire 100k samples, or it's just loading the data inefficiently somehow. Removing for now.
+        # if reeval_train:
+        #     print("Re-evaluating training score")
+        #     l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn,
+        #                                              distr_error_fn, device)
+        # else:
+        #     score_trn = -1.0
+
+        score_trn = -1.0
         
         # Update learning rate based on loss
         scheduler.epoch_step(l_trn)
@@ -558,6 +609,7 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                               "epoch", epoch,
                               "mini-epoch", manager.epoch,
                               "training examples", train_examples_seen,
+                              "update steps", update_steps,
                               "Avg Training Loss", l_trn,
                               "Avg DKI Trn Loss", -1.0,
                               "Avg Training Distr Error", p_trn,
@@ -570,26 +622,29 @@ def run_epochs(model, optimizer, scheduler, manager, minibatch_examples, accumul
                               "Peak RAM (GB)", cpuRam / (1024 ** 3),
                               prefix="==================VALIDATION=================\n",
                               suffix="\n=============================================\n")
-        plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", manager.epoch, l_trn, l_val,
+        
+        plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, l_trn, l_val,
                              add_point=add_point)
         # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", manager.epoch, score_trn, score_val, add_point=add_point)
         plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
-        plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False)
+        # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
         # plotstream.plot(dataname, "epoch", "loss", [f"{model_config} fold {fold} - Val", f"{model_config} fold {fold} - Trn", f"{model_config} fold {fold} - DKI Val", f"{model_config} fold {fold} - DKI Trn"], manager.epoch + 1, [l_val, l_trn, score_val, score_trn], add_point=add_point)
         # if l_val != score_val:
         #     print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
 
         # time to stop: optionally load model and run test.
         if should_stop:
+            print("===Stopping training===")
             if data_test:
+                print("Running test")
                 model.load_state_dict(torch.load(model_path, weights_only=True))
-                run_test(model, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
+                run_test(model, requires_condensed, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
             break
     
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
 
-def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testdata, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
+def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_test, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs, mini_epoch_size, 
                         minibatch_examples, model_constr, epoch_manager_constr, model_args, model_name, model_config, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
@@ -620,23 +675,25 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
         
         # x_train, y_train, x_valid, y_valid = data_fold
         requires_condensed = getattr(model, 'USES_CONDENSED', False)
-        if not requires_condensed:
-            data_train = [data_fold[0][0], data_fold[1][0]]
-            data_valid = [data_fold[0][1], data_fold[1][1]]
-            if testdata:
-                data_test = [testdata[0], testdata[1]]
-            else:
-                data_test = None
-        else:
-            data_train = [data_fold[2][0], data_fold[3][0], data_fold[4][0]]
-            data_valid = [data_fold[2][1], data_fold[3][1], data_fold[4][1]]
-            if testdata:
-                data_test = [testdata[2], testdata[3], testdata[4]]
-            else:
-                data_test = None
+        data_train = data_fold[0]
+        data_valid = data_fold[1]
+        # if not requires_condensed:
+        #     data_train = [data_fold[0][0], data_fold[1][0]]
+        #     data_valid = [data_fold[0][1], data_fold[1][1]]
+        #     if testdata:
+        #         data_test = [testdata[0], testdata[1]]
+        #     else:
+        #         data_test = None
+        # else:
+        #     data_train = [data_fold[2][0], data_fold[3][0], data_fold[4][0]]
+        #     data_valid = [data_fold[2][1], data_fold[3][1], data_fold[4][1]]
+        #     if testdata:
+        #         data_test = [testdata[2], testdata[3], testdata[4]]
+        #     else:
+        #         data_test = None
 
         
-        steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
+        # steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
         base_scheduler = lr_schedule.ConstantLR(optimizer)
         # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
         #                                    threshold_mode='rel', threshold=0.01)
@@ -647,17 +704,16 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, testda
         
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(model, optimizer, scheduler, manager,
-                                                                            minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise,
-                                                                            scaler, data_train, data_valid, data_test,
-                                                                            timesteps, model_name, model_config, 
-                                                                            dataname, fold_num, loss_fn, score_fn,
-                                                                            distr_error_fn, device, mini_epoch_size,
-                                                                            outputs_per_epoch=10,
-                                                                            verbosity=verbosity - 1,
-                                                                            reptile_rate=reptile_rewind,
-                                                                            reeval_train=reeval_train,
-                                                                            jobstring=jobstring)
+        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(
+            model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, 
+            noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test,
+            timesteps, model_name, model_config, dataname, fold_num, loss_fn, score_fn,
+            distr_error_fn, device, mini_epoch_size,
+            outputs_per_epoch=10, verbosity=verbosity - 1,
+            reptile_rate=reptile_rewind,
+            reeval_train=reeval_train,
+            jobstring=jobstring
+        )
         
 
         # Below is temporarily commented out - fix it for the new dataset formats

@@ -1,5 +1,7 @@
 import os
+import traceback
 
+import chunked_dataset
 import epoch_managers
 
 # Set a default value if the environment variable is not specified
@@ -23,7 +25,7 @@ import models_baseline
 import models_embedded
 import stream
 from optimum import Optimum, summarize, unrolloptims
-from stream_plot import plotstream
+import stream_plot as plotstream
 import user_confirmation as ui
 from hyperparams import HyperparameterBuilder
 
@@ -105,31 +107,38 @@ def main():
                         # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        # 'cNODE1',
+                        'cNODE1',
                         # 'cNODE2',
-                        'transformShaped',
+                        # 'transformShaped',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        'cNODE-hourglass',
+                        # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 
     # data params
     datacat = "data"
-    hpbuilder.add_param("dataset", 
-                        # "waimea", 
-                        # "waimea-std", 
-                        # "cNODE-paper-ocean", 
-                        # "cNODE-paper-ocean-std", 
-                        # "cNODE-paper-human-oral", 
-                        # "cNODE-paper-human-oral-std", 
-                        "69@4_48_richness50",
-                        # "5000@7_48_richness170",
-                        category=datacat, help="dataset to use")
-    hpbuilder.add_param("data_subset", 2000, 
+    # hpbuilder.add_param("dataset", 
+    #                     # "waimea", 
+    #                     # "waimea-std", 
+    #                     # "cNODE-paper-ocean", 
+    #                     # "cNODE-paper-ocean-std", 
+    #                     # "cNODE-paper-human-oral", 
+    #                     # "cNODE-paper-human-oral-std", 
+    #                     "69@4_48_richness50",
+    #                     # "5000@7_48_richness170",
+    #                     category=datacat, help="dataset to use")
+    hpbuilder.add_param("x_dataset", 
+                        "256",
+                        category=datacat, help="dataset to use for inputs")
+    hpbuilder.add_param("y_dataset", 
+                        "256-random",
+                        category=datacat, help="dataset to use for supervising outputs")
+    hpbuilder.add_param("data_subset", 
+                        1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -137,6 +146,9 @@ def main():
                         category=datacat, help="which fold to run, -1 for all")
     hpbuilder.add_param("data_validation_samples", 200,
                         category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
+    hpbuilder.add_param("minibatch_examples", 100, 
+                        help="minibatch size",
+                        category=datacat)
     
     # slurm params
     hpbuilder.add_param("batchid", 0,
@@ -149,20 +161,20 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 2000, 
+    hpbuilder.add_param("epochs", 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
     hpbuilder.add_param("min_epochs", 1, 
                         help="minimum number of epochs")
-    hpbuilder.add_param("minibatch_examples", 100, 
-                        help="minibatch size")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
     hpbuilder.add_param("run_test", True,
                         category=datacat, help="run the test set after training")
     
-    hpbuilder.add_param("epoch_manager", "AdaptiveValPlateau",
+    hpbuilder.add_param("epoch_manager", 
+                        "Fixed", 
+                        # "AdaptiveValPlateau",
                         help="which type of epoch manager to use")
     hpbuilder.add_param("mini_epoch_size", 500,
                         help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
@@ -173,7 +185,7 @@ def main():
                         help="patience for early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 0.032, 0.001, 0.00032,   
+    hpbuilder.add_param("lr", 0.01, #0.032, 0.001, 0.00032,   
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
@@ -191,7 +203,7 @@ def main():
                         help="whether or not to use independent noise for interpolation")
     
     # Model architecture params
-    hpbuilder.add_param("cnode_bias", False, 
+    hpbuilder.add_param("cnode_bias", True, 
                         help="whether or not to use a bias term when predicting fitness in cNODE and similar models")
     hpbuilder.add_param("num_heads", 2, 
                         help="number of attention heads in transformer-based models")
@@ -205,6 +217,7 @@ def main():
                         help="multiplier for feedforward network dimension in transformer-based models")
     hpbuilder.add_param("dropout", 0.1, 
                         help="dropout rate")
+
     
 
     # Specify model constructors for experiment
@@ -289,49 +302,45 @@ def main():
 
     # load timesteps from file
     time_path = "t.csv"
-    timesteps = pd.read_csv(time_path, header=None).values.flatten()
+    # timesteps = pd.read_csv(time_path, header=None).values.flatten()
 
     # loop through possible combinations of dataset hyperparams
     for dp in hpbuilder.parse_and_generate_combinations(category=datacat):
 
-        # load data
-        filepath_train = f'data/{dp.dataset}_train.csv'
-        filepath_train_pos = f'data/{dp.dataset}_train-pos.csv'
-        filepath_train_val = f'data/{dp.dataset}_train-val.csv'
-        filepath_test = f'data/{dp.dataset}_test.csv'
-        filepath_test_pos = f'data/{dp.dataset}_test-pos.csv'
-        filepath_test_val = f'data/{dp.dataset}_test-val.csv'
-        if dp.data_validation_samples > 0 and dp.data_subset > 0:
-            samples_to_load = dp.data_subset + dp.data_validation_samples
-        else:
-            samples_to_load = dp.data_subset
-        x, y, xcon, ycon, idcon, dp.data_fraction = data.load_data(filepath_train, filepath_train_pos, filepath_train_val, device, subset=samples_to_load)
+        # datasets
+        base_filepath = f"data/{dp.x_dataset}/"
+
+        filenames = {
+            chunked_dataset.DK_BINARY: f"{dp.x_dataset}_binary",
+            chunked_dataset.DK_IDS: f"{dp.x_dataset}_ids-sparse",
+            chunked_dataset.DK_X: f"{dp.x_dataset}_x0", 
+            chunked_dataset.DK_XSPARSE: f"{dp.x_dataset}_x0-sparse",
+            chunked_dataset.DK_Y: f"{dp.y_dataset}_y",
+            chunked_dataset.DK_YSPARSE: f"{dp.y_dataset}_y-sparse",
+        }
+
+        data_folded, dense_columns, sparse_columns = chunked_dataset.load_folded_datasets(
+            base_filepath, 
+            filenames,
+            dp.minibatch_examples,
+            dp.data_subset,
+            dp.data_validation_samples,
+            dp.kfolds
+        )
+        # dimensions are (kfolds, train vs valid, datasets tuple, batches, samples)
+        # previously, dimensions were (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
+
         if dp.run_test:
-            xtest, ytest, xcontest, ycontest, idcontest, _ = data.load_data(filepath_test, filepath_test_pos, filepath_test_val, device, subset=-1)
-            testdata = [xtest, ytest, xcontest, ycontest, idcontest]
+            testdata = chunked_dataset.TestCSVDataset(base_filepath, filenames, dp.minibatch_examples)
+            print(f"Test samples: {testdata.total_samples}")
         else:
             testdata = None
-        if dp.data_validation_samples > 0:
-            data_folded = data.split_data([x, y, xcon, ycon, idcon], dp.data_validation_samples)
-        else:
-            data_folded = data.fold_data([x, y, xcon, ycon, idcon], dp.kfolds)  
-            data_folded = [data_folded[dp.whichfold]] if dp.whichfold >= 0 else data_folded  # only run a single fold based on args
-        # whether in K-Folds or split validation set, data_folded dimensions are (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
         
-        # assert (data.check_leakage(data_folded))
-        # assert(data.check_simplex(y))
-        # assert(data.check_finite(y))
+        print('-' * 50 + '\n')
 
-        print('dataset:', filepath_train)
-        print(f'using {dp.data_subset} samples, which is {dp.data_fraction * 100}% of the data')
-        print(f'data shape: {x.shape}\n')
-        print(f'training data shape: {data_folded[0][0][0].shape}')
-        print(f'condensed training shape: {data_folded[0][2][0].shape}\n')
-        print(f'validation data shape: {data_folded[0][0][1].shape}')
-        print(f'condensed validation shape: {data_folded[0][2][1].shape}\n')
-        if dp.run_test:
-            print(f'test data shape: {xtest.shape}')
-            print(f'test condensed data shape: {xcontest.shape}\n')
+        # # assert (data.check_leakage(data_folded))
+        # # assert(data.check_simplex(y))
+        # # assert(data.check_finite(y))
 
         
         # specify loss function
@@ -346,12 +355,12 @@ def main():
 
         # Establish baseline performance and add to plots
         identity_model = models_baseline.ReturnInput()
-        identity_loss, identity_score, identity_distro_error = expt.validate_epoch(identity_model, [x, y], 100,  # TODO: using 100 instead of hp.minibatch_examples, because this model doesn't learn so the only concern is computational throughput.
+        identity_loss, identity_score, identity_distro_error = expt.validate_epoch(identity_model, False, data_folded[0][1], 100,  # using 100 instead of hp.minibatch_examples, because this model doesn't learn so the only concern is computational throughput.
                                                                         [0.0, 1.0], loss_fn, score_fn, distr_error_fn,
                                                                         device)
         print(f"\n\nIDENTITY MODEL loss: {identity_loss}, score: {identity_score}\n\n")
-        plotstream.plot_horizontal_line(f"loss {dp.dataset}", identity_loss, f"Identity")
-        # plotstream.plot_horizontal_line(f"score {dp.dataset}", identity_score, f"Identity")
+        plotstream.plot_horizontal_line(f"loss {dp.y_dataset}", identity_loss, f"Identity")
+        # plotstream.plot_horizontal_line(f"score {dp.y_dataset}", identity_score, f"Identity")
 
         # loop through possible combinations of generic hyperparams
         for hp in hpbuilder.parse_and_generate_combinations():
@@ -359,7 +368,7 @@ def main():
             # things that are needed for reporting an exception, so they go before the try block
             jobid_substring = int(hp.jobid.split('_')[0])
             jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
-            filepath_out_expt = f'results/expt/{dp.dataset}{jobstring}_experiments.csv'
+            filepath_out_expt = f'results/expt/{dp.y_dataset}{jobstring}_experiments.csv'
             num_params = -1
             optdict = {"epoch": -1, "mini_epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
                     "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
@@ -369,10 +378,11 @@ def main():
             val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
             trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
 
-            # try:
-            if True:
+            # if True:
+            try:
                 # computed hyperparams
-                _, hp.data_dim = x.shape
+                hp.data_dim = dense_columns
+                hp.sparse_data_dim = sparse_columns
                 hp.WD = hp.lr * hp.wd_factor
                 hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
                 hp.model_config = f"{hp.model_name}_{dp.data_configid}x{hp.configid}"
@@ -388,7 +398,7 @@ def main():
                 assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
                 
                 
-                reeval_train = True # False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
+                reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
                 
                 
                 model_constr = models[hp.model_name]
@@ -399,9 +409,9 @@ def main():
                 scaler = torch.cuda.amp.GradScaler()
                 
                 # time steps for ODE solvers (currently unused due to precomputing them and loading from file)
-                # ode_timemax = 1.0
-                # ode_stepsize = ode_timemax / hp.ode_timesteps
-                # timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
+                ode_timemax = 1.0
+                ode_stepsize = ode_timemax / hp.ode_timesteps
+                timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
                 
                 # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
                 # Model dictionary. Hyperparam override(s)
@@ -450,8 +460,8 @@ def main():
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
                     hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
-                    dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, hp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                    dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
+                    hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
                 )
                 
@@ -507,25 +517,26 @@ def main():
                                         prefix="\n=======================================================EXPERIMENT========================================================\n",
                                         suffix="\n=========================================================================================================================\n")
                 
-            # except Exception as e:
-            #     stream.stream_scores(filepath_out_expt, True, True, True,
-            #                     "mean_val_loss", -1,
-            #                     "mean_val_loss @ epoch", -1,
-            #                     "mean_val_loss @ mini-epoch", -1,
-            #                     "mean_val_loss @ time", -1,
-            #                     "mean_val_loss @ trn_loss", -1,
-            #                     "identity loss", identity_loss,
-            #                     "model parameters", num_params,
-            #                     "fold", -1,
-            #                     "device", device,
-            #                     "solver", os.environ["SOLVER"],
-            #                     *unrolldict(dp),  # unroll the data params dictionary
-            #                     *unrolldict(hp),  # unroll the hyperparams dictionary
-            #                     *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-            #                                 trn_score_optims[0]),
-            #                     prefix="\n=======================================================EXPERIMENT========================================================\n",
-            #                     suffix="\n=========================================================================================================================\n")
-            #     print(f"Model {hp.model_name} failed with error:\n{e}")
+            except Exception as e:
+                stream.stream_scores(filepath_out_expt, True, True, True,
+                                "mean_val_loss", -1,
+                                "mean_val_loss @ epoch", -1,
+                                "mean_val_loss @ mini-epoch", -1,
+                                "mean_val_loss @ time", -1,
+                                "mean_val_loss @ trn_loss", -1,
+                                "identity loss", identity_loss,
+                                "model parameters", num_params,
+                                "fold", -1,
+                                "device", device,
+                                "solver", os.environ["SOLVER"],
+                                *unrolldict(dp),  # unroll the data params dictionary
+                                *unrolldict(hp),  # unroll the hyperparams dictionary
+                                *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                            trn_score_optims[0]),
+                                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                suffix="\n=========================================================================================================================\n")
+                print(f"Model {hp.model_name} failed with error:\n{e}")
+                traceback.print_exc()
     
     print("\n\nDONE")
     plotstream.wait_for_plot_exit()

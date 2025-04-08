@@ -27,6 +27,10 @@ class EpochManager(ABC):
     def get_supplemental(self):
         pass
 
+    @abstractmethod
+    def set_baseline(self, metrics):
+        pass
+
 
 class FixedManager(EpochManager):
     """Manager that runs for a fixed number of epochs"""
@@ -47,6 +51,9 @@ class FixedManager(EpochManager):
     
     def get_supplemental(self):
         return {}
+    
+    def set_baseline(self, metrics):
+        return
 
 
 def is_finite_number(number):
