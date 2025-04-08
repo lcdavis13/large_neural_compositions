@@ -652,7 +652,8 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
     filepath_out_fold = f'results/folds/{model_config}_{dataname}{jobstring}_folds.csv'
     
     # LR_start_factor = 0.1 # OneCycle
-    LR_start_factor = 1.0  # everything else
+    # LR_start_factor = 1.0  # everything else
+    LR_start_factor = 0.0
     
     val_loss_optims = []
     val_score_optims = []
@@ -700,6 +701,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
         # base_scheduler = OneCycleLR(
         #     optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
         #     final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
+        base_scheduler = lr_schedule.DirectToZero(optimizer, peak_lr=LR, update_steps=max_epochs*mini_epoch_size//minibatch_examples, warmup_proportion=0.1)
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR * LR_start_factor)
         
         print(f"Fold {fold_num + 1}/{kfolds}")

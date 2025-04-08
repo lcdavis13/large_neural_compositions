@@ -28,6 +28,35 @@ class ExponentialLR(torch.optim.lr_scheduler.LRScheduler):
     
     def get_lr(self):
         return [group['lr'] * self.step_lr_factor for group in self.optimizer.param_groups]
+    
+
+class DirectToZero(torch.optim.lr_scheduler.LRScheduler):
+    def __init__(self, optimizer, peak_lr, update_steps, warmup_proportion=0.1):
+        
+        self.optimizer = optimizer
+        self.peak_lr = peak_lr
+        self.update_steps = update_steps
+        self.warmup_proportion = warmup_proportion
+        self.warmup_steps = int(update_steps * warmup_proportion)
+
+        self.stepnum = 0
+        
+        super().__init__(optimizer)
+
+    def step(self):
+        self.stepnum += 1
+
+        if self.stepnum < self.warmup_steps:
+            lr = self.peak_lr * (self.stepnum / self.warmup_steps)
+        else:
+            lr = self.peak_lr * (1 - (self.stepnum - self.warmup_steps) / (self.update_steps - self.warmup_steps))
+        
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+
+    def get_lr(self):
+        return [group['lr'] for group in self.optimizer.param_groups]
+
 
 
 class LRScheduler:

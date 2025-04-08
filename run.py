@@ -138,7 +138,8 @@ def main():
                         "256-random",
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
-                        1, 10, 100, 1000, 10000, #100000, 
+                        # 1000,
+                        1, 10, 100, 1000, 10000, 100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -185,7 +186,10 @@ def main():
                         help="patience for early stopping")
     
     # Optimizer params
-    hpbuilder.add_param("lr", 0.01, #0.032, 0.001, 0.00032,   
+    hpbuilder.add_param("lr", 
+                        0.1, 0.032, 0.01, 0.0032, 
+                        # 0.32, 0.1, 0.032, 0.01, 0.0032,
+                        # 0.32, 0.1, 0.032, 0.01, 0.0032, #0.001, 0.00032,   
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
