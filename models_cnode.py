@@ -39,6 +39,11 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
     def __init__(self, N, bias):
         super().__init__()
         self.fcc1 = nn.Linear(N, N, bias=bias)
+        
+        # Initialize weights and biases to zero
+        nn.init.zeros_(self.fcc1.weight)
+        if bias:
+            nn.init.zeros_(self.fcc1.bias)
     
     def forward(self, t, x):
         fx = self.fcc1(x)  # B x N

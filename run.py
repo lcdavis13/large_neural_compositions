@@ -139,7 +139,9 @@ def main():
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
                         # 1000,
-                        1, 10, 100, 1000, 10000, 100000, 
+                        10000, 
+                        # 100000, 
+                        # 1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -162,7 +164,10 @@ def main():
                        help="run without plotting")
     
     # experiment params
-    hpbuilder.add_param("epochs", 200, 
+    hpbuilder.add_param("epochs", 
+                        # 6, 20, 64, 200, 
+                        64, 
+                        # 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
@@ -172,6 +177,14 @@ def main():
                         help="number of minibatches to accumulate before stepping")
     hpbuilder.add_param("run_test", True,
                         category=datacat, help="run the test set after training")
+    hpbuilder.add_param("use_best_model", 
+                        # True,
+                        False,
+                        help="whether or not to use the best model for testing")
+    hpbuilder.add_param("reeval_training_set_epoch", False,
+                        help="whether or not to re-evaluate the training set after each epoch")
+    hpbuilder.add_param("reeval_training_set_final", True,
+                        help="whether or not to re-evaluate the training set after the final epoch")
     
     hpbuilder.add_param("epoch_manager", 
                         "Fixed", 
@@ -185,9 +198,13 @@ def main():
     hpbuilder.add_param("patience", 5, 
                         help="patience for early stopping")
     
+    
     # Optimizer params
     hpbuilder.add_param("lr", 
-                        0.1, 0.032, 0.01, 0.0032, 
+                        # 0.1, 
+                        0.001,
+                        # 1.0, 0.32, 0.1, 0.032, 
+                        # 0.01, 0.0032, 0.001, 0.00032, 0.0001, 
                         # 0.32, 0.1, 0.032, 0.01, 0.0032,
                         # 0.32, 0.1, 0.032, 0.01, 0.0032, #0.001, 0.00032,   
                         help="learning rate")
@@ -199,15 +216,22 @@ def main():
                         help="noise level")
     
     # Data augmentation params
-    hpbuilder.add_param("ode_timesteps", 15, 
-                        help="number of ODE timesteps")
+    # hpbuilder.add_param("ode_timesteps", 15, 
+    #                     help="number of ODE timesteps")
+    hpbuilder.add_param("ode_timesteps_file", 
+                        "t.csv",
+                        # "t_linear.csv",
+                        # "t_shortlinear.csv",
+                        help="ODE integration timesteps file")
     hpbuilder.add_param("interpolate", False, 
                         help="whether or not to use supervised interpolation steps")
     hpbuilder.add_param("interpolate_noise", False,
                         help="whether or not to use independent noise for interpolation")
     
     # Model architecture params
-    hpbuilder.add_param("cnode_bias", True, 
+    hpbuilder.add_param("cnode_bias", 
+                        True, 
+                        # False,
                         help="whether or not to use a bias term when predicting fitness in cNODE and similar models")
     hpbuilder.add_param("num_heads", 2, 
                         help="number of attention heads in transformer-based models")
@@ -304,10 +328,6 @@ def main():
         "AdaptiveValPlateau": lambda args: epoch_managers.AdaptiveValPlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.epochs, patience=args.patience),
     }
 
-    # load timesteps from file
-    time_path = "t.csv"
-    # timesteps = pd.read_csv(time_path, header=None).values.flatten()
-
     # loop through possible combinations of dataset hyperparams
     for dp in hpbuilder.parse_and_generate_combinations(category=datacat):
 
@@ -401,21 +421,19 @@ def main():
 
                 assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
                 
-                
-                reeval_train = False # hp.interpolate or hp.noise > 0.0 # This isn't a general rule, you might want to do this for other reasons. But it's an easy way to make sure training loss curves are readable.
-                
-                
                 model_constr = models[hp.model_name]
                 epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
                 
                 
                 # scaler = torch.amp.GradScaler(device)
                 scaler = torch.cuda.amp.GradScaler()
-                
-                # time steps for ODE solvers (currently unused due to precomputing them and loading from file)
-                ode_timemax = 1.0
-                ode_stepsize = ode_timemax / hp.ode_timesteps
-                timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
+
+                # load timesteps from file
+                print(f"Loading time steps from {hp.ode_timesteps_file}")
+                timesteps = pd.read_csv(hp.ode_timesteps_file, header=None).values.flatten()
+                # ode_timemax = 100.0
+                # ode_stepsize = ode_timemax / hp.ode_timesteps
+                # timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
                 
                 # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
                 # Model dictionary. Hyperparam override(s)
@@ -466,7 +484,8 @@ def main():
                     hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
                     hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-                    reptile_rewind=(1.0 - hp.reptile_lr), reeval_train=reeval_train, whichfold=dp.whichfold, jobstring=jobstring
+                    reptile_rewind=(1.0 - hp.reptile_lr), reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
+                    whichfold=dp.whichfold, jobstring=jobstring, use_best_model=hp.use_best_model
                 )
                 
                 # print all folds

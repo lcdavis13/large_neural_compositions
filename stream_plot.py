@@ -21,7 +21,7 @@ _color_list_standard = [
 
     # Pastels
     'xkcd:pastel blue', 'xkcd:pastel orange', 'xkcd:pastel green',
-    'xkcd:pastel red', 'xkcd:pastel purple', 'xkcd:pastel brown',
+    'xkcd:pastel red', 'xkcd:pastel purple', #'xkcd:pastel brown',
     'xkcd:pastel pink', 'xkcd:light grey', 'xkcd:pastel yellow',
 
     # Bonus vivid colors

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from dotsy import ency
 import torch
@@ -39,6 +40,11 @@ class Optimum(ency):
         if best:
             self.dict = dict.copy()
             if model is not None:
+                # make sure path exists
+                folder = os.path.dirname(model_path)
+                if folder and not os.path.exists(folder):
+                    os.makedirs(folder)
+
                 torch.save(model.state_dict(), model_path)  # Save model parameters
             
         return best

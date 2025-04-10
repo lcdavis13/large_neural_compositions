@@ -70,6 +70,12 @@ def start_or_append(file_started, filename, names, values_batch):
         values_batch (list of lists): Batch of rows to write.
     """
     mode = 'a' if file_started else 'w'
+    
+    # Ensure the folder exists
+    folder = os.path.dirname(filename)
+    if folder and not os.path.exists(folder):
+        os.makedirs(folder)
+
     with open(filename, mode, newline='') as csvfile:
         writer = csv.writer(csvfile)
 
@@ -99,6 +105,12 @@ def update_or_append(file_started, filename, names, values_batch):
         if not os.path.exists(filename):
             # Create a DataFrame with the given names and values
             df = pd.DataFrame(values_batch, columns=names)
+            
+            # ensure folder exists
+            folder = os.path.dirname(filename)
+            if folder and not os.path.exists(folder):
+                os.makedirs(folder)
+
             # Write the DataFrame to the CSV file
             df.to_csv(filename, index=False)
         else:

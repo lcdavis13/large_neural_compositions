@@ -96,7 +96,7 @@ def validate_epoch(model, requires_condensed, data_val, minibatch_examples, t, l
     return avg_loss, avg_score, avg_penalty
 
 
-def run_test(model, requires_condensed, model_name, model_config, epoch, mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time):
+def run_test(model, requires_condensed, model_name, model_config, epoch, mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time, train_loss=-1.0, val_loss=-1.0):
     l_test, score_test, p_test = validate_epoch(model, requires_condensed, data_test, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
     stream.stream_results(filepath_out_test, True, True, True,
                             "model_name", model_name,
@@ -107,6 +107,8 @@ def run_test(model, requires_condensed, model_name, model_config, epoch, mini_ep
                             "Avg Test Loss", l_test,
                             "Avg DKI Test Loss", score_test,
                             "Avg Test Distr Error", p_test,
+                            "Avg Train Loss", train_loss,
+                            "Avg Validation Loss", val_loss,
                             "Elapsed Time", elapsed_time,
                             "VRAM (GB)", gpu_memory_reserved / (1024 ** 3),
                             "Peak RAM (GB)", cpuRam / (1024 ** 3),
@@ -456,7 +458,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
                model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, outputs_per_epoch=10, verbosity=1,
-               reptile_rate=0.0, reeval_train=False, jobstring=""):
+               reptile_rate=0.0, reeval_train_epoch=False, reeval_train_final=True, jobstring="", use_best_model=True):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
     epoch = 0
@@ -528,7 +530,10 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
             "metric": p_val, "stop_metric": manager.get_metric(), "stop_threshold": manager.get_threshold()}
     # track various optima
     model_path = f'results/models/{model_config}_{dataname}_fold{fold}_job{jobstring}.pt'
-    val_opt.track_best(dict, model=model, model_path=model_path)
+    if use_best_model:
+        val_opt.track_best(dict, model=model, model_path=model_path)
+    else:
+        val_opt.track_best(dict)
     valscore_opt.track_best(dict)
     trn_opt.track_best(dict)
     trnscore_opt.track_best(dict)
@@ -563,13 +568,12 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         l_val, score_val, p_val = validate_epoch(model, requires_condensed, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                                  distr_error_fn, device)
         
-        #TODO: This is hanging for a long time (forever?). I think it's either trying to run the entire 100k samples, or it's just loading the data inefficiently somehow. Removing for now.
-        # if reeval_train:
-        #     print("Re-evaluating training score")
-        #     l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn,
-        #                                              distr_error_fn, device)
-        # else:
-        #     score_trn = -1.0
+        if reeval_train_epoch:
+            print("Re-evaluating training score")
+            l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn,
+                                                     distr_error_fn, device)
+        else:
+            score_trn = -1.0
 
         score_trn = -1.0
         
@@ -635,10 +639,16 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         # time to stop: optionally load model and run test.
         if should_stop:
             print("===Stopping training===")
-            if data_test:
-                print("Running test")
-                model.load_state_dict(torch.load(model_path, weights_only=True))
-                run_test(model, requires_condensed, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time)
+            if data_test or reeval_train_final:
+                if use_best_model:
+                    model.load_state_dict(torch.load(model_path, weights_only=True))
+                if reeval_train_final:
+                    print("Re-evaluating final training score")
+                    l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn, distr_error_fn, device)
+                    print(f"Final Training Loss: {l_trn}, Final Validation Loss: {l_val}")
+                if data_test:
+                    print("Running test")
+                    run_test(model, requires_condensed, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time, train_loss=l_trn, val_loss=l_val)
             break
     
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
@@ -647,13 +657,13 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_test, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs, mini_epoch_size, 
                         minibatch_examples, model_constr, epoch_manager_constr, model_args, model_name, model_config, dataname, timesteps, loss_fn,
-                        score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train=False,
-                        whichfold=-1, jobstring=""):
+                        score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train_epoch=False, reeval_train_final=True,
+                        whichfold=-1, jobstring="", use_best_model=True):
     filepath_out_fold = f'results/folds/{model_config}_{dataname}{jobstring}_folds.csv'
     
     # LR_start_factor = 0.1 # OneCycle
-    # LR_start_factor = 1.0  # everything else
-    LR_start_factor = 0.0
+    # LR_start_factor = 1.0  # constantLR
+    LR_start_factor = 0.0 # warm up
     
     val_loss_optims = []
     val_score_optims = []
@@ -695,7 +705,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
 
         
         # steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
-        base_scheduler = lr_schedule.ConstantLR(optimizer)
+        # base_scheduler = lr_schedule.ConstantLR(optimizer)
         # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
         #                                    threshold_mode='rel', threshold=0.01)
         # base_scheduler = OneCycleLR(
@@ -713,8 +723,9 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
             distr_error_fn, device, mini_epoch_size,
             outputs_per_epoch=10, verbosity=verbosity - 1,
             reptile_rate=reptile_rewind,
-            reeval_train=reeval_train,
-            jobstring=jobstring
+            reeval_train_epoch=reeval_train_epoch, reeval_train_final=reeval_train_final,
+            jobstring=jobstring, 
+            use_best_model=True
         )
         
 
