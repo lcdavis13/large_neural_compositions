@@ -61,10 +61,17 @@ class ConstOutput(nn.Module):
 
 class ConstOutputFilteredNormalized(nn.Module):
     # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
-    def __init__(self, N):
+    def __init__(self, N, identity_gate):
         super().__init__()
         self.f = nn.Parameter(torch.randn(N))
-    
+
+        if identity_gate:
+            self.gateA = nn.Parameter(torch.tensor(0.0))
+            self.gateB = nn.Parameter(torch.tensor(1.0))
+        else:
+            self.register_buffer('gateA', torch.tensor(1.0))
+            self.register_buffer('gateB', torch.tensor(0.0))
+
     def forward(self, x):
         # x is assumed to be batched with shape (batch_size, input_dim)
         batch_size = x.shape[0]
@@ -72,18 +79,20 @@ class ConstOutputFilteredNormalized(nn.Module):
         
         f = self.f.unsqueeze(0).expand(batch_size, -1)  # Repeat f for each batch element
         
+        gated_f = self.gateA*f + self.gateB*x
+        
         # Apply mask: we need to do this for each batch element separately
         mask = x != 0  # Shape: (batch_size, input_dim)
         
         # Masking and normalization per batch element
-        y = torch.zeros_like(f)  # This will hold the output
+        y = torch.zeros_like(gated_f)  # This will hold the output
         
         for i in range(batch_size):
-            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            f_selected = gated_f[i, mask[i]]  # Select only the unmasked values for this batch element
             if f_selected.numel() > 0:  # If there are any unmasked elements
                 f_normalized = f_selected / f_selected.sum()  # Normalize
                 y[i, mask[i]] = f_normalized  # Assign normalized values back
-        
+
         return y
 
 
@@ -169,11 +178,18 @@ class SLPSumFilteredNormalized(nn.Module):
 
 class SLPMultFilteredNormalized(nn.Module):
     # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
-    def __init__(self, N, M):
+    def __init__(self, N, M, identity_gate):
         super().__init__()
         self.f1 = nn.Linear(N, M)
         self.relu = nn.ReLU()
         self.f2 = nn.Linear(M, N)
+
+        if identity_gate:
+            self.gateA = nn.Parameter(torch.tensor(0.0))
+            self.gateB = nn.Parameter(torch.tensor(1.0))
+        else:
+            self.register_buffer('gateA', torch.tensor(1.0))
+            self.register_buffer('gateB', torch.tensor(0.0))
     
     def forward(self, x):
         # x is assumed to be batched with shape (batch_size, input_dim)
@@ -184,15 +200,17 @@ class SLPMultFilteredNormalized(nn.Module):
         f = self.relu(f)
         f = self.f2(f)
         f = x * f
+
+        gated_f = self.gateA*f + self.gateB*x
         
         # Apply mask: we need to do this for each batch element separately
         mask = x != 0  # Shape: (batch_size, input_dim)
         
         # Masking and normalization per batch element
-        y = torch.zeros_like(f)  # This will hold the output
+        y = torch.zeros_like(gated_f)  # This will hold the output
         
         for i in range(batch_size):
-            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
+            f_selected = gated_f[i, mask[i]]  # Select only the unmasked values for this batch element
             if f_selected.numel() > 0:  # If there are any unmasked elements
                 f_normalized = f_selected / f_selected.sum()  # Normalize
                 y[i, mask[i]] = f_normalized  # Assign normalized values back
@@ -312,9 +330,9 @@ class SingleLayerFilteredSummed(nn.Module):
 class cNODE1_singlestep(nn.Module):
     # cNODE1, but instead of solving the ODE fixed point, it takes one single step of the replicator equation.
     
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, init_zero, identity_gate):
         super().__init__()
-        self.func = models_cnode.ODEFunc_cNODE1(N, bias)
+        self.func = models_cnode.ODEFunc_cNODE1(N, bias, init_zero=init_zero, identity_gate=identity_gate)
     
     def forward(self, x):
         dxdt = self.func([0.0], x)
@@ -336,10 +354,24 @@ class SLPODE(nn.Module):
 
 class ODEFunc_cNODE0(nn.Module):
     # identical to ConstReplicator, except in ODE form; it returns the derivative instead of the next state.
-    def __init__(self, N):
+    def __init__(self, N, init_zero=True, identity_gate=False):
         super().__init__()
-        self.f = nn.Parameter(torch.randn(N))
+        self.f = nn.Parameter(torch.rand(N))
+        
+        if not identity_gate:
+            self.register_buffer('gate', torch.tensor(1.0)) # Make sure this has the same name as the parameter version
+        
+        if init_zero:
+            # Initialize weights and biases to zero (this is the original approach from the paper)
+            nn.init.zeros_(self.f)
+
+            if identity_gate:
+                self.gate = nn.Parameter(torch.tensor(1.0)) # modified identity_gate for when init_zero is used. Otherwise there would be symmetry and model couldn't learn. In the hypothetical where identity_gate gate provides some benefit beyond the initialization to zero, this can capture that benefit when init_zero is used.
+        else:
+            if identity_gate:
+                self.gate = nn.Parameter(torch.tensor(0.0)) # regular identity_gate, when init_zero isn't used
     
+
     def forward(self, t, x):
         fx = self.f.expand(x.size(0), -1)  # B x N
         
@@ -347,16 +379,16 @@ class ODEFunc_cNODE0(nn.Module):
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt  # B x N
+        return self.gate*dxdt  # B x N
 
 
 class cNODE0(nn.Module):
     # cNODE where "F(x)" does not depend on x. In other words, it learns a fixed fitness value for each species regardless of which species are actually present.
-    def __init__(self, N):
+    def __init__(self, N, init_zero, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODE0(N)
+        self.func = ODEFunc_cNODE0(N, init_zero=init_zero, identity_gate=identity_gate)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -365,9 +397,9 @@ class cNODE0(nn.Module):
 
 class cNODE0_singlestep(nn.Module):
     # Identical to cNODE0 but instead of solving the ODE fixed point, it takes one single step of the replicator equation.
-    def __init__(self, N):
+    def __init__(self, N, init_zero, identity_gate):
         super().__init__()
-        self.func = ODEFunc_cNODE0(N)
+        self.func = ODEFunc_cNODE0(N, init_zero=init_zero, identity_gate=identity_gate)
     
     def forward(self, x):
         dxdt = self.func([0.0], x)

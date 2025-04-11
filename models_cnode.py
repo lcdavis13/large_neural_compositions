@@ -5,11 +5,16 @@ import torch.nn as nn
 from ode_solver import odeint
 
 class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, identity_gate=False):
         super().__init__()
         self.fcc1 = nn.Linear(N, N, bias=bias)
         # self.bn1 = nn.BatchNorm1d(N)
         self.fcc2 = nn.Linear(N, N, bias=bias)
+        
+        if identity_gate:
+            self.gate = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_buffer('gate', torch.tensor(1.0)) # Make sure this has the same name as the parameter version
     
     def forward(self, t, x):
         fx = self.fcc1(x)  # B x N
@@ -20,15 +25,17 @@ class ODEFunc_cNODE2(nn.Module): # optimized implementation of cNODE2
         diff = fx - xT_fx # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt # B x N
+        gated_dxdt = self.gate * dxdt  # B x N
+
+        return gated_dxdt # B x N
     
     
 class cNODE2(nn.Module):
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, identity_gate=False):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODE2(N, bias=bias)
+        self.func = ODEFunc_cNODE2(N, bias=bias, identity_gate=identity_gate)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -36,14 +43,24 @@ class cNODE2(nn.Module):
 
 
 class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, init_zero=True, identity_gate=False):
         super().__init__()
         self.fcc1 = nn.Linear(N, N, bias=bias)
         
-        # Initialize weights and biases to zero
-        nn.init.zeros_(self.fcc1.weight)
-        if bias:
-            nn.init.zeros_(self.fcc1.bias)
+        if not identity_gate:
+            self.register_buffer('gate', torch.tensor(1.0)) # Make sure this has the same name as the parameter version
+        
+        if init_zero:
+            # Initialize weights and biases to zero (this is the original approach from the paper)
+            nn.init.zeros_(self.fcc1.weight)
+            if bias:
+                nn.init.zeros_(self.fcc1.bias)
+
+            if identity_gate:
+                self.gate = nn.Parameter(torch.tensor(1.0)) # modified identity_gate for when init_zero is used. Otherwise there would be symmetry and model couldn't learn. In the hypothetical where identity_gate gate provides some benefit beyond the initialization to zero, this can capture that benefit when init_zero is used.
+        else:
+            if identity_gate:
+                self.gate = nn.Parameter(torch.tensor(0.0)) # regular identity_gate, when init_zero isn't used
     
     def forward(self, t, x):
         fx = self.fcc1(x)  # B x N
@@ -54,16 +71,18 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
         # print(f"shape of xT_fx: {xT_fx.shape}")
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
+
+        gated_dxdt = self.gate * dxdt  # B x N
         
-        return dxdt  # B x N
+        return gated_dxdt  # B x N
 
 
 class cNODE1(nn.Module):
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, init_zero=True, identity_gate=False):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODE1(N, bias=bias)
+        self.func = ODEFunc_cNODE1(N, bias=bias, init_zero=init_zero, identity_gate=identity_gate)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -71,9 +90,14 @@ class cNODE1(nn.Module):
 
 
 class ODEFunc_cNODEGen_ConstructedFitness(nn.Module):  # cNODE2 with generalized f(x), specified via a constructor for the f(x) object passed during construction
-    def __init__(self, f_constr):
+    def __init__(self, f_constr, identity_gate=True):
         super().__init__()
         self.f = f_constr()
+        
+        if identity_gate:
+            self.gate = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_buffer('gate', torch.tensor(1.0)) # Make sure this has the same name as the parameter version
     
     def forward(self, t, x):
         fx = self.f(x)  # B x N
@@ -82,15 +106,15 @@ class ODEFunc_cNODEGen_ConstructedFitness(nn.Module):  # cNODE2 with generalized
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt  # B x N
+        return self.gate * dxdt  # B x N
     
     
 class cNODEGen_ConstructedFitness(nn.Module):
-    def __init__(self, f_constr):
+    def __init__(self, f_constr, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODEGen_ConstructedFitness(f_constr)
+        self.func = ODEFunc_cNODEGen_ConstructedFitness(f_constr, identity_gate=identity_gate)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t) #, rtol=1e-10, atol=1e-12)[-1] # can increase tolerance when model is too stiff (underflows)
@@ -98,12 +122,13 @@ class cNODEGen_ConstructedFitness(nn.Module):
 
 
 class cNODE_HourglassFitness(nn.Module):
-    def __init__(self, data_dim, hidden_dim, depth, bias=True):
+    def __init__(self, data_dim, hidden_dim, depth, bias=True, identity_gate=True):
         self.USES_ODEINT = True
         super().__init__()
         
         self.func = ODEFunc_cNODEGen_ConstructedFitness(
-            lambda: self.construct_fitness(data_dim, hidden_dim, depth, bias)
+            lambda: self.construct_fitness(data_dim, hidden_dim, depth, bias), 
+            identity_gate=identity_gate
         )
     
     def forward(self, t, x):
@@ -147,9 +172,14 @@ class cNODE_HourglassFitness(nn.Module):
 
 
 class ODEFunc_cNODEGen_FnFitness(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
-    def __init__(self, f):
+    def __init__(self, f, identity_gate):
         super().__init__()
         self.f = f
+
+        if identity_gate:
+            self.gate = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_buffer('gate', torch.tensor(1.0))
     
     def forward(self, t, x):
         fx = self.f(x)  # B x N
@@ -158,14 +188,14 @@ class ODEFunc_cNODEGen_FnFitness(nn.Module):  # cNODE2 with generalized f(x), sp
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt  # B x N
+        return self.gate*dxdt  # B x N
     
 class cNODEGen_FnFitness(nn.Module):
-    def __init__(self, f):
+    def __init__(self, f, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODEGen_FnFitness(f)
+        self.func = ODEFunc_cNODEGen_FnFitness(f, identity_gate=identity_gate)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -173,9 +203,14 @@ class cNODEGen_FnFitness(nn.Module):
 
 
 class ODEFunc_cNODEGen_FnFitness_Args(nn.Module):  # cNODE2 with generalized f(x), specified at construction, but constructed externally (if necessary)
-    def __init__(self, f):
+    def __init__(self, f, identity_gate):
         super().__init__()
         self.f = f
+
+        if identity_gate:
+            self.gate = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_buffer('gate', torch.tensor(1.0))
     
     def forward(self, t, x, args):
         fx = self.f(x, args)  # B x N
@@ -184,11 +219,11 @@ class ODEFunc_cNODEGen_FnFitness_Args(nn.Module):  # cNODE2 with generalized f(x
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt  # B x N
+        return self.gate*dxdt  # B x N
 
     
 class cNODE2_FnFitness(nn.Module):
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()
@@ -196,7 +231,7 @@ class cNODE2_FnFitness(nn.Module):
             nn.Linear(N, N, bias=bias),
             nn.Linear(N, N, bias=bias)
         )
-        self.func = ODEFunc_cNODEGen_FnFitness(f)
+        self.func = ODEFunc_cNODEGen_FnFitness(f, identity_gate=identity_gate)
     
     def forward(self, t, x):
         y = odeint(self.func, x, t)
@@ -206,23 +241,28 @@ class cNODE2_FnFitness(nn.Module):
 class ODEFunc_cNODEGen_ExternalFitness(nn.Module):  # cNODE2 with generalized f(x0), computed by calling context at runtime
     # Note that, while f(x0) can be a function of the initial vector x0, it cannot be a function of the evolving value x
     # as the ODE is evaluated, unlike normal implementations of cNODE.
-    def __init__(self):
-       super(ODEFunc_cNODEGen_ExternalFitness, self).__init__()
+    def __init__(self, identity_gate):
+        super().__init__()
+
+        if identity_gate:
+            self.gate = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_buffer('gate', torch.tensor(1.0))
     
     def forward(self, t, x, fx0):
         xT_fx = torch.sum(x * fx0, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
         diff = fx0 - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt  # B x N
+        return self.gate*dxdt  # B x N
 
 
 class cNODE2_ExternalFitness(nn.Module):
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODEGen_ExternalFitness()
+        self.func = ODEFunc_cNODEGen_ExternalFitness(identity_gate=identity_gate)
         self.fcc1 = nn.Linear(N, N, bias=bias)
         self.fcc2 = nn.Linear(N, N, bias=bias)
     
@@ -237,8 +277,13 @@ class ODEFunc_cNODEGen_ExternalFitnessFn(nn.Module):
     # cNODE2 with generalized f(x0), computed by calling context at runtime
     # Note that, while f(x0) can be a function of the initial vector x0, it cannot be a function of the evolving value x
     # as the ODE is evaluated, unlike normal implementations of cNODE.
-    def __init__(self):
+    def __init__(self, identity_gate):
         super().__init__()
+
+        if identity_gate:
+            self.gate = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_buffer('gate', torch.tensor(1.0))
     
     def forward(self, t, x, Fn):
         fitness = Fn(x)
@@ -246,15 +291,15 @@ class ODEFunc_cNODEGen_ExternalFitnessFn(nn.Module):
         diff = fitness - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
         
-        return dxdt  # B x N
+        return self.gate*dxdt  # B x N
 
 
 class cNODE2_ExternalFitnessFn(nn.Module):
-    def __init__(self, N, bias):
+    def __init__(self, N, bias, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()
-        self.func = ODEFunc_cNODEGen_ExternalFitnessFn()
+        self.func = ODEFunc_cNODEGen_ExternalFitnessFn(identity_gate=identity_gate)
         self.Fn = nn.Linear(N, N, bias=bias)
     
     def forward(self, t, x):

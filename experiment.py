@@ -118,10 +118,10 @@ def run_test(model, requires_condensed, model_name, model_config, epoch, mini_ep
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
-def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
+def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, mini_epoch_size, full_epoch_size, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
                 outputs_per_mini_epoch, 
                 prev_examples, prev_updates, fold, epoch_num, mini_epoch_num, model_config, dataname, loss_fn, score_fn, distr_error_fn, device,
-                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1, mini_epoch_size=-1):
+                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
     model.train()
     
     total_loss = 0
@@ -131,9 +131,7 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
         minibatches = ceildiv(mini_epoch_size, minibatch_examples)
         loop_batches = True
     else:
-        # total_samples = data_train[0].size(0)
-        epoch_sample_num = 0  # TODO: fix
-        minibatches = ceildiv(epoch_sample_num, minibatch_examples)
+        minibatches = ceildiv(full_epoch_size, minibatch_examples)
         loop_batches = False
     
     new_examples = 0
@@ -457,7 +455,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 
 def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
-               model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, outputs_per_epoch=10, verbosity=1,
+               model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, full_epoch_size, outputs_per_epoch=10, verbosity=1,
                reptile_rate=0.0, reeval_train_epoch=False, reeval_train_final=True, jobstring="", use_best_model=True):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
@@ -544,12 +542,12 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 
     while True:
         l_trn, p_trn, train_examples_seen, update_steps, epoch, epoch_data_iterator = train_mini_epoch(
-            model, requires_condensed, epoch_data_iterator, data_train, minibatch_examples,
+            model, requires_condensed, epoch_data_iterator, data_train, mini_epoch_size, full_epoch_size, minibatch_examples,
             accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
             outputs_per_epoch, train_examples_seen, update_steps, 
             fold, epoch, manager.epoch, model_config, dataname, loss_fn, score_fn,
             distr_error_fn, device, filepath_out_incremental,
-            lr_plot="Learning Rate", verbosity=verbosity - 1, mini_epoch_size=mini_epoch_size
+            lr_plot="Learning Rate", verbosity=verbosity - 1
         )
         if reptile_rate > 0.0:
             # Meta-update logic
@@ -654,7 +652,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
     return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
 
 
-def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_test, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
+def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_test, total_train_samples, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs, mini_epoch_size, 
                         minibatch_examples, model_constr, epoch_manager_constr, model_args, model_name, model_config, dataname, timesteps, loss_fn,
                         score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train_epoch=False, reeval_train_final=True,
@@ -704,14 +702,16 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
         #         data_test = None
 
         
-        # steps_per_epoch = ceildiv(data_train[0].size(0), minibatch_examples * accumulated_minibatches)
+        steps_per_epoch = ceildiv(mini_epoch_size if mini_epoch_size > 0 else total_train_samples, minibatch_examples * accumulated_minibatches)
+        # print(f"Steps per epoch: {steps_per_epoch}")
         # base_scheduler = lr_schedule.ConstantLR(optimizer)
         # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
         #                                    threshold_mode='rel', threshold=0.01)
         # base_scheduler = OneCycleLR(
         #     optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
         #     final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
-        base_scheduler = lr_schedule.DirectToZero(optimizer, peak_lr=LR, update_steps=max_epochs*mini_epoch_size//minibatch_examples, warmup_proportion=0.1)
+        update_steps = max_epochs*steps_per_epoch
+        base_scheduler = lr_schedule.DirectToZero(optimizer, peak_lr=LR, update_steps=update_steps, warmup_proportion=0.1)
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR * LR_start_factor)
         
         print(f"Fold {fold_num + 1}/{kfolds}")
@@ -720,7 +720,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
             model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, 
             noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test,
             timesteps, model_name, model_config, dataname, fold_num, loss_fn, score_fn,
-            distr_error_fn, device, mini_epoch_size,
+            distr_error_fn, device, mini_epoch_size, total_train_samples, 
             outputs_per_epoch=10, verbosity=verbosity - 1,
             reptile_rate=reptile_rewind,
             reeval_train_epoch=reeval_train_epoch, reeval_train_final=reeval_train_final,

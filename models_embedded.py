@@ -161,7 +161,7 @@ class cAttention(nn.Module):
 
 
 class canODE_attentionNoValue(nn.Module): # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, qk_dim):
+    def __init__(self, data_dim, id_embed_dim, qk_dim, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -169,7 +169,7 @@ class canODE_attentionNoValue(nn.Module): # compositional attention nODE
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttentionNoValue(id_embed_dim, qk_dim)
-        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend, identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -184,7 +184,7 @@ class canODE_attentionNoValue(nn.Module): # compositional attention nODE
 
 
 class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, qk_dim):
+    def __init__(self, data_dim, id_embed_dim, qk_dim, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -193,7 +193,7 @@ class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim)  # Add 1 to account for placeholder ID
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
-        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness(identity_gate=identity_gate)
         self.scale_factor = qk_dim ** -0.5
     
     def forward(self, t, val, pos):
@@ -217,7 +217,7 @@ class canODE_attentionNoValue_static(nn.Module): # compositional attention nODE
 
 
 class canODE_attention(nn.Module): # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, qk_dim):
+    def __init__(self, data_dim, id_embed_dim, qk_dim, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -225,7 +225,7 @@ class canODE_attention(nn.Module): # compositional attention nODE
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttention(id_embed_dim, qk_dim)
-        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend, identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -240,7 +240,7 @@ class canODE_attention(nn.Module): # compositional attention nODE
 
 
 class canODE_attention_static(nn.Module): # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, qk_dim):
+    def __init__(self, data_dim, id_embed_dim, qk_dim, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -250,7 +250,7 @@ class canODE_attention_static(nn.Module): # compositional attention nODE
         self.w_q = nn.Linear(id_embed_dim, qk_dim)
         self.w_k = nn.Linear(id_embed_dim, qk_dim)
         self.w_v = nn.Linear(id_embed_dim, 1)
-        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness(identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -284,7 +284,7 @@ class cAttentionMultihead(nn.Module):
 
 
 class canODE_attentionMultihead(nn.Module): # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, num_heads):
+    def __init__(self, data_dim, id_embed_dim, num_heads, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -293,7 +293,7 @@ class canODE_attentionMultihead(nn.Module): # compositional attention nODE
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttentionMultihead(id_embed_dim, num_heads)
-        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend, identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -308,7 +308,7 @@ class canODE_attentionMultihead(nn.Module): # compositional attention nODE
 
 
 class canODE_attentionMultihead_static(nn.Module):  # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, num_heads):
+    def __init__(self, data_dim, id_embed_dim, num_heads, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -319,7 +319,7 @@ class canODE_attentionMultihead_static(nn.Module):  # compositional attention nO
         self.attend = nn.MultiheadAttention(id_embed_dim, num_heads, batch_first=True, dropout=0.0)
         self.decode = nn.Linear(id_embed_dim,
                                 1)  # because pytorch's implementation doesn't support using a different embedding dim for V+Output than for Q+K
-        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness(identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -355,7 +355,7 @@ class cAttentionTransformer(nn.Module):
 
 
 class canODE_transformer(nn.Module):  # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4):
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4, identity_gate=True):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -364,7 +364,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
         self.data_dim = data_dim
         self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
         attend = cAttentionTransformer(id_embed_dim, num_heads, depth, ffn_dim_multiplier)
-        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend, identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -379,7 +379,7 @@ class canODE_transformer(nn.Module):  # compositional attention nODE
 
 
 class canODE_transformer_static(nn.Module):  # compositional attention nODE
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4):
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth=6, ffn_dim_multiplier=4, identity_gate=True):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         
@@ -392,7 +392,7 @@ class canODE_transformer_static(nn.Module):  # compositional attention nODE
                                                    activation="gelu", batch_first=True, dropout=0.0)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         self.decode = nn.Linear(id_embed_dim, 1)
-        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness()
+        self.func = models_cnode.ODEFunc_cNODEGen_ExternalFitness(identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -420,7 +420,7 @@ class canODE_GenerateFitMat(nn.Module):
     5. Compose the fitness function as F(x) = M * x + b
     6. Run cNODE1 using the computed fitness function
     '''
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout, bias):
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout, bias, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         super().__init__()
@@ -446,7 +446,7 @@ class canODE_GenerateFitMat(nn.Module):
             self.fitbias = None  # No bias parameter if bias=False
         
         # define the ODE function
-        self.ode_func = models_cnode.ODEFunc_cNODEGen_ExternalFitnessFn()
+        self.ode_func = models_cnode.ODEFunc_cNODEGen_ExternalFitnessFn(identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -481,7 +481,7 @@ class canODE_ReplicatorAttendFit(nn.Module):
     3. Define the fitness function as an attention mechanism with the encoded embeddings concatenated onto the abundances
     4. Run the Replicator ODE using the computed fitness function
     '''
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout):
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, fitness_qk_dim, dropout, identity_gate):
         self.USES_ODEINT = True
         self.USES_CONDENSED = True
         super().__init__()
@@ -498,7 +498,7 @@ class canODE_ReplicatorAttendFit(nn.Module):
         self.compress = nn.Linear(id_embed_dim, fitness_qk_dim - 1) # minus 1 to account for value concat while maintaining divisibility by num_heads
         
         attend = cAttentionMultihead(fitness_qk_dim, num_heads)
-        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend)
+        self.func = models_cnode.ODEFunc_cNODEGen_FnFitness_Args(attend, identity_gate=identity_gate)
     
     def forward(self, t, val, pos):
         # val, pos = condense(x)
@@ -572,7 +572,7 @@ class TransformerNormalized(nn.Module):
     - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
     - We condense & decondense the sequence if applicable
     '''
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
+    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout, identity_gate):
         self.USES_CONDENSED = True
         super().__init__()
         
@@ -584,7 +584,13 @@ class TransformerNormalized(nn.Module):
                                                    dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
                                                    activation="gelu", batch_first=True, dropout=dropout)
         self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
-        
+
+        if identity_gate:
+            self.gateA = nn.Parameter(torch.tensor(0.0))
+            self.gateB = nn.Parameter(torch.tensor(1.0))
+        else:
+            self.register_buffer('gateA', torch.tensor(1.0))
+            self.register_buffer('gateB', torch.tensor(0.0))
     
     def forward(self, val, pos):
         # val, pos = condense(x)
@@ -599,9 +605,12 @@ class TransformerNormalized(nn.Module):
         
         # extract the value from the transformer output
         y_raw = h[..., 0]
+
+        
+        gated_y = self.gateA*y_raw + self.gateB*val # TODO: Proper rezero implementation, this is a cheap hack to get the Identity initialization without any internal layer-wise benefits
         
         # softmax
-        y = self.masked_softmax(pos, y_raw)
+        y = self.masked_softmax(pos, gated_y)
         
         # y = decondense(y, pos, self.data_dim)
         return y

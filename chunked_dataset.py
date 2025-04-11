@@ -320,6 +320,7 @@ def load_folded_datasets(
         folds.append((train_set, val_set))
 
 
+        num_train_samples = len(train_set.indices)
         assert non_sparse_key in train_set.column_counts, f"Key '{non_sparse_key}' not found in dataset."
         assert sparse_key in train_set.column_counts, f"Key '{sparse_key}' not found in dataset."
         dense_columns = train_set.column_counts[non_sparse_key]
@@ -353,8 +354,13 @@ def load_folded_datasets(
             batch_size=batch_size
         )
 
-        total_available_samples = first_train_set.data_samples
-        print_dataset_summary(first_train_set, first_val_set, total_available_samples)
+        num_train_samples = len(train_set.indices)
+        assert non_sparse_key in train_set.column_counts, f"Key '{non_sparse_key}' not found in dataset."
+        assert sparse_key in train_set.column_counts, f"Key '{sparse_key}' not found in dataset."
+        dense_columns = train_set.column_counts[non_sparse_key]
+        sparse_columns = train_set.column_counts[sparse_key]
+
+        print_dataset_summary(train_set, val_set, dense_columns, sparse_columns)
 
         folds.append((first_train_set, first_val_set))
 
@@ -382,6 +388,6 @@ def load_folded_datasets(
 
             folds.append((train_set, val_set))
 
-    return folds, dense_columns, sparse_columns
+    return folds, num_train_samples, dense_columns, sparse_columns
 
 

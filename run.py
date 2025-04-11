@@ -107,13 +107,13 @@ def main():
                         # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
                         # 'transformShaped',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
-                        # 'canODE-attendFit',
+                        'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
                         # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
@@ -139,13 +139,14 @@ def main():
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
                         # 1000,
-                        10000, 
+                        # 10000, 
+                        30, 
                         # 100000, 
                         # 1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
-    hpbuilder.add_param("whichfold", -1, 
+    hpbuilder.add_param("whichfold", 0, 
                         category=datacat, help="which fold to run, -1 for all")
     hpbuilder.add_param("data_validation_samples", 200,
                         category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
@@ -166,7 +167,8 @@ def main():
     # experiment params
     hpbuilder.add_param("epochs", 
                         # 6, 20, 64, 200, 
-                        64, 
+                        # 64, 
+                        25, 
                         # 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
@@ -190,7 +192,9 @@ def main():
                         "Fixed", 
                         # "AdaptiveValPlateau",
                         help="which type of epoch manager to use")
-    hpbuilder.add_param("mini_epoch_size", 500,
+    hpbuilder.add_param("mini_epoch_size", 
+                        # 500,
+                        0, 
                         help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
 
     hpbuilder.add_param("early_stop", True, 
@@ -201,8 +205,9 @@ def main():
     
     # Optimizer params
     hpbuilder.add_param("lr", 
-                        # 0.1, 
-                        0.001,
+                        0.1, 
+                        # 0.001,
+                        # 0.01, 
                         # 1.0, 0.32, 0.1, 0.032, 
                         # 0.01, 0.0032, 0.001, 0.00032, 0.0001, 
                         # 0.32, 0.1, 0.032, 0.01, 0.0032,
@@ -229,6 +234,14 @@ def main():
                         help="whether or not to use independent noise for interpolation")
     
     # Model architecture params
+    hpbuilder.add_param("identity_gate", 
+                        True,
+                        False, 
+                        help="whether or not to use 'ReZero'-style learnable gate scalars, initialized such that each model starts as an identity function")
+    hpbuilder.add_param("cnode1_init_zero", 
+                        True, 
+                        # False, 
+                        help="whether or not to use 'ReZero'-style gates to ensure all models start as an identity function")
     hpbuilder.add_param("cnode_bias", 
                         True, 
                         # False,
@@ -252,30 +265,33 @@ def main():
     # Note that each must be a constructor function that takes a dicy/dictionary args. Lamda is recommended.
     models = {
         # most useful models
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
-        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim),
-        'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, args.cnode_bias),
-        'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, args.cnode_bias),
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
+        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
+        'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, bias=args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
+        'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, bias=True, identity_gate=args.identity_gate),
         'transformShaped': lambda args: models_embedded.TransformerNormalized(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout, 
+            identity_gate=args.identity_gate
         ),
-        'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
-        ),
+        # 'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
+        #     data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
+        #     ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        # ),
         'canODE-FitMat': lambda args: models_embedded.canODE_GenerateFitMat(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, bias=args.cnode_bias
+            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, 
+            bias=args.cnode_bias, identity_gate=args.identity_gate
         ),
         'canODE-attendFit': lambda args: models_embedded.canODE_ReplicatorAttendFit(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout
+            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, 
+            identity_gate=args.identity_gate
         ),
         'cNODE-hourglass': lambda args: models_cnode.cNODE_HourglassFitness(
-            data_dim=args.data_dim, hidden_dim=args.hidden_dim, depth=args.depth
+            data_dim=args.data_dim, hidden_dim=args.hidden_dim, depth=args.depth, bias=args.cnode_bias, identity_gate=args.identity_gate
         ),
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(args.data_dim),
+        'baseline-cNODE0': lambda args: models_baseline.cNODE0(args.data_dim, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         
         
         # additional baseline models
@@ -285,8 +301,8 @@ def main():
         'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim),
         'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(args.data_dim, args.hidden_dim),
         'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(args.data_dim, args.hidden_dim),
-        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(args.data_dim),
-        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(args.data_dim, args.cnode_bias),
+        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(args.data_dim, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
+        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'baseline-cAttend-1step': lambda args: models_embedded.cAttend_simple(args.data_dim, args.attend_dim, args.attend_dim),
         'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(args.data_dim, args.hidden_dim),
         'baseline-cNODE2-width1': lambda args: models_cnode.cNODE_HourglassFitness(
@@ -314,11 +330,11 @@ def main():
         
         
         # sanity test models
-        'cNODE1-GenFn': lambda args: models_cnode.cNODE2_ExternalFitnessFn(args.data_dim, args.cnode_bias), # for testing, identical to cNODE1
+        'cNODE1-GenFn': lambda args: models_cnode.cNODE2_ExternalFitnessFn(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate), # for testing, identical to cNODE1
         'cNODE2-DKI': lambda args: models_cnode.cNODE2_DKI(args.data_dim, args.cnode_bias), # sanity test, this is the same as cNODE2 but less optimized
-        'cNODE2-Gen': lambda args: models_cnode.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim, args.cnode_bias), nn.Linear(args.data_dim, args.data_dim, args.cnode_bias))),  # sanity test, this is the same as cNODE2 but generated at runtime
-        "cNODE2-static": lambda args: models_cnode.cNODE2_ExternalFitness(args.data_dim, args.cnode_bias), # sanity test
-        "cNODE2-FnFitness": lambda args: models_cnode.cNODE2_FnFitness(args.data_dim, args.cnode_bias), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
+        'cNODE2-Gen': lambda args: models_cnode.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim, args.cnode_bias), nn.Linear(args.data_dim, args.data_dim, args.cnode_bias)), init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),  # sanity test, this is the same as cNODE2 but generated at runtime
+        "cNODE2-static": lambda args: models_cnode.cNODE2_ExternalFitness(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate), # sanity test
+        "cNODE2-FnFitness": lambda args: models_cnode.cNODE2_FnFitness(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
     }
 
     # Epoch managers
@@ -343,7 +359,7 @@ def main():
             chunked_dataset.DK_YSPARSE: f"{dp.y_dataset}_y-sparse",
         }
 
-        data_folded, dense_columns, sparse_columns = chunked_dataset.load_folded_datasets(
+        data_folded, dp.total_train_samples, dense_columns, sparse_columns = chunked_dataset.load_folded_datasets(
             base_filepath, 
             filenames,
             dp.minibatch_examples,
@@ -481,7 +497,7 @@ def main():
                 
                 # train and test the model across multiple folds
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
+                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, dp.total_train_samples, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
                     hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
