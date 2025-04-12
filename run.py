@@ -92,6 +92,18 @@ def unrolldict(d):
     return unrolled_items
 
 
+class DummyGradScaler:
+    def scale(self, loss):
+        return loss  # no scaling, just return as-is
+
+    def step(self, optimizer):
+        optimizer.step()
+
+    def update(self):
+        pass
+
+
+
 def main():
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -107,13 +119,13 @@ def main():
                         # "junk", 
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
-                        # 'cNODE1',
+                        'cNODE1',
                         # 'cNODE2',
                         # 'transformShaped',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
-                        'canODE-attendFit',
+                        # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
                         # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
@@ -139,10 +151,9 @@ def main():
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
                         # 1000,
-                        # 10000, 
-                        30, 
+                        # 10000,  
                         # 100000, 
-                        # 1, 10, 100, 1000, 10000, #100000, 
+                        1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
@@ -167,8 +178,7 @@ def main():
     # experiment params
     hpbuilder.add_param("epochs", 
                         # 6, 20, 64, 200, 
-                        # 64, 
-                        25, 
+                        64, 
                         # 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", False,
@@ -205,8 +215,8 @@ def main():
     
     # Optimizer params
     hpbuilder.add_param("lr", 
-                        0.1, 
-                        # 0.001,
+                        # 0.1, 
+                        0.001,
                         # 0.01, 
                         # 1.0, 0.32, 0.1, 0.032, 
                         # 0.01, 0.0032, 0.001, 0.00032, 0.0001, 
@@ -440,9 +450,10 @@ def main():
                 model_constr = models[hp.model_name]
                 epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
                 
-                
-                # scaler = torch.amp.GradScaler(device)
-                scaler = torch.cuda.amp.GradScaler()
+                if device.type == "cuda":
+                    scaler = torch.cuda.amp.GradScaler()
+                else:
+                    scaler = DummyGradScaler()
 
                 # load timesteps from file
                 print(f"Loading time steps from {hp.ode_timesteps_file}")
