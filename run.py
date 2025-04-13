@@ -92,6 +92,30 @@ def unrolldict(d):
     return unrolled_items
 
 
+<<<<<<< Updated upstream
+=======
+class DummyGradScaler:
+    def scale(self, loss):
+        return loss  # no scaling, just return as-is
+
+    def step(self, optimizer):
+        optimizer.step()
+
+    def update(self):
+        pass
+
+def select_model_training_function(model_constr):
+    # Instantiate a dummy model to check its capabilities
+    dummy_model = model_constr(None)  # Pass None or a dummy args if safe
+    if callable(getattr(dummy_model, "fit", None)):
+        return expt.fit_closed_form_model
+    else:
+        return expt.crossvalidate_model
+
+
+
+
+>>>>>>> Stashed changes
 def main():
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -105,6 +129,8 @@ def main():
 
     hpbuilder.add_param("model_name", 
                         # "junk", 
+                        "baseline-const",
+                        "baseline-LinearFit",
                         # 'baseline-constShaped',
                         # 'baseline-SLPMultShaped',
                         # 'cNODE1',
@@ -236,7 +262,7 @@ def main():
     # Model architecture params
     hpbuilder.add_param("identity_gate", 
                         True,
-                        False, 
+                        # False, 
                         help="whether or not to use 'ReZero'-style learnable gate scalars, initialized such that each model starts as an identity function")
     hpbuilder.add_param("cnode1_init_zero", 
                         True, 
@@ -265,7 +291,10 @@ def main():
     # Note that each must be a constructor function that takes a dicy/dictionary args. Lamda is recommended.
     models = {
         # most useful models
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
+        'baseline-const': lambda args: models_baseline.ConstOutput(args.data_dim),
+        'baseline-LinearFit': lambda args: models_baseline.LinearRegression(),
+        'baseline-LinearFitShaped': lambda args: models_baseline.LinearRegressionMaskNorm(args.data_dim),
+        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim),
         'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
         'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, bias=args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, bias=True, identity_gate=args.identity_gate),
@@ -296,8 +325,7 @@ def main():
         
         # additional baseline models
         'baseline-1const': lambda args: models_baseline.SingleConst(),
-        'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
-        'baseline-const': lambda args: models_baseline.ConstOutput(args.data_dim),
+        'baseline-1constShaped': lambda args: models_baseline.UniformFilteredNormalized(),
         'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim),
         'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(args.data_dim, args.hidden_dim),
         'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(args.data_dim, args.hidden_dim),
@@ -462,6 +490,8 @@ def main():
                 model = model_constr(hp)
                 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
                 print(f"Number of parameters in model: {num_params}")
+
+                use_fit = callable(getattr(model, "fit", None))
                 
                 # find optimal LR
                 # hp.WD, hp.lr = hyperparameter_search_with_LRfinder(
@@ -495,14 +525,22 @@ def main():
                                     suffix="\n=========================================================================================================================\n")
                 
                 
+                if use_fit:
+                    val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.fit_closed_form_model(
+                        model_constr, data_folded, testdata, device, loss_fn, score_fn, distr_error_fn,
+                        dp.minibatch_examples, hp,
+                        val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims
+                    )
+
+                else:
                 # train and test the model across multiple folds
-                val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
-                    hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, dp.total_train_samples, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
-                    dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
-                    reptile_rewind=(1.0 - hp.reptile_lr), reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
-                    whichfold=dp.whichfold, jobstring=jobstring, use_best_model=hp.use_best_model
-                )
+                    val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
+                        hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, dp.total_train_samples, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
+                        dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
+                        hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                        reptile_rewind=(1.0 - hp.reptile_lr), reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
+                        whichfold=dp.whichfold, jobstring=jobstring, use_best_model=hp.use_best_model
+                    )
                 
                 # print all folds
                 print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')

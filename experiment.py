@@ -808,3 +808,86 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
     
     return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, val_loss_curves
 
+
+
+
+
+def fit_closed_form_model(model_constr, data_folds, testdata, device, loss_fn, score_fn, distr_error_fn, minibatch_size, hp,
+                          val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims):
+    print(f"\n[ClosedForm] Starting closed-form fitting for {len(data_folds)} folds\n")
+
+    for fold_num, (train_data, val_data) in enumerate(data_folds):
+        model = model_constr(hp).to(device)
+
+        # Check if the model supports streaming fitting
+        if not hasattr(model, "streaming_fit"):
+            raise ValueError(f"Model {model.__class__.__name__} does not support streaming_fit().")
+
+        print(f"[Fold {fold_num}] Accumulating sufficient statistics...")
+
+        # Streaming fit
+        model.streaming_fit(train_data, device)
+
+        print(f"[Fold {fold_num}] Finished fitting.")
+
+        # Training loss evaluation (streaming)
+        with torch.no_grad():
+            train_loss_accum = 0.0
+            train_score_accum = 0.0
+            total_samples = 0
+
+            for batch in train_data:
+                X_batch = batch["x0"].to(device)
+                Y_batch = batch["y"].to(device)
+
+                Y_pred = model(X_batch)
+
+                batch_size = X_batch.shape[0]
+                train_loss_accum += loss_fn(Y_pred, Y_batch).item() * batch_size
+                train_score_accum += score_fn(Y_pred, Y_batch).item() * batch_size
+                total_samples += batch_size
+
+            if total_samples > 0:
+                train_loss = train_loss_accum / total_samples
+                train_score = train_score_accum / total_samples
+            else:
+                train_loss = float('nan')
+                train_score = float('nan')
+
+        # Validation evaluation
+        val_loss, val_score, val_distr_error = validate_epoch(
+            model, False, val_data, minibatch_size, [0.0, 1.0],
+            loss_fn, score_fn, distr_error_fn, device
+        )
+
+        print(f"[Fold {fold_num}] Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
+
+        # Update optimum logs
+        val_loss_optims[fold_num].dict.update({
+            "fold": fold_num,
+            "val_loss": val_loss
+        })
+        val_score_optims[fold_num].dict.update({
+            "fold": fold_num,
+            "val_score": val_score
+        })
+        trn_loss_optims[fold_num].dict.update({
+            "fold": fold_num,
+            "trn_loss": train_loss
+        })
+        trn_score_optims[fold_num].dict.update({
+            "fold": fold_num,
+            "trn_score": train_score
+        })
+
+        # Optional test set evaluation
+        if testdata is not None:
+            test_loss, test_score, test_distr_error = validate_epoch(
+                model, False, testdata, minibatch_size, [0.0, 1.0],
+                loss_fn, score_fn, distr_error_fn, device
+            )
+            print(f"[Fold {fold_num}] Test Loss: {test_loss:.6f}")
+
+    print(f"\n[ClosedForm] Completed.\n")
+
+    return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, [], []  # final_optims, training_curves
