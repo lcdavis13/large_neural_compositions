@@ -187,15 +187,15 @@ def main():
                         help="minimum number of epochs")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
-    hpbuilder.add_param("run_test", True,
+    hpbuilder.add_flag("run_test", True,
                         category=datacat, help="run the test set after training")
-    hpbuilder.add_param("use_best_model", 
+    hpbuilder.add_flag("use_best_model", 
                         # True,
                         False,
                         help="whether or not to use the best model for testing")
-    hpbuilder.add_param("reeval_training_set_epoch", False,
+    hpbuilder.add_flag("reeval_training_set_epoch", False,
                         help="whether or not to re-evaluate the training set after each epoch")
-    hpbuilder.add_param("reeval_training_set_final", True,
+    hpbuilder.add_flag("reeval_training_set_final", True,
                         help="whether or not to re-evaluate the training set after the final epoch")
     
     hpbuilder.add_param("epoch_manager", 
@@ -207,7 +207,7 @@ def main():
                         0, 
                         help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
 
-    hpbuilder.add_param("early_stop", True, 
+    hpbuilder.add_param("early_stop", False, 
                         help="whether or not to use early stopping")
     hpbuilder.add_param("patience", 5, 
                         help="patience for early stopping")
@@ -225,8 +225,8 @@ def main():
                         help="learning rate")
     hpbuilder.add_param("reptile_lr", 1.0, 
                         help="reptile outer-loop learning rate")
-    hpbuilder.add_param("wd_factor", 0.0, 
-                        help="weight decay factor (multiple of LR)")
+    hpbuilder.add_param("wd", 0.0, 
+                        help="weight decay")
     hpbuilder.add_param("noise", 0.0,   
                         help="noise level")
     
@@ -433,7 +433,7 @@ def main():
                 # computed hyperparams
                 hp.data_dim = dense_columns
                 hp.sparse_data_dim = sparse_columns
-                hp.WD = hp.lr * hp.wd_factor
+                # hp.WD = hp.lr * hp.wd_factor
                 hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
                 hp.model_config = f"{hp.model_name}_{dp.data_configid}x{hp.configid}"
 
@@ -510,7 +510,7 @@ def main():
                 val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
                     hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, dp.total_train_samples, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
-                    hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.WD, verbosity=1,
+                    hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.wd, verbosity=1,
                     reptile_rewind=(1.0 - hp.reptile_lr), reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
                     whichfold=dp.whichfold, jobstring=jobstring, use_best_model=hp.use_best_model
                 )

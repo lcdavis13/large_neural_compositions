@@ -2,14 +2,14 @@
 # See https://slurm.schedmd.com/job_array.html
 
 #SBATCH --job-name=cnode-hpsearch
-#SBATCH --array=0-143  ## Make sure this is enough for all hyperparam/fold combos
+#SBATCH --array=0-671  ## Make sure this is enough for all hyperparam/fold combos
 
-#SBATCH --time=0-05:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
-#SBATCH --partition=gpu
+#SBATCH --time=0-12:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --partition=kill-shared
 #SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
 ##SBATCH --gpus-per-node=NV-L40:1
-#SBATCH --mem=8G
+#SBATCH --mem=16G
 
 #SBATCH --output=slurm_out/%A/%A_%a.out
 #SBATCH --error=slurm_out/%A/%A_%a.err
@@ -32,22 +32,32 @@ NUM_FOLDS=5                 # Number of folds
 # Use spaces for parameters of different jobs, commas for multiple parameter values to run sequentially on the same job
 # -------------------------
 declare -A hyperparams
-hyperparams["dataset"]="cNODE-paper-ocean"
-hyperparams["model_name"]="canODE-attendFit,transformShaped"
-hyperparams["epochs"]="200"
-hyperparams["minibatch_examples"]="20"
-hyperparams["ode_timesteps"]="15"
-hyperparams["lr"]="0.0001,0.0032,0.1"
-hyperparams["reptile_lr"]="0.05 0.5 1.0"
-hyperparams["noise"]="0.0,0.075"
-hyperparams["wd_factor"]="0.0 2.0"
-hyperparams["interpolate"]="0"
-hyperparams["num_heads"]="2 8"
+hyperparams["x_dataset"]="256"
+hyperparams["y_dataset"]="256-random"
+hyperparams["data_subset"]="1000 100000"
+hyperparams["mini_epoch_size"]="500"
+hyperparams["model_name"]="baseline-constShaped,baseline-SLPMultShaped,baseline-cNODE0 cNODE1 cNODE2 cNODE-hourglass canODE-FitMat canODE-attendFit transformShaped"
+hyperparams["epochs"]="20"
+hyperparams["minibatch_examples"]="1"
+hyperparams["ode_timesteps_file"]="t.csv t_shortlinear.csv"
+hyperparams["lr"]="[0.000001^^^1.0]"
+hyperparams["reptile_lr"]="1.0 [0.0...1.0]"
+hyperparams["noise"]="0.0" # [0.001^^^0.3]"
+hyperparams["wd"]="0.0 [0.0001^^^100.0]"
+hyperparams["interpolate"]="False"
+hyperparams["interpolate_noise"]="False"
+hyperparams["cnode_bias"]="False True"
+hyperparams["cnode1_init_zero"]="False True"
+hyperparams["identity_gate"]="False True"
+hyperparams["num_heads"]="8"
 hyperparams["hidden_dim"]="8"
-hyperparams["attend_dim_per_head"]="4 6"
-hyperparams["depth"]="4 16"
+hyperparams["attend_dim_per_head"]="4"
+hyperparams["depth"]="6"
 hyperparams["ffn_dim_multiplier"]="4"
-hyperparams["dropout"]="0.1 0.5 0.8"
+hyperparams["dropout"]="0.1"
+
+# hyperparams["noise"]="0.0 0.033 0.075"
+# hyperparams["wd_factor"]="0.0 1.0 2.0 4.0"
 
 
 # -------------------------
@@ -116,21 +126,33 @@ done
 # -------------------------
 source activate lnc
 python run.py --kfolds $NUM_FOLDS --headless \
+    --batchid $SLURM_ARRAY_JOB_ID \
+    --taskid $SLURM_ARRAY_TASK_ID \
     --jobid $SLURM_JOB_ID \
     --whichfold $fold_index \
-    --dataset ${hyperparam_values["dataset"]} \
+    --x_dataset ${hyperparam_values["x_dataset"]} \
+    --y_dataset ${hyperparam_values["y_dataset"]} \
+    --data_subset ${hyperparam_values["data_subset"]} \
+    --mini_epoch_size ${hyperparam_values["mini_epoch_size"]} \
+    --subset_increases_epochs \
+    --run_test \
+    --reeval_training_set_final \
     --model_name ${hyperparam_values["model_name"]} \
     --epochs ${hyperparam_values["epochs"]} \
     --lr ${hyperparam_values["lr"]} \
     --reptile_lr ${hyperparam_values["reptile_lr"]} \
+    --wd ${hyperparam_values["wd"]} \
     --noise ${hyperparam_values["noise"]} \
     --interpolate ${hyperparam_values["interpolate"]} \
+    --interpolate_noise ${hyperparam_values["interpolate_noise"]} \
+    --cnode_bias ${hyperparam_values["cnode_bias"]} \
+    --cnode1_init_zero ${hyperparam_values["cnode1_init_zero"]} \
+    --identity_gate ${hyperparam_values["identity_gate"]} \
     --num_heads ${hyperparam_values["num_heads"]} \
     --hidden_dim ${hyperparam_values["hidden_dim"]} \
-    --attend_dim ${hyperparam_values["attend_dim_per_head"]} \
+    --attend_dim_per_head ${hyperparam_values["attend_dim_per_head"]} \
     --depth ${hyperparam_values["depth"]} \
     --ffn_dim_multiplier ${hyperparam_values["ffn_dim_multiplier"]} \
     --dropout ${hyperparam_values["dropout"]} \
-    --ode_timesteps ${hyperparam_values["ode_timesteps"]} \
-    --wd_factor ${hyperparam_values["wd_factor"]} \
+    --ode_timesteps_file ${hyperparam_values["ode_timesteps_file"]} \
     --minibatch_examples ${hyperparam_values["minibatch_examples"]} \
