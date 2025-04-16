@@ -132,33 +132,51 @@ class HyperparameterBuilder:
         param_names = self.categories.get(category, [])
 
         # Process parameters and types
-        param_lists = {}
+        fixed_param_lists = {}
+        random_param_flags = {}
+
         for name in param_names:
             config = self.params[name]
             raw_value = args[name]
 
             if config["multiple"]:
                 if isinstance(raw_value, str) and raw_value.startswith("[") and raw_value.endswith("]"):
-                    # Parse random value range
-                    param_lists[name] = [parse_random_value(raw_value, config["type"])]
+                    # Mark this param as needing random sampling
+                    random_param_flags[name] = (raw_value, config["type"])
+                    fixed_param_lists[name] = [None]  # Placeholder
                 else:
-                    # Parse comma-separated values
+                    # Parse comma-separated fixed values
                     values = raw_value.split(",")
-                    param_lists[name] = [config["type"](v) for v in values]
+                    fixed_param_lists[name] = [config["type"](v) for v in values]
             else:
                 # Single value for flags
-                param_lists[name] = [config["type"](raw_value)]
+                fixed_param_lists[name] = [config["type"](raw_value)]
 
         # Generate combinations
         combinations = []
-        for idx, values in enumerate(itertools.product(*param_lists.values())):
-            combination = dicy(dict(zip(param_lists.keys(), values)))
-            # Add configid or category-specific configid
+        fixed_param_names = [name for name in param_names if name not in random_param_flags]
+
+        for idx, fixed_values in enumerate(itertools.product(*[fixed_param_lists[name] for name in fixed_param_names])):
+            combination = {}
+
+            # Assign fixed parameters
+            for name, value in zip(fixed_param_names, fixed_values):
+                combination[name] = value
+
+            # Sample random parameters independently for each combination
+            for name, (raw_value, value_type) in random_param_flags.items():
+                combination[name] = parse_random_value(raw_value, value_type)
+
+            # Add configid
             configid_key = f"{category}_configid" if category else "configid"
             combination[configid_key] = idx
+
+            combination = dicy(combination)  # Convert to dotsy.dicy object
+
             combinations.append(combination)
 
         return combinations
+
 
 # test
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 # See https://slurm.schedmd.com/job_array.html
 
 #SBATCH --job-name=cnode-hpsearch
-#SBATCH --array=0-671  ## Make sure this is enough for all hyperparam/fold combos
+#SBATCH --array=0-1792  ## Make sure this is enough for all hyperparam/fold combos
 
 #SBATCH --time=0-12:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=kill-shared
@@ -17,7 +17,8 @@
 ##SBATCH --mail-type=FAIL
 ##SBATCH --mail-user=myemail@hawaii.edu
 
-echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID running on $HOSTNAME"
+echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID , Fold: $fold_index , running on $HOSTNAME"
+
 
 
 # -------------------------
@@ -34,27 +35,28 @@ NUM_FOLDS=5                 # Number of folds
 declare -A hyperparams
 hyperparams["x_dataset"]="256"
 hyperparams["y_dataset"]="256-random"
-hyperparams["data_subset"]="1000 100000"
-hyperparams["mini_epoch_size"]="500"
+hyperparams["data_subset"]="100000"
+hyperparams["data_validation_samples"]="1000"
+hyperparams["mini_epoch_size"]="0"
 hyperparams["model_name"]="baseline-constShaped,baseline-SLPMultShaped,baseline-cNODE0 cNODE1 cNODE2 cNODE-hourglass canODE-FitMat canODE-attendFit transformShaped"
-hyperparams["epochs"]="20"
-hyperparams["minibatch_examples"]="1"
+hyperparams["epochs"]="[1...10]"
+hyperparams["minibatch_examples"]="100"
 hyperparams["ode_timesteps_file"]="t.csv t_shortlinear.csv"
 hyperparams["lr"]="[0.000001^^^1.0]"
 hyperparams["reptile_lr"]="1.0 [0.0...1.0]"
 hyperparams["noise"]="0.0" # [0.001^^^0.3]"
-hyperparams["wd"]="0.0 [0.0001^^^100.0]"
+hyperparams["wd"]="0.0 [0.001^^^100.0]"
 hyperparams["interpolate"]="False"
 hyperparams["interpolate_noise"]="False"
 hyperparams["cnode_bias"]="False True"
 hyperparams["cnode1_init_zero"]="False True"
 hyperparams["identity_gate"]="False True"
-hyperparams["num_heads"]="8"
-hyperparams["hidden_dim"]="8"
-hyperparams["attend_dim_per_head"]="4"
-hyperparams["depth"]="6"
-hyperparams["ffn_dim_multiplier"]="4"
-hyperparams["dropout"]="0.1"
+hyperparams["num_heads"]="[1...16]"
+hyperparams["hidden_dim"]="[4^^^128]"
+hyperparams["attend_dim_per_head"]="[1...16]"
+hyperparams["depth"]="[1...6]"
+hyperparams["ffn_dim_multiplier"]="[0.5^^^4.0]"
+hyperparams["dropout"]="0.0 [0.0...0.8]"
 
 # hyperparams["noise"]="0.0 0.033 0.075"
 # hyperparams["wd_factor"]="0.0 1.0 2.0 4.0"
@@ -75,18 +77,19 @@ if [[ "$RUN_FOLDS_IN_PARALLEL" == true ]]; then
     total_combinations=$((total_combinations * NUM_FOLDS))  # Increase total combinations by number of folds
 fi
 
-# Exit if SLURM_ARRAY_TASK_ID exceeds total combinations
-if [[ "$SLURM_ARRAY_TASK_ID" -ge "$total_combinations" ]]; then
-    echo "Error: SLURM_ARRAY_TASK_ID ($SLURM_ARRAY_TASK_ID) exceeds total combinations ($total_combinations)."
-    exit 1
-fi
+# # Exit if SLURM_ARRAY_TASK_ID exceeds total combinations
+# if [[ "$SLURM_ARRAY_TASK_ID" -ge "$total_combinations" ]]; then
+#     echo "Error: SLURM_ARRAY_TASK_ID ($SLURM_ARRAY_TASK_ID) exceeds total combinations ($total_combinations)."
+#     exit 1
+# fi
 
 
 # -------------------------
 # 4. Decompose SLURM_ARRAY_TASK_ID
 # -------------------------
 declare -A hyperparam_indices
-current_id=$SLURM_ARRAY_TASK_ID
+current_id=$((SLURM_ARRAY_TASK_ID % total_combinations))
+
 
 # If parallel folds are enabled, separate the last digit to represent the fold number
 if [[ "$RUN_FOLDS_IN_PARALLEL" == true ]]; then
@@ -95,6 +98,7 @@ if [[ "$RUN_FOLDS_IN_PARALLEL" == true ]]; then
 else
     fold_index=-1  # If running all folds in one job, set whichfold to -1
 fi
+
 
 # Calculate hyperparameter indices
 for param in "${!hyperparams[@]}"; do
@@ -120,6 +124,8 @@ for param in "${!hyperparam_values[@]}"; do
     echo "$param: ${hyperparam_values[$param]}"
 done
 
+echo "Launching job array task: Job ID $SLURM_ARRAY_JOB_ID, Task ID $SLURM_ARRAY_TASK_ID, Fold: $fold_index"
+
 
 # -------------------------
 # 6. Run the Python Script
@@ -133,6 +139,7 @@ python run.py --kfolds $NUM_FOLDS --headless \
     --x_dataset ${hyperparam_values["x_dataset"]} \
     --y_dataset ${hyperparam_values["y_dataset"]} \
     --data_subset ${hyperparam_values["data_subset"]} \
+    --data_validation_samples ${hyperparam_values["data_validation_samples"]} \
     --mini_epoch_size ${hyperparam_values["mini_epoch_size"]} \
     --subset_increases_epochs \
     --run_test \

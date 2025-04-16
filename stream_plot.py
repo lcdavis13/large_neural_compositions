@@ -36,6 +36,7 @@ _color_cycles_per_plot = {}
 _plot_processes = {}
 _plot_queues = {}
 _plot_configs = {}
+_loss_style_cache = {}  # {(title, label_prefix): color}
 _plot_started = False
 _shutdown_registered = False
 _mp_start_method_set = False
@@ -53,6 +54,9 @@ def set_headless():
 
 
 def _ensure_mp_start_method():
+    if _plot_headless:
+        return
+    
     global _mp_start_method_set
     if not _mp_start_method_set:
         try:
@@ -100,6 +104,9 @@ def _register_shutdown():
 
 
 def _live_plot(plot_name, q, config):
+    if _plot_headless:
+        return
+    
     plt.ion()
     fig, ax = plt.subplots()
     ax.set_title(config.get("title", plot_name))
@@ -244,6 +251,9 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
     """
     High-level plotting function.
     """
+    if _plot_headless:
+        return
+    
     assert len(line_labels) == len(y_values), "line_labels and y_values must have the same length"
 
     plot_config = {
@@ -286,6 +296,9 @@ def plot_horizontal_line(title, y_value, label, style=None):
     - label: str, label of the line
     - style: dict of line style (optional)
     """
+    if _plot_headless:
+        return
+    
     if style is None:
         style = {'linestyle': '--', 'color': 'gray'}
 
@@ -307,9 +320,6 @@ def plot_single(title, xlabel, ylabel, line_label, x_value, y_value, add_point=F
     """
     plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log, y_log=y_log)
 
-# === Internal style cache for plot_loss ===
-_loss_style_cache = {}  # {(title, label_prefix): color}
-
 
 def plot_loss(title, label_prefix, x, train_loss=None, validation_loss=None, xlabel="Epoch", ylabel="Loss", add_point=False):
     """
@@ -323,6 +333,9 @@ def plot_loss(title, label_prefix, x, train_loss=None, validation_loss=None, xla
     - add_point: bool, whether to add marker at current point
     """
 
+    
+    if _plot_headless:
+        return
     
     plot_config = {
         'title': title,

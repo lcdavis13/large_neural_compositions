@@ -456,7 +456,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
                model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, full_epoch_size, outputs_per_epoch=10, verbosity=1,
-               reptile_rate=0.0, reeval_train_epoch=False, reeval_train_final=True, jobstring="", use_best_model=True):
+               reptile_rate=0.0, preeval_training_set=True, reeval_train_epoch=False, reeval_train_final=True, jobstring="", use_best_model=True):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
     epoch = 0
@@ -477,11 +477,18 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
     filepath_out_incremental = f'results/incr/{model_config}_{dataname}{jobstring}_incremental.csv'
     
     # initial validation benchmark
+    print("Evaluating initial validation score")
     l_val, score_val, p_val = validate_epoch(model, requires_condensed, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
-    l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn,
+    if preeval_training_set:
+        print("Evaluating initial training score")
+        l_trn, score_trn, p_trn = validate_epoch(model, requires_condensed, data_train, minibatch_examples, t, loss_fn, score_fn,
                                              distr_error_fn, device)
-    
+    else:
+        l_trn = None
+        score_trn = None
+        p_trn = None
+
     gpu_memory_reserved = torch.cuda.memory_reserved(device)
     _, cpuRam = tracemalloc.get_traced_memory()
     stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
@@ -490,9 +497,9 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                           "mini-epoch", 0,
                           "training examples", 0,
                           "update steps", 0,
-                          "Avg Training Loss", l_trn,
-                          "Avg DKI Trn Loss", score_trn,
-                          "Avg Training Distr Error", p_trn,
+                          "Avg Training Loss", l_trn if l_trn is not None else -1.0,
+                          "Avg DKI Trn Loss", score_trn if score_trn is not None else -1.0,
+                          "Avg Training Distr Error", p_trn if p_trn is not None else -1.0,
                           "Avg Validation Loss", l_val,
                           "Avg DKI Val Loss", score_val,
                           "Avg Validation Distr Error", p_val,
@@ -539,6 +546,8 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
     manager.set_baseline(last_opt)
 
     epoch_data_iterator = iter(data_train)
+
+    print("Starting training")
 
     while True:
         l_trn, p_trn, train_examples_seen, update_steps, epoch, epoch_data_iterator = train_mini_epoch(
@@ -655,7 +664,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_test, total_train_samples, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs, mini_epoch_size, 
                         minibatch_examples, model_constr, epoch_manager_constr, model_args, model_name, model_config, dataname, timesteps, loss_fn,
-                        score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, reeval_train_epoch=False, reeval_train_final=True,
+                        score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, preeval_training_set=True, reeval_train_epoch=False, reeval_train_final=True,
                         whichfold=-1, jobstring="", use_best_model=True):
     filepath_out_fold = f'results/folds/{model_config}_{dataname}{jobstring}_folds.csv'
     
@@ -723,7 +732,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
             distr_error_fn, device, mini_epoch_size, total_train_samples, 
             outputs_per_epoch=10, verbosity=verbosity - 1,
             reptile_rate=reptile_rewind,
-            reeval_train_epoch=reeval_train_epoch, reeval_train_final=reeval_train_final,
+            preeval_training_set=preeval_training_set, reeval_train_epoch=reeval_train_epoch, reeval_train_final=reeval_train_final,
             jobstring=jobstring, 
             use_best_model=True
         )
