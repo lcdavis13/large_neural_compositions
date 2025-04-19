@@ -5,90 +5,15 @@ import torch.nn as nn
 from ode_solver import odeint
 import models_cnode
 
-# # TODO: Putting a setting here is a hacky shortcut. But ideally this should be addressed at the data preprocessing level instead of doing it dynamically, since it's expensive to do at runtime.
-# #  The complication is that we then need to dynamically select from condensed or non-condensed versions of the dataset depending on the model being trained.
-# #  We'd also have to use a fixed condensed dimension with padding to equalize them all, so it might be worth it to dynimcally trim off the last dimensions from batches even after moving the rest of the condensiing process to preprocessing.
-# needs_condense = False
-#
-
-# def condense(x):
-#     if needs_condense:
-#
-#         device = x.device
-#         batch_size = x.size(0)
-#         max_len = max(torch.sum(x[i] != 0).item() for i in range(batch_size))
-#
-#         padded_values = torch.zeros(batch_size, max_len, dtype=x.dtype, device=device)
-#         padded_positions = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
-#
-#         for i in range(batch_size):
-#             positions = torch.nonzero(x[i], as_tuple=True)[0]
-#             values = x[i][positions]
-#             len_values = len(values)
-#
-#             padded_values[i, :len_values] = values
-#             padded_positions[i, :len_values] = positions + 1  # Adjust positions by 1
-#
-#         return padded_values, padded_positions
-#
-#     else:
-#         pos = torch.arange(1, x.size(1) + 1, device=x.device)
-#         # multiply by 0 or 1 depending on if the value is 0 or not
-#         pos = pos * (x != 0).long()
-#
-#         return x, pos
-#
-#
-# def decondense(values, positions, size):
-#     """
-#     Decondenses the values into a larger tensor according to the specified positions.
-#     This function supports multiple batch dimensions, with only the last dimension
-#     being a non-batch dimension.
-#
-#     Args:
-#         values (torch.Tensor): Tensor of values to be decondensed. Shape: (..., N)
-#         positions (torch.Tensor): Tensor of positions where the values should be placed. Shape: (..., N) or (extra_batch, ..., N)
-#         size (int): The size of the last dimension of the output tensor.
-#
-#     Returns:
-#         torch.Tensor: Decondensed tensor with shape (..., size).
-#     """
-#
-#     if needs_condense:
-#         device = values.device
-#         batch_dims_values = values.shape[:-1]  # All batch dimensions of values except the last
-#         batch_dims_positions = positions.shape[:-1]  # All batch dimensions of positions except the last
-#
-#         # Ensure positions has the same batch dimensions as values
-#         if batch_dims_positions != batch_dims_values:
-#             extra_batch_dims = batch_dims_positions[:-len(batch_dims_values)]
-#             positions = positions.reshape(*extra_batch_dims, *batch_dims_values, positions.shape[-1])
-#             positions = positions.expand(*batch_dims_values, positions.shape[-1])
-#
-#         y_shape = (*batch_dims_values, size)
-#         y = torch.zeros(y_shape, dtype=values.dtype, device=device)  # Initialize with zeros
-#
-#         # Reshape to flatten batch dimensions
-#         batch_size = values.numel() // values.shape[-1]  # Total batch size, treating multiple dimensions as one
-#         values_flat = values.reshape(batch_size, -1)
-#         positions_flat = positions.reshape(batch_size, -1)
-#         y_flat = y.reshape(batch_size, size)
-#
-#         for i in range(batch_size):
-#             valid_positions = positions_flat[i]
-#             valid_positions = valid_positions[
-#                 valid_positions >= 0]  # Remove invalid positions (assume non-negative are valid)
-#             valid_positions = valid_positions.clamp(max=size - 1)  # Clamp positions within range [0, size-1]
-#             y_flat[i][valid_positions] = values_flat[i][
-#                                          :len(valid_positions)]  # Place the values at the valid positions
-#
-#         # Reshape y back to original batch dimensions
-#         y = y_flat.view(*y_shape)
-#         return y
-#
-#     else:
-#         return values
-
+def masked_softmax_embedded(pos, y_raw):
+    # Mask out elements where pos is 0
+    mask = (pos != 0)
+    masked_y_raw = y_raw.masked_fill(~mask, float('-inf'))
+    # Normalize the output to sum to 1 (excluding masked elements)
+    y = nn.functional.softmax(masked_y_raw, dim=-1)
+    # Set masked elements to 0
+    y = y * mask.float()
+    return y
 
 class cAttend_simple(nn.Module):
     """
@@ -610,20 +535,11 @@ class TransformerNormalized(nn.Module):
         gated_y = self.gateA*y_raw + self.gateB*val # TODO: Proper rezero implementation, this is a cheap hack to get the Identity initialization without any internal layer-wise benefits
         
         # softmax
-        y = self.masked_softmax(pos, gated_y)
+        y = masked_softmax_embedded(pos, gated_y)
         
         # y = decondense(y, pos, self.data_dim)
         return y
-    
-    def masked_softmax(self, pos, y_raw):
-        # Mask out elements where pos is 0
-        mask = (pos != 0)
-        masked_y_raw = y_raw.masked_fill(~mask, float('-inf'))
-        # Normalize the output to sum to 1 (excluding masked elements)
-        y = nn.functional.softmax(masked_y_raw, dim=-1)
-        # Set masked elements to 0
-        y = y * mask.float()
-        return y
+  
     
 class RZTransformerNormalized(nn.Module):
     '''
@@ -661,19 +577,9 @@ class RZTransformerNormalized(nn.Module):
         y_raw = h[..., 0]
         
         # softmax
-        y = self.masked_softmax(pos, y_raw)
+        y = masked_softmax_embedded(pos, y_raw)
         
         # y = decondense(y, pos, self.data_dim)
-        return y
-    
-    def masked_softmax(self, pos, y_raw):
-        # Mask out elements where pos is 0
-        mask = (pos != 0)
-        masked_y_raw = y_raw.masked_fill(~mask, float('-inf'))
-        # Normalize the output to sum to 1 (excluding masked elements)
-        y = nn.functional.softmax(masked_y_raw, dim=-1)
-        # Set masked elements to 0
-        y = y * mask.float()
         return y
 
 

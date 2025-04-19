@@ -5,6 +5,17 @@ import models_cnode
 from ode_solver import odeint
 
 
+def masked_softmax(y, x):
+    # Mask out elements where pos is 0
+    mask = (x > 0.0)
+    masked_y = y.masked_fill(~mask, float('-inf'))
+    # Normalize the output to sum to 1 (excluding masked elements)
+    y = nn.functional.softmax(masked_y, dim=-1)
+    # Set masked elements to 0
+    y = y * mask.float()
+    return y
+
+
 class ReturnInput(nn.Module):
     # This model returns the input as the output. Since our inputs are fixed value for all nonzero features, this model is equivalent to returning a uniform distribution of the species in the assemblage.
     def __init__(self):
@@ -32,17 +43,7 @@ class SingleConstFilteredNormalized(nn.Module):
     def forward(self, x):
         f = self.f.expand(x.shape)
         
-        # Apply mask: we need to do this for each batch element separately
-        mask = x != 0  # Shape: (batch_size, input_dim)
-        
-        # Masking and normalization per batch element
-        y = torch.zeros_like(f)  # This will hold the output
-        
-        for i in range(x.shape[0]):
-            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
-            if f_selected.numel() > 0:  # If there are any unmasked elements
-                f_normalized = f_selected / f_selected.sum()  # Normalize
-                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        y = masked_softmax(f, x)  # Apply mask: we need to do this for each batch element separately
         
         return y
 
@@ -75,23 +76,12 @@ class ConstOutputFilteredNormalized(nn.Module):
     def forward(self, x):
         # x is assumed to be batched with shape (batch_size, input_dim)
         batch_size = x.shape[0]
-        input_dim = x.shape[1]
         
         f = self.f.unsqueeze(0).expand(batch_size, -1)  # Repeat f for each batch element
         
         gated_f = self.gateA*f + self.gateB*x
         
-        # Apply mask: we need to do this for each batch element separately
-        mask = x != 0  # Shape: (batch_size, input_dim)
-        
-        # Masking and normalization per batch element
-        y = torch.zeros_like(gated_f)  # This will hold the output
-        
-        for i in range(batch_size):
-            f_selected = gated_f[i, mask[i]]  # Select only the unmasked values for this batch element
-            if f_selected.numel() > 0:  # If there are any unmasked elements
-                f_normalized = f_selected / f_selected.sum()  # Normalize
-                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        y = masked_softmax(gated_f, x) 
 
         return y
 
@@ -120,25 +110,11 @@ class SLPFilteredNormalized(nn.Module):
         self.f2 = nn.Linear(M, N)
     
     def forward(self, x):
-        # x is assumed to be batched with shape (batch_size, input_dim)
-        batch_size = x.shape[0]
-        input_dim = x.shape[1]
-        
         f = self.f1(x)
         f = self.relu(f)
         f = self.f2(f)
         
-        # Apply mask: we need to do this for each batch element separately
-        mask = x != 0  # Shape: (batch_size, input_dim)
-        
-        # Masking and normalization per batch element
-        y = torch.zeros_like(f)  # This will hold the output
-        
-        for i in range(batch_size):
-            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
-            if f_selected.numel() > 0:  # If there are any unmasked elements
-                f_normalized = f_selected / f_selected.sum()  # Normalize
-                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        y = masked_softmax(f, x)
         
         return y
 
@@ -152,26 +128,12 @@ class SLPSumFilteredNormalized(nn.Module):
         self.f2 = nn.Linear(M, N)
     
     def forward(self, x):
-        # x is assumed to be batched with shape (batch_size, input_dim)
-        batch_size = x.shape[0]
-        input_dim = x.shape[1]
-        
         f = self.f1(x)
         f = self.relu(f)
         f = self.f2(f)
         f = x + f
         
-        # Apply mask: we need to do this for each batch element separately
-        mask = x != 0  # Shape: (batch_size, input_dim)
-        
-        # Masking and normalization per batch element
-        y = torch.zeros_like(f)  # This will hold the output
-        
-        for i in range(batch_size):
-            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
-            if f_selected.numel() > 0:  # If there are any unmasked elements
-                f_normalized = f_selected / f_selected.sum()  # Normalize
-                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        y = masked_softmax(f, x)
         
         return y
 
@@ -192,10 +154,6 @@ class SLPMultFilteredNormalized(nn.Module):
             self.register_buffer('gateB', torch.tensor(0.0))
     
     def forward(self, x):
-        # x is assumed to be batched with shape (batch_size, input_dim)
-        batch_size = x.shape[0]
-        input_dim = x.shape[1]
-        
         f = self.f1(x)
         f = self.relu(f)
         f = self.f2(f)
@@ -203,17 +161,7 @@ class SLPMultFilteredNormalized(nn.Module):
 
         gated_f = self.gateA*f + self.gateB*x
         
-        # Apply mask: we need to do this for each batch element separately
-        mask = x != 0  # Shape: (batch_size, input_dim)
-        
-        # Masking and normalization per batch element
-        y = torch.zeros_like(gated_f)  # This will hold the output
-        
-        for i in range(batch_size):
-            f_selected = gated_f[i, mask[i]]  # Select only the unmasked values for this batch element
-            if f_selected.numel() > 0:  # If there are any unmasked elements
-                f_normalized = f_selected / f_selected.sum()  # Normalize
-                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        y = masked_softmax(gated_f, x)
         
         return y
 
@@ -227,26 +175,12 @@ class SLPMultSumFilteredNormalized(nn.Module):
         self.f2 = nn.Linear(M, N)
     
     def forward(self, x):
-        # x is assumed to be batched with shape (batch_size, input_dim)
-        batch_size = x.shape[0]
-        input_dim = x.shape[1]
-        
         f = self.f1(x)
         f = self.relu(f)
         f = self.f2(f)
         f = (x * f) + x
         
-        # Apply mask: we need to do this for each batch element separately
-        mask = x != 0  # Shape: (batch_size, input_dim)
-        
-        # Masking and normalization per batch element
-        y = torch.zeros_like(f)  # This will hold the output
-        
-        for i in range(batch_size):
-            f_selected = f[i, mask[i]]  # Select only the unmasked values for this batch element
-            if f_selected.numel() > 0:  # If there are any unmasked elements
-                f_normalized = f_selected / f_selected.sum()  # Normalize
-                y[i, mask[i]] = f_normalized  # Assign normalized values back
+        y = masked_softmax(f, x)
         
         return y
     
