@@ -109,11 +109,11 @@ def main():
                         # 'baseline-SLPMultShaped',
                         # 'cNODE1',
                         # 'cNODE2',
-                        # 'transformShaped',
+                        'transformShaped',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
-                        'canODE-attendFit',
+                        # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
                         # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
@@ -138,9 +138,9 @@ def main():
                         "256-random",
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
-                        # 1000,
+                        1000,
                         # 10000, 
-                        30, 
+                        # 30, 
                         # 100000, 
                         # 1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
@@ -168,16 +168,17 @@ def main():
     hpbuilder.add_param("epochs", 
                         # 6, 20, 64, 200, 
                         # 64, 
-                        25, 
+                        # 25, 
+                        7, 
                         # 200, 
                         help="maximum number of epochs")
-    hpbuilder.add_flag("subset_increases_epochs", False,
+    hpbuilder.add_flag("subset_increases_epochs", True,
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
     hpbuilder.add_param("min_epochs", 1, 
                         help="minimum number of epochs")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
-    hpbuilder.add_param("run_test", True,
+    hpbuilder.add_param("run_test", False,
                         category=datacat, help="run the test set after training")
     hpbuilder.add_param("use_best_model", 
                         # True,
@@ -205,7 +206,8 @@ def main():
     
     # Optimizer params
     hpbuilder.add_param("lr", 
-                        0.1, 
+                        # 0.1, 
+                        0.00160707665, 
                         # 0.001,
                         # 0.01, 
                         # 1.0, 0.32, 0.1, 0.032, 
@@ -246,17 +248,19 @@ def main():
                         True, 
                         # False,
                         help="whether or not to use a bias term when predicting fitness in cNODE and similar models")
-    hpbuilder.add_param("num_heads", 2, 
+    hpbuilder.add_param("num_heads", 15,  
                         help="number of attention heads in transformer-based models")
     hpbuilder.add_param("hidden_dim", 8, 
                         help="hidden dimension")
-    hpbuilder.add_param("attend_dim_per_head", 4, 
+    hpbuilder.add_param("attend_dim_per_head", 9,
                         help="dimension of attention embedding, per attention head")
-    hpbuilder.add_param("depth", 6, 
+    hpbuilder.add_param("depth", 4, 
                         help="depth of model")
-    hpbuilder.add_param("ffn_dim_multiplier", 4.0, 
+    hpbuilder.add_param("ffn_dim_multiplier", 
+                        # 4.0,
+                        3.924555754,  
                         help="multiplier for feedforward network dimension in transformer-based models")
-    hpbuilder.add_param("dropout", 0.1, 
+    hpbuilder.add_param("dropout", 0.04137076975, 
                         help="dropout rate")
 
     

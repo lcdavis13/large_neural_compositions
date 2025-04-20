@@ -5,15 +5,18 @@ import models_cnode
 from ode_solver import odeint
 
 
-def masked_softmax(y, x):
-    # Mask out elements where pos is 0
-    mask = (x > 0.0)
-    masked_y = y.masked_fill(~mask, float('-inf'))
-    # Normalize the output to sum to 1 (excluding masked elements)
-    y = nn.functional.softmax(masked_y, dim=-1)
-    # Set masked elements to 0
-    y = y * mask.float()
-    return y
+def masked_softmax(y, mask_source):
+    # Create binary mask where x > 0
+    mask = (mask_source > 0).float()
+
+    # Exponentiate y and apply mask
+    exp_y = torch.exp(y) * mask
+
+    # Normalize by the sum of unmasked exponentiated values
+    sum_exp = torch.sum(exp_y, dim=-1, keepdim=True) + 1e-13  # epsilon for numerical stability
+    softmax_y = exp_y / sum_exp
+
+    return softmax_y
 
 
 class ReturnInput(nn.Module):
