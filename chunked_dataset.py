@@ -276,7 +276,16 @@ def load_folded_datasets(
 ):
     folds = []
 
-    def print_dataset_summary(train_set, val_set, dense_columns, sparse_columns):
+    def dataset_summary(train_set, val_set, non_sparse_key, sparse_key):
+
+        num_train_samples = len(train_set.indices)
+        
+        assert non_sparse_key in train_set.column_counts, f"Key '{non_sparse_key}' not found in dataset."
+        assert sparse_key in train_set.column_counts, f"Key '{sparse_key}' not found in dataset."
+        
+        dense_columns = train_set.column_counts[non_sparse_key]
+        sparse_columns = train_set.column_counts[sparse_key]
+
         total_available_samples = train_set.total_size
         num_train_samples = len(train_set.indices)
         num_val_samples = len(val_set.indices)
@@ -291,11 +300,14 @@ def load_folded_datasets(
             proportion = num_train_samples / non_val_samples
             print(f"Proportion of non-validation data used: {proportion:.4f}")
         else:
+            proportion = 0.0
             print("Proportion of non-validation data used: N/A (no non-val samples)")
 
         # Feature counts
         print(f"{non_sparse_key} columns: {dense_columns}")
         print(f"{sparse_key} columns: {sparse_columns}")
+
+        return num_train_samples, proportion, dense_columns, sparse_columns
 
     # Hold-out validation
     if data_validation_samples > 0:
@@ -319,14 +331,7 @@ def load_folded_datasets(
 
         folds.append((train_set, val_set))
 
-
-        num_train_samples = len(train_set.indices)
-        assert non_sparse_key in train_set.column_counts, f"Key '{non_sparse_key}' not found in dataset."
-        assert sparse_key in train_set.column_counts, f"Key '{sparse_key}' not found in dataset."
-        dense_columns = train_set.column_counts[non_sparse_key]
-        sparse_columns = train_set.column_counts[sparse_key]
-
-        print_dataset_summary(train_set, val_set, dense_columns, sparse_columns)
+        num_train_samples, train_proportion, dense_columns, sparse_columns = dataset_summary(train_set, val_set, non_sparse_key, sparse_key)
 
     # K-Fold cross-validation
     else:
@@ -354,13 +359,8 @@ def load_folded_datasets(
             batch_size=batch_size
         )
 
-        num_train_samples = len(train_set.indices)
-        assert non_sparse_key in train_set.column_counts, f"Key '{non_sparse_key}' not found in dataset."
-        assert sparse_key in train_set.column_counts, f"Key '{sparse_key}' not found in dataset."
-        dense_columns = train_set.column_counts[non_sparse_key]
-        sparse_columns = train_set.column_counts[sparse_key]
 
-        print_dataset_summary(train_set, val_set, dense_columns, sparse_columns)
+        num_train_samples, train_proportion, dense_columns, sparse_columns = dataset_summary(first_train_set, first_val_set, non_sparse_key, sparse_key)
 
         folds.append((first_train_set, first_val_set))
 
@@ -388,6 +388,6 @@ def load_folded_datasets(
 
             folds.append((train_set, val_set))
 
-    return folds, num_train_samples, dense_columns, sparse_columns
+    return folds, num_train_samples, train_proportion, dense_columns, sparse_columns
 
 

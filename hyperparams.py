@@ -2,6 +2,7 @@ import argparse
 import itertools
 from typing import Any, List, Dict, Optional
 from dotsy import dicy
+import random
 
 def str2bool(value):
     if isinstance(value, bool):
@@ -12,6 +13,34 @@ def str2bool(value):
         return False
     else:
         raise argparse.ArgumentTypeError("Boolean value expected (true/false, 1/0, yes/no).")
+    
+
+def parse_random_value(value: str, expected_type: type) -> Any:
+    """
+    Parse values of the formats either "[X]", "[A...B]", or "[A^^^B]" and return a random value. 
+    If the expected_type is a boolean, it will attempt to interpret the interior of the brackets as a single float X representing probability for the True condition. If the value cannot be interpreted this way, it will default to 0.5. 
+    If the expected_type is a numeric type, it will interpret the interior of the brackets as a range of values from A to B which will be sampled uniformly. If using "..." the range is sampled linearly, if using "^^^" the range is sampled logarithmically.
+    Otherwise it raises an error.
+    """
+    if not value.startswith("[") or not value.endswith("]"):
+        raise ValueError(f"Value '{value}' must be enclosed in brackets.")
+
+    value = value[1:-1]
+    if "..." in value:
+        start, end = map(expected_type, value.split("..."))
+        return expected_type(random.uniform(start, end))
+    elif "^^^" in value:
+        start, end = map(expected_type, value.split("^^^"))
+        return expected_type(start * (end / start) ** random.uniform(0.0, 1.0))
+    else:
+        if expected_type == bool:
+            try:
+                return expected_type(float(value))
+            except ValueError:
+                return False
+        else:
+            return expected_type(value)
+
 
 class HyperparameterBuilder:
     def __init__(self):
@@ -103,29 +132,51 @@ class HyperparameterBuilder:
         param_names = self.categories.get(category, [])
 
         # Process parameters and types
-        param_lists = {}
+        fixed_param_lists = {}
+        random_param_flags = {}
+
         for name in param_names:
             config = self.params[name]
             raw_value = args[name]
 
             if config["multiple"]:
-                # Parse comma-separated values
-                values = raw_value.split(",")
-                param_lists[name] = [config["type"](v) for v in values]
+                if isinstance(raw_value, str) and raw_value.startswith("[") and raw_value.endswith("]"):
+                    # Mark this param as needing random sampling
+                    random_param_flags[name] = (raw_value, config["type"])
+                    fixed_param_lists[name] = [None]  # Placeholder
+                else:
+                    # Parse comma-separated fixed values
+                    values = raw_value.split(",")
+                    fixed_param_lists[name] = [config["type"](v) for v in values]
             else:
                 # Single value for flags
-                param_lists[name] = [config["type"](raw_value)]
+                fixed_param_lists[name] = [config["type"](raw_value)]
 
         # Generate combinations
         combinations = []
-        for idx, values in enumerate(itertools.product(*param_lists.values())):
-            combination = dicy(dict(zip(param_lists.keys(), values)))
-            # Add configid or category-specific configid
+        fixed_param_names = [name for name in param_names if name not in random_param_flags]
+
+        for idx, fixed_values in enumerate(itertools.product(*[fixed_param_lists[name] for name in fixed_param_names])):
+            combination = {}
+
+            # Assign fixed parameters
+            for name, value in zip(fixed_param_names, fixed_values):
+                combination[name] = value
+
+            # Sample random parameters independently for each combination
+            for name, (raw_value, value_type) in random_param_flags.items():
+                combination[name] = parse_random_value(raw_value, value_type)
+
+            # Add configid
             configid_key = f"{category}_configid" if category else "configid"
             combination[configid_key] = idx
+
+            combination = dicy(combination)  # Convert to dotsy.dicy object
+
             combinations.append(combination)
 
         return combinations
+
 
 # test
 if __name__ == "__main__":

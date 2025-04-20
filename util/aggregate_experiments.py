@@ -4,13 +4,14 @@ import pandas as pd
 import re
 
 model_col = "model_config"
+val_loss_col = "Avg Validation Loss"
 
 def load_and_process_csv_files(path_pattern):
     """
     Load all CSV files from the given path pattern, process each file by removing rows with 'fold' = -1,
     grouping rows by the model_col column to ensure rows with different model_col values are not averaged together,
     averaging numeric columns within each group, and taking the first value for non-numeric columns.
-    Additionally, compute summary statistics (median, standard deviation, min, and max) for the 'val_loss' column.
+    Additionally, compute summary statistics (median, standard deviation, min, and max) for the val_loss_col column.
     Extract the job number from the filename and include it as a column.
 
     Args:
@@ -59,13 +60,13 @@ def load_and_process_csv_files(path_pattern):
                 first_value_data = {col: group_df[col].iloc[0] if not group_df[col].empty else None for col in
                                     non_numeric_cols}
                 
-                # Calculate additional summary statistics for 'val_loss' if it exists
-                if 'val_loss' in group_df.columns:
+                # Calculate additional summary statistics for val_loss_col if it exists
+                if val_loss_col in group_df.columns:
                     val_loss_stats = {
-                        'val_loss_median': group_df['val_loss'].median(),
-                        'val_loss_std': group_df['val_loss'].std(),
-                        'val_loss_min': group_df['val_loss'].min(),
-                        'val_loss_max': group_df['val_loss'].max()
+                        'val_loss_median': group_df[val_loss_col].median(),
+                        'val_loss_std': group_df[val_loss_col].std(),
+                        'val_loss_min': group_df[val_loss_col].min(),
+                        'val_loss_max': group_df[val_loss_col].max()
                     }
                 else:
                     val_loss_stats = {
@@ -107,10 +108,14 @@ def save_master_csv(master_df, output_path):
     try:
         # Define the desired column order, excluding the always-last columns
         column_order = [
-            'dataset', 'data_subset', model_col, 'model_name', 'mean_val_loss', 'lr', 'reptile_lr', 'noise', 'interpolate',
-            'cnode_bias', 'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'wd_factor', 'ode_timesteps', 'hidden_dim',
-            'ffn_dim_multiplier', 'mean_val_loss @ epoch', 'mean_val_loss @ time', 'mean_val_loss @ trn_loss',
-            'val_loss', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
+            'dataset', 'data_subset', model_col, 'model_name', val_loss_col, 
+            'lr', 'reptile_lr', 'wd', 'identity_gate', 
+            'cnode_bias', 'cnode1_init_zero', 
+            'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'ode_timestep_file', 'hidden_dim', 'ffn_dim_multiplier', 
+            'noise', 'interpolate', 'interpolate_noise',
+            "update steps", "Avg Training Loss", "Elapsed Time", "VRAM (GB)", "Peak RAM (GB)",
+            # 'mean_val_loss @ epoch', 'mean_val_loss @ time', 'mean_val_loss @ trn_loss',
+            'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
         ]
 
         # Define the columns that should always appear last
@@ -140,7 +145,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "./results/batchsize-test_2-3-25/expt/"
+    folder = "./results/hpsearch_4-13/"
     path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     
