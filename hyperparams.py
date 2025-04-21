@@ -1,5 +1,6 @@
 import argparse
 import itertools
+import sys
 from typing import Any, List, Dict, Optional
 from dotsy import dicy
 import random
@@ -91,10 +92,7 @@ class HyperparameterBuilder:
     def add_flag(self, name: str, default: bool, category: str=None, help: str = "") -> "HyperparameterBuilder":
         """
         Add a boolean flag that does not support multiple values.
-        - `name`: Parameter name.
-        - `default`: Default boolean value.
-        - `category`: Subcategory for grouping this parameter.
-        - `help`: Help string for argparse.
+        Uses default only if no CLI args are provided (e.g. run from IDE).
         """
         self.params[name] = {
             "type": bool,
@@ -104,19 +102,31 @@ class HyperparameterBuilder:
             "category": category,
         }
 
-        # Add to category
         if category not in self.categories:
             self.categories[category] = []
         self.categories[category].append(name)
 
-        # Add argparse argument
-        action = "store_true" if not default else "store_false"
-        self.parser.add_argument(
-            f"--{name}",
-            action=action,
-            help=f"{help} (default: {default})",
-        )
+        # Detect whether running from CLI or IDE
+        cli_invoked = len(sys.argv) > 1
+
+        if cli_invoked:
+            # Typical flag behavior: False by default, True if flag is present
+            self.parser.add_argument(
+                f"--{name}",
+                action="store_true",
+                help=f"{help} (default: False, set to true by passing the flag)",
+            )
+        else:
+            # IDE-like behavior: use provided default
+            self.parser.add_argument(
+                f"--{name}",
+                type=str2bool,
+                default=default,
+                help=f"{help} (default: {default})",
+            )
+
         return self
+
 
     def parse_and_generate_combinations(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """

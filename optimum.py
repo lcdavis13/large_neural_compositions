@@ -73,6 +73,8 @@ def summarize(optimum_list):
     
     # Assume all Optimum objects have the same metric and metric_type
     metric = optimum_list[0].metric_name
+    if metric is None:
+        metric = "mini_epoch"
     metric_type = optimum_list[0].metric_type
     
     # Collect keys from the first Optimum dict for summarization
@@ -98,6 +100,8 @@ def unrolloptims(*optimums):
     for opt in optimums:
         # First, add the optimized key-value pair
         optimized_key = opt.metric_name
+        if optimized_key is None:
+            optimized_key = "mini_epoch"
         optimized_value = opt.dict.get(optimized_key)
         
         # Append the optimized key-value pair first

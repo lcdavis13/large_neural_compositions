@@ -114,6 +114,7 @@ def run_test(model, requires_condensed, model_name, model_config, epoch, mini_ep
                             "Peak RAM (GB)", cpuRam / (1024 ** 3),
                             prefix="==================TESTING=================\n",
                             suffix="\n=============================================\n")
+    return l_test
 
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
@@ -456,7 +457,7 @@ def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, sc
 
 def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
                model_name, model_config, dataname, fold, loss_fn, score_fn, distr_error_fn, device, mini_epoch_size, full_epoch_size, outputs_per_epoch=10, verbosity=1,
-               reptile_rate=0.0, preeval_training_set=True, reeval_train_epoch=False, reeval_train_final=True, jobstring="", use_best_model=True):
+               preeval_training_set=True, reeval_train_epoch=False, reeval_train_final=True, jobstring="", use_best_model=True):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
     epoch = 0
@@ -519,12 +520,12 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
     update_steps = 0
     start_time = time.time()
     
-    if reptile_rate > 0.0:
-        # Create a copy of the model to serve as the meta-model
-        meta_model = copy.deepcopy(model)
-        outer_optimizer = type(optimizer)(meta_model.parameters())
-        outer_optimizer.load_state_dict(optimizer.state_dict())
-        outer_optimizer.lr = reptile_rate
+    # if reptile_rate > 0.0:
+    #     # Create a copy of the model to serve as the meta-model
+    #     meta_model = copy.deepcopy(model)
+    #     outer_optimizer = type(optimizer)(meta_model.parameters())
+    #     outer_optimizer.load_state_dict(optimizer.state_dict())
+    #     outer_optimizer.lr = reptile_rate
     
     training_curve = []
     has_backup = False
@@ -558,19 +559,19 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
             distr_error_fn, device, filepath_out_incremental,
             lr_plot="Learning Rate", verbosity=verbosity - 1
         )
-        if reptile_rate > 0.0:
-            # Meta-update logic
-            with torch.no_grad():
-                # Apply the difference as pseudo-gradients to the outer optimizer
-                meta_weights = {name: param.clone() for name, param in meta_model.state_dict().items()}
-                for name, param in meta_model.named_parameters():
-                    param.grad = (meta_weights[name] - model.state_dict()[name])
+        # if reptile_rate > 0.0:
+        #     # Meta-update logic
+        #     with torch.no_grad():
+        #         # Apply the difference as pseudo-gradients to the outer optimizer
+        #         meta_weights = {name: param.clone() for name, param in meta_model.state_dict().items()}
+        #         for name, param in meta_model.named_parameters():
+        #             param.grad = (meta_weights[name] - model.state_dict()[name])
                 
-                # Use the outer optimizer to step with these gradients
-                outer_optimizer.step()
+        #         # Use the outer optimizer to step with these gradients
+        #         outer_optimizer.step()
                 
-                # Synchronize the inner model with the updated meta-model weights
-                model.load_state_dict(meta_model.state_dict())
+        #         # Synchronize the inner model with the updated meta-model weights
+        #         model.load_state_dict(meta_model.state_dict())
         
         l_val, score_val, p_val = validate_epoch(model, requires_condensed, data_valid, minibatch_examples, t, loss_fn, score_fn,
                                                  distr_error_fn, device)
@@ -644,6 +645,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         #     print("WARNING: CURRENT LOSS METRIC DISAGREES WITH DKI LOSS METRIC")
 
         # time to stop: optionally load model and run test.
+        test_score = None
         if should_stop:
             print("===Stopping training===")
             if data_test or reeval_train_final:
@@ -655,16 +657,16 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                     print(f"Final Training Loss: {l_trn}, Final Validation Loss: {l_val}")
                 if data_test:
                     print("Running test")
-                    run_test(model, requires_condensed, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time, train_loss=l_trn, val_loss=l_val)
+                    test_score = run_test(model, requires_condensed, model_name, model_config, val_opt.epoch, val_opt.mini_epoch, minibatch_examples, data_test, t, fold, loss_fn, score_fn, distr_error_fn, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time, train_loss=l_trn, val_loss=l_val)
             break
     
-    return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve
+    return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve, test_score
 
 
 def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_test, total_train_samples, noise, interpolate, interpolate_noise, device, early_stop, patience, kfolds,
                         min_epochs, max_epochs, mini_epoch_size, 
                         minibatch_examples, model_constr, epoch_manager_constr, model_args, model_name, model_config, dataname, timesteps, loss_fn,
-                        score_fn, distr_error_fn, weight_decay, verbosity=1, reptile_rewind=0.0, preeval_training_set=True, reeval_train_epoch=False, reeval_train_final=True,
+                        score_fn, distr_error_fn, weight_decay, verbosity=1, preeval_training_set=True, reeval_train_epoch=False, reeval_train_final=True,
                         whichfold=-1, jobstring="", use_best_model=True):
     filepath_out_fold = f'results/folds/{model_config}_{dataname}{jobstring}_folds.csv'
     
@@ -677,6 +679,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
     trn_loss_optims = []
     trn_score_optims = []
     final_optims = []
+    test_scores = []
     val_loss_curves = []
     for fold_num, data_fold in enumerate(data_folded):
         if whichfold >= 0:
@@ -725,13 +728,13 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
         
         print(f"Fold {fold_num + 1}/{kfolds}")
         
-        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve = run_epochs(
+        val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve, test_score = run_epochs(
             model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, 
             noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test,
             timesteps, model_name, model_config, dataname, fold_num, loss_fn, score_fn,
             distr_error_fn, device, mini_epoch_size, total_train_samples, 
             outputs_per_epoch=10, verbosity=verbosity - 1,
-            reptile_rate=reptile_rewind,
+            # reptile_rate=reptile_rewind,
             preeval_training_set=preeval_training_set, reeval_train_epoch=reeval_train_epoch, reeval_train_final=reeval_train_final,
             jobstring=jobstring, 
             use_best_model=True
@@ -795,6 +798,7 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
         trn_loss_optims.append(trn_opt)
         trn_score_optims.append(trnscore_opt)
         final_optims.append(last_opt)
+        test_scores.append(test_score)
         
         stream.stream_results(filepath_out_fold, verbosity > 0, verbosity > 0, verbosity > -1,
                               "fold", fold_num,
@@ -810,10 +814,11 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
                               "Trn @ mini-epochs", trn_opt.mini_epoch,
                               "Trn @ time", trn_opt.time,
                               "Trn @ validation loss", trn_opt.val_loss,
+                              "Test Loss", test_score,
                               prefix="\n========================================FOLD=========================================\n",
                               suffix="\n=====================================================================================\n")
     
     val_loss_curves.append(training_curve)
     
-    return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, val_loss_curves
+    return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, val_loss_curves, test_scores
 

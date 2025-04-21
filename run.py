@@ -1,6 +1,8 @@
 import os
 import traceback
 
+import numpy as np
+
 import chunked_dataset
 import epoch_managers
 
@@ -127,7 +129,7 @@ def main():
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        'cNODE-hourglass',
+                        # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 
@@ -160,7 +162,7 @@ def main():
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
     hpbuilder.add_param("whichfold", -1, 
                         category=datacat, help="which fold to run, -1 for all")
-    hpbuilder.add_param("data_validation_samples", 0,
+    hpbuilder.add_param("data_validation_samples", 1000,
                         category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
     hpbuilder.add_param("minibatch_examples", 100, 
                         help="minibatch size",
@@ -189,13 +191,17 @@ def main():
                         7, 
                         # 200, 
                         help="maximum number of epochs")
-    hpbuilder.add_flag("subset_increases_epochs", True,
+    hpbuilder.add_flag("subset_increases_epochs", 
+                        # True,
+                        False, 
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
     hpbuilder.add_param("min_epochs", 1, 
                         help="minimum number of epochs")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
-    hpbuilder.add_param("run_test", False,
+    hpbuilder.add_param("run_test", 
+                        True,
+                        # False,
                         category=datacat, help="run the test set after training")
     hpbuilder.add_flag("use_best_model", 
                         # True,
@@ -235,8 +241,8 @@ def main():
                         # 0.32, 0.1, 0.032, 0.01, 0.0032,
                         # 0.32, 0.1, 0.032, 0.01, 0.0032, #0.001, 0.00032,   
                         help="learning rate")
-    hpbuilder.add_param("reptile_lr", 1.0, 
-                        help="reptile outer-loop learning rate")
+    # hpbuilder.add_param("reptile_lr", 1.0, 
+    #                     help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd", 0.0, 
                         help="weight decay")
     hpbuilder.add_param("noise", 0.0,   
@@ -524,6 +530,7 @@ def main():
                                     "mean_val_loss @ mini-epoch", -1,
                                     "mean_val_loss @ time", -1,
                                     "mean_val_loss @ trn_loss", -1,
+                                    "test loss", -1,
                                     "identity loss", identity_loss,
                                     "model parameters", num_params,
                                     "fold", -1,
@@ -539,11 +546,11 @@ def main():
                 
                 
                 # train and test the model across multiple folds
-                val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves = expt.crossvalidate_model(
+                val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves, test_scores = expt.crossvalidate_model(
                     hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, dp.total_train_samples, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
                     dp.kfolds, hp.min_epochs, hp.adjusted_epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
                     hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.wd, verbosity=1,
-                    reptile_rewind=(1.0 - hp.reptile_lr), preeval_training_set=hp.preeval_training_set, reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
+                    preeval_training_set=hp.preeval_training_set, reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
                     whichfold=dp.whichfold, jobstring=jobstring, use_best_model=hp.use_best_model
                 )
                 
@@ -553,20 +560,25 @@ def main():
                 print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
                 print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
                 print(f'Final optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(final_optims)]}\n')
+                print(f'Test scores: \n{[f'Fold {num}: {score}\n' for num, score in enumerate(test_scores)]}\n')
                 
                 # calculate fold summaries
                 avg_val_loss_optim = summarize(val_loss_optims)
                 avg_val_score_optim = summarize(val_score_optims)
                 avg_trn_loss_optim = summarize(trn_loss_optims)
                 avg_trn_score_optim = summarize(trn_score_optims)
-                avg_final_optims = summarize(final_optims)
+                avg_final_optim = summarize(final_optims)
+
+                # mean of test_scores, which is a list of either numbers or Nones
+                avg_test_score = np.nanmean([score for score in test_scores if score is not None])
                 
-                # print summariesrun.py
+                # print summaries
                 print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
                 print(f'Avg Val Score optimum: {avg_val_score_optim}')
                 print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
                 print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
-                print(f'Avg Final optimum: {avg_final_optims}')
+                print(f'Avg Final optimum: {avg_final_optim}')
+                print(f'Avg Test score: {avg_test_score}')
                 
                 # find optimal mini-epoch
                 # training_curves is a list of dictionaries, convert to a dataframe
@@ -590,6 +602,7 @@ def main():
                                         "optimal early stop mini-epoch", best_epoch_metrics["mini_epoch"],
                                         "optimal early stop time", best_epoch_metrics["time"],
                                         "optimal early stop trn_loss", best_epoch_metrics["trn_loss"],
+                                        "test loss", test_scores[i],
                                         "identity loss", identity_loss,
                                         "model parameters", num_params,
                                         "fold", i if dp.whichfold < 0 else dp.whichfold,
@@ -610,6 +623,7 @@ def main():
                                 "mean_val_loss @ mini-epoch", -1,
                                 "mean_val_loss @ time", -1,
                                 "mean_val_loss @ trn_loss", -1,
+                                "test loss", -1,
                                 "identity loss", identity_loss,
                                 "model parameters", num_params,
                                 "fold", -1,
