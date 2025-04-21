@@ -36,7 +36,7 @@ def eval_model(model, x, timesteps, ids):
     else:
         # Call models that do not require the timesteps argument
         if requires_condensed:
-            y = model(x, ids)  # problem is that the IDs is being loaded as float in the data loader
+            y = model(x, ids) 
         else:
             y = model(x)
         y_steps = y.unsqueeze(0)

@@ -119,11 +119,11 @@ def main():
 
     hpbuilder.add_param("model_name", 
                         # "junk", 
-                        # 'baseline-constShaped',
-                        # 'baseline-SLPMultShaped',
+                        # 'baseline-ConstSoftmax',
+                        # 'baseline-SLPMultSoftmax',
                         # 'cNODE1',
                         # 'cNODE2',
-                        'transformShaped',
+                        'transformSoftmax',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
@@ -152,9 +152,9 @@ def main():
                         "256-random",
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
-                        1000,
+                        # 1000,
                         # 10000, 
-                        # 30, 
+                        30, 
                         # 100000, 
                         # 1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
@@ -162,7 +162,7 @@ def main():
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
     hpbuilder.add_param("whichfold", -1, 
                         category=datacat, help="which fold to run, -1 for all")
-    hpbuilder.add_param("data_validation_samples", 1000,
+    hpbuilder.add_param("data_validation_samples", 100,
                         category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
     hpbuilder.add_param("minibatch_examples", 100, 
                         help="minibatch size",
@@ -295,11 +295,11 @@ def main():
     # Note that each must be a constructor function that takes a dicy/dictionary args. Lamda is recommended.
     models = {
         # most useful models
-        'baseline-constShaped': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
-        'baseline-SLPMultShaped': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
+        'baseline-ConstSoftmax': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
+        'baseline-SLPMultSoftmax': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
         'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, bias=args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, bias=True, identity_gate=args.identity_gate),
-        'transformShaped': lambda args: models_embedded.TransformerNormalized(
+        'transformSoftmax': lambda args: models_embedded.TransformerNormalized(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout, 
             identity_gate=args.identity_gate
@@ -345,10 +345,6 @@ def main():
         
         # additional attention-based models
         'transformer': lambda args: models_embedded.JustATransformer(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
-        ),
-        'transformSoftmax': lambda args: models_embedded.TransformerSoftmax(
             data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         ),

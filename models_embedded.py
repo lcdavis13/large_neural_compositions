@@ -534,15 +534,15 @@ class TransformerNormalized(nn.Module):
         
         # extract the value from the transformer output
         y_raw = h[..., 0]
-
-        
-        gated_y = self.gateA*y_raw + self.gateB*val # TODO: Proper rezero implementation, this is a cheap hack to get the Identity initialization without any internal layer-wise benefits
         
         # softmax
-        y = masked_softmax(gated_y, pos)
+        y = masked_softmax(y_raw, pos)
+
+        
+        gated_y = self.gateA*y + self.gateB*val # TODO: Proper rezero implementation, this is a cheap hack to get the Identity initialization without any internal layer-wise benefits
         
         # y = decondense(y, pos, self.data_dim)
-        return y
+        return gated_y
   
     
 class RZTransformerNormalized(nn.Module):
