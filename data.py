@@ -2,9 +2,7 @@ import numpy as np
 import torch
 from sklearn.model_selection import KFold
 
-import torch
-
-import torch
+from torch.distributions.dirichlet import Dirichlet
 
 
 def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tensor:
@@ -59,6 +57,36 @@ def resample_noisy(mean_values: torch.Tensor, peak_stddev: float) -> torch.Tenso
     
     return sampled_values
 
+def noisy_x0(x0: torch.Tensor, noise: float, alpha_value: float = 1.0) -> torch.Tensor:
+    """
+    Efficient, batched version of masked Dirichlet mixture.
+    """
+    # Skipping these asserts for performance
+    # assert x0.dim() == 2, "Input must be a 2D tensor [B, D]"
+    # assert 0.0 <= weight <= 1.0, "Weight must be between 0 and 1"
+
+    mask = x0 > 0
+    batch_size, dim = x0.shape
+    device = x0.device
+    dtype = x0.dtype
+
+    # For each row, build a Dirichlet over only the unmasked elements
+    dirichlet_samples = []
+    for i in range(batch_size):
+        row_mask = mask[i]
+        num_valid = row_mask.sum()
+        if num_valid == 0:
+            dirichlet_samples.append(torch.zeros(dim, device=device, dtype=dtype))
+        else:
+            alpha = torch.full((num_valid,), alpha_value, device=device, dtype=dtype)
+            sample = Dirichlet(alpha).sample()
+            full = torch.zeros(dim, device=device, dtype=dtype)
+            full[row_mask] = sample
+            dirichlet_samples.append(full)
+
+    dirichlet_samples = torch.stack(dirichlet_samples)
+
+    return (1 - noise) * x0 + noise * dirichlet_samples
 
 
 def normalize(x, transposed=False):

@@ -169,6 +169,11 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
             x = x.to(device)
             y = y.to(device)
 
+        if noise > 0.0:
+            # print(f"x: \n{x}")
+            x = data.noisy_x0(x, noise)
+            # print(f"noisy x: \n{x}")
+
         # mb_examples = z.shape[-2]
         mb_examples = x.size(0)
         

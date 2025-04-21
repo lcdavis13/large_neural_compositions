@@ -14,7 +14,7 @@ def str2bool(value):
         return False
     else:
         raise argparse.ArgumentTypeError("Boolean value expected (true/false, 1/0, yes/no).")
-    
+
 
 def parse_random_value(value: str, expected_type: type) -> Any:
     """
@@ -29,6 +29,8 @@ def parse_random_value(value: str, expected_type: type) -> Any:
     value = value[1:-1]
     if "..." in value:
         start, end = map(expected_type, value.split("..."))
+        if expected_type == int:
+            end += 1
         return expected_type(random.uniform(start, end))
     elif "^^^" in value:
         start, end = map(expected_type, value.split("^^^"))

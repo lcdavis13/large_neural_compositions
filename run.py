@@ -121,9 +121,9 @@ def main():
                         # "junk", 
                         # 'baseline-ConstSoftmax',
                         # 'baseline-SLPMultSoftmax',
-                        # 'cNODE1',
+                        'cNODE1',
                         # 'cNODE2',
-                        'transformSoftmax',
+                        # 'transformSoftmax',
                         # 'transformShaped-AbundEncoding',
                         # 'transformRZShaped',
                         # 'canODE-FitMat',
@@ -154,7 +154,7 @@ def main():
     hpbuilder.add_param("data_subset", 
                         # 1000,
                         # 10000, 
-                        30, 
+                        100, 
                         # 100000, 
                         # 1, 10, 100, 1000, 10000, #100000, 
                         category=datacat, help="number of data samples to use, -1 for all")
@@ -188,7 +188,7 @@ def main():
                         # 6, 20, 64, 200, 
                         # 64, 
                         # 25, 
-                        7, 
+                        300, 
                         # 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", 
@@ -199,7 +199,7 @@ def main():
                         help="minimum number of epochs")
     hpbuilder.add_param("accumulated_minibatches", 1, 
                         help="number of minibatches to accumulate before stepping")
-    hpbuilder.add_param("run_test", 
+    hpbuilder.add_flag("run_test", 
                         True,
                         # False,
                         category=datacat, help="run the test set after training")
@@ -245,16 +245,20 @@ def main():
     #                     help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd", 0.0, 
                         help="weight decay")
-    hpbuilder.add_param("noise", 0.0,   
+    hpbuilder.add_param("noise", 
+                        0.0,
+                        0.01,
+                        0.032,
+                        0.1,
                         help="noise level")
     
     # Data augmentation params
     # hpbuilder.add_param("ode_timesteps", 15, 
     #                     help="number of ODE timesteps")
     hpbuilder.add_param("ode_timesteps_file", 
-                        "t.csv",
+                        # "t.csv",
                         # "t_linear.csv",
-                        # "t_shortlinear.csv",
+                        "t_shortlinear.csv",
                         help="ODE integration timesteps file")
     hpbuilder.add_param("interpolate", False, 
                         help="whether or not to use supervised interpolation steps")
