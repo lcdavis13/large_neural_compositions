@@ -121,7 +121,7 @@ def main():
                         # "junk", 
                         # 'baseline-ConstSoftmax',
                         # 'baseline-SLPMultSoftmax',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
                         # 'transformSoftmax',
                         # 'transformShaped-AbundEncoding',
@@ -129,7 +129,7 @@ def main():
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        # 'cNODE-hourglass',
+                        'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 
@@ -179,7 +179,10 @@ def main():
     hpbuilder.add_param("jobid", "-1", 
                         help="slurm job id", 
                         category=config_cat)
-    hpbuilder.add_flag("headless", False, 
+    hpbuilder.add_param("plot_mode", 
+                        # "window",
+                        "inline",
+                        # "off",
                         help="run without plotting", 
                         category=config_cat)
     
@@ -187,8 +190,8 @@ def main():
     hpbuilder.add_param("epochs", 
                         # 6, 20, 64, 200, 
                         # 64, 
-                        # 25, 
-                        300, 
+                        25, 
+                        # 300, 
                         # 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", 
@@ -247,9 +250,9 @@ def main():
                         help="weight decay")
     hpbuilder.add_param("noise", 
                         0.0,
-                        0.01,
+                        # 0.01,
                         0.032,
-                        0.1,
+                        # 0.1,
                         help="noise level")
     
     # Data augmentation params
@@ -284,7 +287,7 @@ def main():
                         help="hidden dimension")
     hpbuilder.add_param("attend_dim_per_head", 9,
                         help="dimension of attention embedding, per attention head")
-    hpbuilder.add_param("depth", 4, 
+    hpbuilder.add_param("depth", 2, 
                         help="depth of model")
     hpbuilder.add_param("ffn_dim_multiplier", 
                         # 4.0,
@@ -381,8 +384,7 @@ def main():
     for key, value in cp.items():
         print(f"{key}: {value}")
 
-    if cp.headless:
-        plotstream.set_headless()
+    plotstream.set_plot_mode(cp.plot_mode)
 
 
     # loop through possible combinations of dataset hyperparams
