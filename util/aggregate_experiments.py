@@ -4,7 +4,8 @@ import pandas as pd
 import re
 
 model_col = "model_config"
-val_loss_col = "Avg Validation Loss"
+val_loss_col = "mini_epoch @ val_loss"
+test_loss_col = "test loss"
 
 def load_and_process_csv_files(path_pattern):
     """
@@ -76,6 +77,22 @@ def load_and_process_csv_files(path_pattern):
                         'val_loss_max': None
                     }
                 
+                # Calculate additional summary statistics for test_loss_col if it exists
+                if test_loss_col in group_df.columns:
+                    test_loss_stats = {
+                        'test_loss_median': group_df[test_loss_col].median(),
+                        'test_loss_std': group_df[test_loss_col].std(),
+                        'test_loss_min': group_df[test_loss_col].min(),
+                        'test_loss_max': group_df[test_loss_col].max()
+                    }
+                else:
+                    test_loss_stats = {
+                        'test_loss_median': None,
+                        'test_loss_std': None,
+                        'test_loss_min': None,
+                        'test_loss_max': None
+                    }
+                
                 # Add the model value and job number to the row if applicable
                 processed_row = {'job_number': job_number}
                 if model_col in df.columns:
@@ -85,6 +102,7 @@ def load_and_process_csv_files(path_pattern):
                 processed_row.update(averaged_data)
                 processed_row.update(first_value_data)
                 processed_row.update(val_loss_stats)
+                processed_row.update(test_loss_stats)
                 
                 all_data.append(processed_row)
         except Exception as e:
@@ -108,7 +126,7 @@ def save_master_csv(master_df, output_path):
     try:
         # Define the desired column order, excluding the always-last columns
         column_order = [
-            'dataset', 'data_subset', model_col, 'model_name', val_loss_col, 
+            'dataset', 'data_subset', model_col, 'model_name', val_loss_col, test_loss_col, 
             'lr', 'reptile_lr', 'wd', 'identity_gate', 
             'cnode_bias', 'cnode1_init_zero', 
             'attend_dim_per_head', 'num_heads', 'depth', 'dropout', 'ode_timestep_file', 'hidden_dim', 'ffn_dim_multiplier', 
@@ -116,6 +134,7 @@ def save_master_csv(master_df, output_path):
             "update steps", "Avg Training Loss", "Elapsed Time", "VRAM (GB)", "Peak RAM (GB)",
             # 'mean_val_loss @ epoch', 'mean_val_loss @ time', 'mean_val_loss @ trn_loss',
             'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
+            'test_loss_median', 'test_loss_std', 'test_loss_min', 'test_loss_max'
         ]
 
         # Define the columns that should always appear last
@@ -145,7 +164,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "./results/hpsearch_4-13/"
+    folder = "./results/hpsearch_4-22/expt/"
     path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     

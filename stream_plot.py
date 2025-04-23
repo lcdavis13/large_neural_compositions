@@ -55,12 +55,16 @@ _shutdown_registered = False
 _mp_start_method_set = False
 _plot_refresh_interval = 0.5  # or whatever you prefer (e.g., 0.3 for ~3 FPS)
 _PLOT_MODE = "window" # Plot mode: 'window' (pop-up), 'inline' (in-process render), 'off' (disabled)
+_PLOT_WAIT_ON_EXIT = False
 
 
-def set_plot_mode(mode: str):
-    global _PLOT_MODE
+
+def set_plot_mode(mode: str, wait_on_exit: bool = False):
+    global _PLOT_MODE, _PLOT_WAIT_ON_EXIT
     assert mode in ("window", "inline", "off"), f"Invalid plot mode: {mode}"
     _PLOT_MODE = mode
+    _PLOT_WAIT_ON_EXIT = wait_on_exit
+
 
 
 def get_plot_mode():
@@ -103,7 +107,7 @@ def _ensure_plot_process(plot_name):
         _plot_queues[plot_name] = q
         config = _plot_configs.get(plot_name, {})
         print(f"[DEBUG] Creating plot process for '{plot_name}' with config: {config}")
-        p = mp.Process(target=_live_plot, args=(plot_name, q, config))
+        p = mp.Process(target=_live_plot, args=(plot_name, q, config, _PLOT_WAIT_ON_EXIT))
         p.start()
         _plot_processes[plot_name] = p
 
@@ -125,7 +129,7 @@ def _register_shutdown():
     atexit.register(wait_for_plot_exit)
 
 
-def _live_plot(plot_name, q, config):
+def _live_plot(plot_name, q, config, wait_on_exit):
     if get_plot_mode() == 'off':
         return
     
@@ -201,14 +205,22 @@ def _live_plot(plot_name, q, config):
 
         plt.pause(_plot_refresh_interval)
 
-    # # Save plot if desired
-    # if config.get("save_on_exit", False):
-    #     filename = f"{plot_name}.png"
-    #     plt.savefig(filename)
-    #     print(f"[INFO] Saved plot '{plot_name}' to {filename}")
+    # Save plot if desired
+    if config.get("save_on_exit", False):
+        filename = f"{plot_name}.png"
+        plt.savefig(filename)
+        print(f"[INFO] Saved plot '{plot_name}' to {filename}")
 
     plt.ioff()
-    plt.show()
+    fig.canvas.draw()
+    plt.pause(0.001)
+
+    if wait_on_exit:
+        plt.show()  # Manual wait
+    else:
+        plt.close(fig)  # Auto-close
+
+
 
 
 # from collections import defaultdict
@@ -261,11 +273,25 @@ def _render_inline_plot(plot_name):
 
     # Plot all lines
     for line_name, (xdata, ydata, style) in _inline_plot_data[plot_name].items():
-        ax.plot(xdata, ydata, label=line_name, **(style or {}))
+        style = dict(style or {})
+        is_marker_only = style.pop('_marker_only', False)
+
+        if is_marker_only:
+            style.setdefault('color', 'black')
+            style.setdefault('marker', 'o')
+            style.setdefault('linestyle', 'None')
+
+        ax.plot(xdata, ydata, label=(line_name if not is_marker_only else None), **style)
+
 
     ax.legend()
     fig.canvas.draw()
     plt.pause(0.001)
+
+    # Prevent re-rendering of already drawn plots
+    _inline_plot_figures[plot_name][1].legend()
+    _plot_queues[plot_name] = []
+
 
 
 
@@ -281,21 +307,10 @@ def plot_push(plot_name, line_name, data_point_or_list, style=None, *, plot_conf
     if get_plot_mode() == "inline":
         if isinstance(data_point_or_list, tuple):
             data_point_or_list = [data_point_or_list]
-
         if plot_name not in _plot_queues:
             _plot_queues[plot_name] = []
-
         _plot_queues[plot_name].append((line_name, data_point_or_list, style, plot_config))
-
-        now = time.time()
-        last_time = _last_inline_render_time.get(plot_name, 0)
-
-        if now - last_time >= _plot_refresh_interval:
-            _render_inline_plot(plot_name)
-            _last_inline_render_time[plot_name] = now
-
         return
-
 
     # 'window' mode
 
@@ -321,6 +336,9 @@ def wait_for_plot_exit(block=True):
         print("[INFO] Final inline rendering of all plots...")
         for plot_name in _plot_queues.keys():
             _render_inline_plot(plot_name)
+        if not _PLOT_WAIT_ON_EXIT:
+            return
+        input("[INFO] Press Enter to continue...")  # Allow user to view plot before exiting
         return
 
     if mode == 'window':
@@ -330,7 +348,7 @@ def wait_for_plot_exit(block=True):
 
         for q in _plot_queues.values():
             q.put(None)
-        if block:
+        if block and _PLOT_WAIT_ON_EXIT:
             for p in _plot_processes.values():
                 p.join()
 
@@ -338,7 +356,6 @@ def wait_for_plot_exit(block=True):
         _plot_processes.clear()
         _plot_configs.clear()
         print("[INFO] All plots finalized.")
-
 
 
 def _get_next_color_for_plot(plot_title):
@@ -403,14 +420,12 @@ def plot_horizontal_line(title, y_value, label, style=None):
         if title not in _plot_queues:
             _plot_queues[title] = []
 
-        # Store as a special command for inline rendering
         _plot_queues[title].append({
             'cmd': 'add_horizontal_line',
             'label': label,
             'y_value': y_value,
             'style': style
         })
-        _render_inline_plot(title)
         return
 
     # For 'window' mode (multiprocessing)
@@ -576,5 +591,6 @@ if __name__ == '__main__':
 
             time.sleep(0.1)
 
+    set_plot_mode('inline', wait_on_exit=False)
     data_producer()
     wait_for_plot_exit()

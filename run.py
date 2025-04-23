@@ -180,17 +180,20 @@ def main():
                         help="slurm job id", 
                         category=config_cat)
     hpbuilder.add_param("plot_mode", 
-                        # "window",
-                        "inline",
+                        "window",
+                        # "inline",
                         # "off",
-                        help="run without plotting", 
+                        help="plotting mode: window, inline, or off", 
+                        category=config_cat)
+    hpbuilder.add_flag("plots_wait_for_exit", True,
+                        help="wait for plots to be closed by user before exiting",
                         category=config_cat)
     
     # experiment params
     hpbuilder.add_param("epochs", 
                         # 6, 20, 64, 200, 
                         # 64, 
-                        25, 
+                        25.0, 
                         # 300, 
                         # 200, 
                         help="maximum number of epochs")
@@ -384,7 +387,7 @@ def main():
     for key, value in cp.items():
         print(f"{key}: {value}")
 
-    plotstream.set_plot_mode(cp.plot_mode)
+    plotstream.set_plot_mode(cp.plot_mode, wait_on_exit=cp.plots_wait_for_exit)
 
 
     # loop through possible combinations of dataset hyperparams
@@ -413,6 +416,10 @@ def main():
         print(f"length of data_folded: {len(data_folded)}")
         # dimensions are (kfolds, train vs valid, datasets tuple, batches, samples)
         # previously, dimensions were (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
+
+        if dp.whichfold >= 0:
+            data_folded = [data_folded[dp.whichfold]]
+            print(f"Using ONLY fold {dp.whichfold} of {len(data_folded)}")
 
         if dp.run_test:
             testdata = chunked_dataset.TestCSVDataset(base_filepath, filenames, dp.minibatch_examples)
