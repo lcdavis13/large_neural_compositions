@@ -6,6 +6,19 @@ import signal
 import sys
 import atexit
 import itertools
+import matplotlib
+from collections import defaultdict
+
+
+
+from collections import defaultdict
+import matplotlib.pyplot as plt
+import time
+
+_last_inline_render_time = {}
+_inline_plot_data = defaultdict(lambda: defaultdict(lambda: ([], [], None)))
+_inline_plot_figures = {}  # Keeps figure/axis references per plot
+
 
 # Global per-plot color cycles
 
@@ -41,20 +54,25 @@ _plot_started = False
 _shutdown_registered = False
 _mp_start_method_set = False
 _plot_refresh_interval = 0.5  # or whatever you prefer (e.g., 0.3 for ~3 FPS)
-_plot_headless = False
+_PLOT_MODE = "window" # Plot mode: 'window' (pop-up), 'inline' (in-process render), 'off' (disabled)
+_PLOT_WAIT_ON_EXIT = False
 
 
-def set_headless():
-    """
-    Set the plotting system to headless mode.
-    This is useful for environments where no GUI is available (e.g., servers).
-    """
-    global _plot_headless
-    _plot_headless = True
+
+def set_plot_mode(mode: str, wait_on_exit: bool = False):
+    global _PLOT_MODE, _PLOT_WAIT_ON_EXIT
+    assert mode in ("window", "inline", "off"), f"Invalid plot mode: {mode}"
+    _PLOT_MODE = mode
+    _PLOT_WAIT_ON_EXIT = wait_on_exit
+
+
+
+def get_plot_mode():
+    return _PLOT_MODE
 
 
 def _ensure_mp_start_method():
-    if _plot_headless:
+    if get_plot_mode() == 'off':
         return
     
     global _mp_start_method_set
@@ -69,9 +87,17 @@ def _ensure_mp_start_method():
 
 
 def _ensure_plot_process(plot_name):
-    if _plot_headless:
+    if get_plot_mode() == "off":
         return
-    
+
+    if get_plot_mode() == "inline":
+        # No multiprocessing: initialize inline state
+        if plot_name not in _plot_queues:
+            _plot_queues[plot_name] = []  # Use a list as a stand-in "queue"
+        return
+
+    # 'window' mode (multiprocessing)
+
     _ensure_mp_start_method()
     global _plot_started, _shutdown_registered
 
@@ -81,7 +107,7 @@ def _ensure_plot_process(plot_name):
         _plot_queues[plot_name] = q
         config = _plot_configs.get(plot_name, {})
         print(f"[DEBUG] Creating plot process for '{plot_name}' with config: {config}")
-        p = mp.Process(target=_live_plot, args=(plot_name, q, config))
+        p = mp.Process(target=_live_plot, args=(plot_name, q, config, _PLOT_WAIT_ON_EXIT))
         p.start()
         _plot_processes[plot_name] = p
 
@@ -103,8 +129,8 @@ def _register_shutdown():
     atexit.register(wait_for_plot_exit)
 
 
-def _live_plot(plot_name, q, config):
-    if _plot_headless:
+def _live_plot(plot_name, q, config, wait_on_exit):
+    if get_plot_mode() == 'off':
         return
     
     plt.ion()
@@ -186,23 +212,108 @@ def _live_plot(plot_name, q, config):
         print(f"[INFO] Saved plot '{plot_name}' to {filename}")
 
     plt.ioff()
-    plt.show()
+    fig.canvas.draw()
+    plt.pause(0.001)
+
+    if wait_on_exit:
+        plt.show()  # Manual wait
+    else:
+        plt.close(fig)  # Auto-close
+
+
+
+
+# from collections import defaultdict
+# import matplotlib.pyplot as plt
+
+# _inline_plot_data = defaultdict(lambda: defaultdict(lambda: ([], [], None)))
+# _inline_plot_figures = {}
+
+def _render_inline_plot(plot_name):
+    # Create or reuse figure
+    if plot_name not in _inline_plot_figures:
+        fig, ax = plt.subplots()
+        _inline_plot_figures[plot_name] = (fig, ax)
+    else:
+        fig, ax = _inline_plot_figures[plot_name]
+        ax.clear()
+
+    # Apply config
+    config = _plot_configs.get(plot_name, {})
+    ax.set_title(config.get("title", plot_name))
+    ax.set_xlabel(config.get("xlabel", ""))
+    ax.set_ylabel(config.get("ylabel", ""))
+    if config.get("x_log", False):
+        ax.set_xscale("log")
+    if config.get("y_log", False):
+        ax.set_yscale("log")
+
+    # Process new data and accumulate into x/y lists
+    new_queue = []
+    for item in _plot_queues[plot_name]:
+        if isinstance(item, dict) and item.get('cmd') == 'add_horizontal_line':
+            y = item['y_value']
+            lbl = item['label']
+            line_style = item.get('style', {})
+            ax.axhline(y=y, label=lbl, **line_style)
+            new_queue.append(item)
+        else:
+            line_name, data_points, style, _ = item
+            xdata, ydata, prev_style = _inline_plot_data[plot_name][line_name]
+
+            # Add only the new points once
+            for x, y in data_points:
+                xdata.append(x)
+                ydata.append(y)
+
+            _inline_plot_data[plot_name][line_name] = (xdata, ydata, style or prev_style)
+
+    # Clear the queue so we don't keep adding same points
+    _plot_queues[plot_name] = new_queue
+
+    # Plot all lines
+    for line_name, (xdata, ydata, style) in _inline_plot_data[plot_name].items():
+        style = dict(style or {})
+        is_marker_only = style.pop('_marker_only', False)
+
+        if is_marker_only:
+            style.setdefault('color', 'black')
+            style.setdefault('marker', 'o')
+            style.setdefault('linestyle', 'None')
+
+        ax.plot(xdata, ydata, label=(line_name if not is_marker_only else None), **style)
+
+
+    ax.legend()
+    fig.canvas.draw()
+    plt.pause(0.001)
+
+    # Prevent re-rendering of already drawn plots
+    _inline_plot_figures[plot_name][1].legend()
+    _plot_queues[plot_name] = []
+
+
+
 
 
 # === Public API ===
 
 def plot_push(plot_name, line_name, data_point_or_list, style=None, *, plot_config=None):
-    """
-    Push data to the plotting system.
-    plot_name: name of the plot (will be created if not existing)
-    line_name: name of the line within the plot
-    data_point_or_list: (x, y) tuple or list of (x, y) tuples
-    style: dict of line styles (optional)
-    plot_config: dict of plot settings (optional, used only at first creation)
-    """
-    if _plot_headless:
+    if get_plot_mode() == "off":
         return
-    
+
+    # 'inline' mode
+
+    if get_plot_mode() == "inline":
+        if isinstance(data_point_or_list, tuple):
+            data_point_or_list = [data_point_or_list]
+        if plot_name not in _plot_queues:
+            _plot_queues[plot_name] = []
+        _plot_queues[plot_name].append((line_name, data_point_or_list, style, plot_config))
+        return
+
+    # 'window' mode
+
     if plot_name not in _plot_queues:
         if plot_config:
             _plot_configs[plot_name] = plot_config
@@ -215,29 +326,37 @@ def plot_push(plot_name, line_name, data_point_or_list, style=None, *, plot_conf
     queue.put((line_name, data_point_or_list, style))
 
 
-def wait_for_plot_exit():
-    """
-    Gracefully shutdown all plot processes and wait for them to finish.
-    """
-    if _plot_headless:
+def wait_for_plot_exit(block=True):
+    mode = get_plot_mode()
+
+    if mode == 'off':
         return
-    
-    global _plot_started
-    if not _plot_started:
-        return  # Nothing to do
 
-    print("[INFO] Finalizing plots...")
+    if mode == 'inline':
+        print("[INFO] Final inline rendering of all plots...")
+        for plot_name in _plot_queues.keys():
+            _render_inline_plot(plot_name)
+        if not _PLOT_WAIT_ON_EXIT:
+            return
+        input("[INFO] Press Enter to continue...")  # Allow user to view plot before exiting
+        return
 
-    for q in _plot_queues.values():
-        q.put(None)
-    for p in _plot_processes.values():
-        p.join()
+    if mode == 'window':
+        if not _plot_started:
+            return
+        print("[INFO] Finalizing plots...")
 
-    _plot_queues.clear()
-    _plot_processes.clear()
-    _plot_configs.clear()
+        for q in _plot_queues.values():
+            q.put(None)
+        if block and _PLOT_WAIT_ON_EXIT:
+            for p in _plot_processes.values():
+                p.join()
 
-    print("[INFO] All plots finalized.")
+        _plot_queues.clear()
+        _plot_processes.clear()
+        _plot_configs.clear()
+        print("[INFO] All plots finalized.")
+
 
 def _get_next_color_for_plot(plot_title):
     if plot_title not in _color_cycles_per_plot:
@@ -251,7 +370,7 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
     """
     High-level plotting function.
     """
-    if _plot_headless:
+    if get_plot_mode() == 'off':
         return
     
     assert len(line_labels) == len(y_values), "line_labels and y_values must have the same length"
@@ -286,25 +405,31 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
 
 
 
-# === New Helper Function: plot_horizontal_line() ===
 def plot_horizontal_line(title, y_value, label, style=None):
     """
-    Draw a true horizontal line at y = y_value in the specified plot.
-
-    - title: str, name of the plot
-    - y_value: float, the y-coordinate for the line
-    - label: str, label of the line
-    - style: dict of line style (optional)
+    Draw a horizontal line at y = y_value in the specified plot.
+    Works for both 'inline' and 'window' modes.
     """
-    if _plot_headless:
+    if get_plot_mode() == 'off':
         return
-    
+
     if style is None:
         style = {'linestyle': '--', 'color': 'gray'}
 
-    if title not in _plot_queues:
-        _ensure_plot_process(title)
+    if get_plot_mode() == 'inline':
+        if title not in _plot_queues:
+            _plot_queues[title] = []
 
+        _plot_queues[title].append({
+            'cmd': 'add_horizontal_line',
+            'label': label,
+            'y_value': y_value,
+            'style': style
+        })
+        return
+
+    # For 'window' mode (multiprocessing)
+    _ensure_plot_process(title)
     queue = _plot_queues[title]
     queue.put({
         'cmd': 'add_horizontal_line',
@@ -312,6 +437,8 @@ def plot_horizontal_line(title, y_value, label, style=None):
         'y_value': y_value,
         'style': style
     })
+
+
 
 def plot_single(title, xlabel, ylabel, line_label, x_value, y_value, add_point=False, x_log=False,
                 y_log=False):
@@ -334,7 +461,7 @@ def plot_loss(title, label_prefix, x, train_loss=None, validation_loss=None, xla
     """
 
     
-    if _plot_headless:
+    if get_plot_mode() == 'off':
         return
     
     plot_config = {
@@ -464,5 +591,6 @@ if __name__ == '__main__':
 
             time.sleep(0.1)
 
+    set_plot_mode('inline', wait_on_exit=False)
     data_producer()
     wait_for_plot_exit()

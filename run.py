@@ -121,7 +121,7 @@ def main():
                         # "junk", 
                         # 'baseline-ConstSoftmax',
                         # 'baseline-SLPMultSoftmax',
-                        'cNODE1',
+                        # 'cNODE1',
                         # 'cNODE2',
                         # 'transformSoftmax',
                         # 'transformShaped-AbundEncoding',
@@ -129,7 +129,7 @@ def main():
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        # 'cNODE-hourglass',
+                        'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 
@@ -179,16 +179,22 @@ def main():
     hpbuilder.add_param("jobid", "-1", 
                         help="slurm job id", 
                         category=config_cat)
-    hpbuilder.add_flag("headless", False, 
-                        help="run without plotting", 
+    hpbuilder.add_param("plot_mode", 
+                        "window",
+                        # "inline",
+                        # "off",
+                        help="plotting mode: window, inline, or off", 
+                        category=config_cat)
+    hpbuilder.add_flag("plots_wait_for_exit", True,
+                        help="wait for plots to be closed by user before exiting",
                         category=config_cat)
     
     # experiment params
     hpbuilder.add_param("epochs", 
                         # 6, 20, 64, 200, 
                         # 64, 
-                        # 25, 
-                        300, 
+                        25.0, 
+                        # 300, 
                         # 200, 
                         help="maximum number of epochs")
     hpbuilder.add_flag("subset_increases_epochs", 
@@ -247,9 +253,9 @@ def main():
                         help="weight decay")
     hpbuilder.add_param("noise", 
                         0.0,
-                        0.01,
+                        # 0.01,
                         0.032,
-                        0.1,
+                        # 0.1,
                         help="noise level")
     
     # Data augmentation params
@@ -284,7 +290,7 @@ def main():
                         help="hidden dimension")
     hpbuilder.add_param("attend_dim_per_head", 9,
                         help="dimension of attention embedding, per attention head")
-    hpbuilder.add_param("depth", 4, 
+    hpbuilder.add_param("depth", 2, 
                         help="depth of model")
     hpbuilder.add_param("ffn_dim_multiplier", 
                         # 4.0,
@@ -381,8 +387,7 @@ def main():
     for key, value in cp.items():
         print(f"{key}: {value}")
 
-    if cp.headless:
-        plotstream.set_headless()
+    plotstream.set_plot_mode(cp.plot_mode, wait_on_exit=cp.plots_wait_for_exit)
 
 
     # loop through possible combinations of dataset hyperparams
@@ -411,6 +416,10 @@ def main():
         print(f"length of data_folded: {len(data_folded)}")
         # dimensions are (kfolds, train vs valid, datasets tuple, batches, samples)
         # previously, dimensions were (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
+
+        if dp.whichfold >= 0:
+            data_folded = [data_folded[dp.whichfold]]
+            print(f"Using ONLY fold {dp.whichfold} of {len(data_folded)}")
 
         if dp.run_test:
             testdata = chunked_dataset.TestCSVDataset(base_filepath, filenames, dp.minibatch_examples)
