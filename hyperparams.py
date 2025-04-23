@@ -1,204 +1,190 @@
-import argparse
-import itertools
-import sys
-from typing import Any, List, Dict, Optional
-from dotsy import dicy
-import random
-
-def str2bool(value):
-    if isinstance(value, bool):
-        return value
-    if value.lower() in ("true", "1", "yes"):
-        return True
-    elif value.lower() in ("false", "0", "no"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected (true/false, 1/0, yes/no).")
+from hyperparam_composer import HyperparameterComposer
 
 
-def parse_random_value(value: str, expected_type: type) -> Any:
-    """
-    Parse values of the formats either "[X]", "[A...B]", or "[A^^^B]" and return a random value. 
-    If the expected_type is a boolean, it will attempt to interpret the interior of the brackets as a single float X representing probability for the True condition. If the value cannot be interpreted this way, it will default to 0.5. 
-    If the expected_type is a numeric type, it will interpret the interior of the brackets as a range of values from A to B which will be sampled uniformly. If using "..." the range is sampled linearly, if using "^^^" the range is sampled logarithmically.
-    Otherwise it raises an error.
-    """
-    if not value.startswith("[") or not value.endswith("]"):
-        raise ValueError(f"Value '{value}' must be enclosed in brackets.")
+def construct_hyperparam_composer():
+    hpbuilder = HyperparameterComposer()
 
-    value = value[1:-1]
-    if "..." in value:
-        start, end = map(expected_type, value.split("..."))
-        if expected_type == int:
-            end += 1
-        return expected_type(random.uniform(start, end))
-    elif "^^^" in value:
-        start, end = map(expected_type, value.split("^^^"))
-        return expected_type(start * (end / start) ** random.uniform(0.0, 1.0))
-    else:
-        if expected_type == bool:
-            try:
-                return expected_type(float(value))
-            except ValueError:
-                return False
-        else:
-            return expected_type(value)
+    hpbuilder.add_param("model_name", 
+                        # "junk", 
+                        # 'baseline-ConstSoftmax',
+                        # 'baseline-SLPMultSoftmax',
+                        # 'cNODE1',
+                        # 'cNODE2',
+                        # 'transformSoftmax',
+                        # 'transformShaped-AbundEncoding',
+                        # 'transformRZShaped',
+                        # 'canODE-FitMat',
+                        # 'canODE-attendFit',
+                        # "canODE-FitMat-AbundEncoding", 
+                        'cNODE-hourglass',
+                        # 'baseline-cNODE0',
+                        help="model(s) to run")
 
+    # data params
+    datacat = "data"
+    # hpbuilder.add_param("dataset", 
+    #                     # "waimea", 
+    #                     # "waimea-std", 
+    #                     # "cNODE-paper-ocean", 
+    #                     # "cNODE-paper-ocean-std", 
+    #                     # "cNODE-paper-human-oral", 
+    #                     # "cNODE-paper-human-oral-std", 
+    #                     "69@4_48_richness50",
+    #                     # "5000@7_48_richness170",
+    #                     category=datacat, help="dataset to use")
+    hpbuilder.add_param("x_dataset", 
+                        "256",
+                        category=datacat, help="dataset to use for inputs")
+    hpbuilder.add_param("y_dataset", 
+                        "256-random",
+                        category=datacat, help="dataset to use for supervising outputs")
+    hpbuilder.add_param("data_subset", 
+                        # 1000,
+                        # 10000, 
+                        100, 
+                        # 100000, 
+                        # 1, 10, 100, 1000, 10000, #100000, 
+                        category=datacat, help="number of data samples to use, -1 for all")
+    hpbuilder.add_param("kfolds", 5, 
+                        category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
+    hpbuilder.add_param("whichfold", -1, 
+                        category=datacat, help="which fold to run, -1 for all")
+    hpbuilder.add_param("data_validation_samples", 100,
+                        category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
+    hpbuilder.add_param("minibatch_examples", 100, 
+                        help="minibatch size",
+                        category=datacat)
+    
+    # slurm params
+    config_cat = "config"
+    hpbuilder.add_param("batchid", 0,
+                        help="slurm array job id", 
+                        category=config_cat)
+    hpbuilder.add_param("taskid", 0,
+                        help="slurm array task id", 
+                        category=config_cat)
+    hpbuilder.add_param("jobid", "-1", 
+                        help="slurm job id", 
+                        category=config_cat)
+    hpbuilder.add_param("plot_mode", 
+                        "window",
+                        # "inline",
+                        # "off",
+                        help="plotting mode: window, inline, or off", 
+                        category=config_cat)
+    hpbuilder.add_flag("plots_wait_for_exit", True,
+                        help="wait for plots to be closed by user before exiting",
+                        category=config_cat)
+    
+    # experiment params
+    hpbuilder.add_param("epochs", 
+                        # 6, 20, 64, 200, 
+                        # 64, 
+                        25.0, 
+                        # 300, 
+                        # 200, 
+                        help="maximum number of epochs")
+    hpbuilder.add_flag("subset_increases_epochs", 
+                        # True,
+                        False, 
+                        help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
+    hpbuilder.add_param("min_epochs", 1, 
+                        help="minimum number of epochs")
+    hpbuilder.add_param("accumulated_minibatches", 1, 
+                        help="number of minibatches to accumulate before stepping")
+    hpbuilder.add_flag("run_test", 
+                        True,
+                        # False,
+                        category=datacat, help="run the test set after training")
+    hpbuilder.add_flag("use_best_model", 
+                        # True,
+                        False,
+                        help="whether or not to use the best model for testing")
+    hpbuilder.add_flag("preeval_training_set", False,
+                        help="whether or not to pre-evaluate the training set before starting training")
+    hpbuilder.add_flag("reeval_training_set_epoch", False,
+                        help="whether or not to re-evaluate the training set after each epoch")
+    hpbuilder.add_flag("reeval_training_set_final", True,
+                        help="whether or not to re-evaluate the training set after the final epoch")
+    
+    hpbuilder.add_param("epoch_manager", 
+                        "Fixed", 
+                        # "AdaptiveValPlateau",
+                        help="which type of epoch manager to use")
+    hpbuilder.add_param("mini_epoch_size", 
+                        # 500,
+                        100, 
+                        # 0, 
+                        help="number of training samples before running validation and/or tests. If <= 0, uses a full epoch before validation (equivalent to setting mini_epoch_size to the total number of training samples). Default -1.")
 
-class HyperparameterBuilder:
-    def __init__(self):
-        self.params = {}
-        self.categories = {}
-        self.parser = argparse.ArgumentParser(description="Experiment Hyperparameters")
+    hpbuilder.add_param("early_stop", False, 
+                        help="whether or not to use early stopping")
+    hpbuilder.add_param("patience", 5, 
+                        help="patience for early stopping")
+    
+    
+    # Optimizer params
+    hpbuilder.add_param("lr", 
+                        # 0.1, 
+                        0.00160707665, 
+                        # 0.001,
+                        # 0.01, 
+                        # 1.0, 0.32, 0.1, 0.032, 
+                        # 0.01, 0.0032, 0.001, 0.00032, 0.0001, 
+                        # 0.32, 0.1, 0.032, 0.01, 0.0032,
+                        # 0.32, 0.1, 0.032, 0.01, 0.0032, #0.001, 0.00032,   
+                        help="learning rate")
+    # hpbuilder.add_param("reptile_lr", 1.0, 
+    #                     help="reptile outer-loop learning rate")
+    hpbuilder.add_param("wd", 0.0, 
+                        help="weight decay")
+    hpbuilder.add_param("noise", 
+                        0.0,
+                        # 0.01,
+                        0.032,
+                        # 0.1,
+                        help="noise level")
+    
+    # Data augmentation params
+    # hpbuilder.add_param("ode_timesteps", 15, 
+    #                     help="number of ODE timesteps")
+    hpbuilder.add_param("ode_timesteps_file", 
+                        # "t.csv",
+                        # "t_linear.csv",
+                        "t_shortlinear.csv",
+                        help="ODE integration timesteps file")
+    hpbuilder.add_param("interpolate", False, 
+                        help="whether or not to use supervised interpolation steps")
+    hpbuilder.add_param("interpolate_noise", False,
+                        help="whether or not to use independent noise for interpolation")
+    
+    # Model architecture params
+    hpbuilder.add_param("identity_gate", 
+                        True,
+                        # False, 
+                        help="whether or not to use 'ReZero'-style learnable gate scalars, initialized such that each model starts as an identity function")
+    hpbuilder.add_param("cnode1_init_zero", 
+                        True, 
+                        # False, 
+                        help="whether or not to use 'ReZero'-style gates to ensure all models start as an identity function")
+    hpbuilder.add_param("cnode_bias", 
+                        True, 
+                        # False,
+                        help="whether or not to use a bias term when predicting fitness in cNODE and similar models")
+    hpbuilder.add_param("num_heads", 15,  
+                        help="number of attention heads in transformer-based models")
+    hpbuilder.add_param("hidden_dim", 8, 
+                        help="hidden dimension")
+    hpbuilder.add_param("attend_dim_per_head", 9,
+                        help="dimension of attention embedding, per attention head")
+    hpbuilder.add_param("depth", 2, 
+                        help="depth of model")
+    hpbuilder.add_param("ffn_dim_multiplier", 
+                        # 4.0,
+                        3.924555754,  
+                        help="multiplier for feedforward network dimension in transformer-based models")
+    hpbuilder.add_param("dropout", 0.04137076975, 
+                        help="dropout rate")
+                        
+    return hpbuilder, datacat, config_cat
 
-    def add_param(self, name: str, *default_values: Any, category: str = None, help: str = "") -> "HyperparameterBuilder":
-        """
-        Add a parameter that supports multiple values (comma-separated or defaults).
-        - `name`: Parameter name.
-        - `default_values`: One or more default values of the same type.
-        - `category`: Subcategory for grouping this parameter.
-        - `help`: Help string for argparse.
-        """
-        if not default_values:
-            raise ValueError(f"Parameter '{name}' must have at least one default value.")
-
-        # Infer type from the first value
-        param_type = type(default_values[0])
-        if not all(isinstance(value, param_type) for value in default_values):
-            raise ValueError(f"All default values for '{name}' must be of the same type.")
-
-        if param_type == bool:
-            param_type = str2bool  # Use custom bool parsing
-
-        self.params[name] = {
-            "type": param_type,
-            "defaults": default_values,
-            "help": help,
-            "multiple": True,
-            "category": category,
-        }
-
-        if category not in self.categories:
-            self.categories[category] = []
-        self.categories[category].append(name)
-
-        # Add argparse argument
-        self.parser.add_argument(
-            f"--{name}",
-            default=",".join(map(str, default_values)),
-            type=str if param_type == str2bool else str,
-            help=f"{help} (default: {','.join(map(str, default_values))})",
-        )
-        return self
-
-    def add_flag(self, name: str, default: bool, category: str=None, help: str = "") -> "HyperparameterBuilder":
-        """
-        Add a boolean flag that does not support multiple values.
-        Uses default only if no CLI args are provided (e.g. run from IDE).
-        """
-        self.params[name] = {
-            "type": bool,
-            "defaults": [default],
-            "help": help,
-            "multiple": False,
-            "category": category,
-        }
-
-        if category not in self.categories:
-            self.categories[category] = []
-        self.categories[category].append(name)
-
-        # Detect whether running from CLI or IDE
-        cli_invoked = len(sys.argv) > 1
-
-        if cli_invoked:
-            # Typical flag behavior: False by default, True if flag is present
-            self.parser.add_argument(
-                f"--{name}",
-                action="store_true",
-                help=f"{help} (default: False, set to true by passing the flag)",
-            )
-        else:
-            # IDE-like behavior: use provided default
-            self.parser.add_argument(
-                f"--{name}",
-                type=str2bool,
-                default=default,
-                help=f"{help} (default: {default})",
-            )
-
-        return self
-
-
-    def parse_and_generate_combinations(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Parse command-line arguments, handle types, and generate combinations.
-        Only include parameters from the matching category.
-
-        :param category: Optional subcategory to filter by.
-        :return: List of dictionaries representing all hyperparameter combinations.
-        """
-        args = vars(self.parser.parse_args())
-
-        # Filter parameters by category
-        param_names = self.categories.get(category, [])
-
-        # Process parameters and types
-        fixed_param_lists = {}
-        random_param_flags = {}
-
-        for name in param_names:
-            config = self.params[name]
-            raw_value = args[name]
-
-            if config["multiple"]:
-                if isinstance(raw_value, str) and raw_value.startswith("[") and raw_value.endswith("]"):
-                    # Mark this param as needing random sampling
-                    random_param_flags[name] = (raw_value, config["type"])
-                    fixed_param_lists[name] = [None]  # Placeholder
-                else:
-                    # Parse comma-separated fixed values
-                    values = raw_value.split(",")
-                    fixed_param_lists[name] = [config["type"](v) for v in values]
-            else:
-                # Single value for flags
-                fixed_param_lists[name] = [config["type"](raw_value)]
-
-        # Generate combinations
-        combinations = []
-        fixed_param_names = [name for name in param_names if name not in random_param_flags]
-
-        for idx, fixed_values in enumerate(itertools.product(*[fixed_param_lists[name] for name in fixed_param_names])):
-            combination = {}
-
-            # Assign fixed parameters
-            for name, value in zip(fixed_param_names, fixed_values):
-                combination[name] = value
-
-            # Sample random parameters independently for each combination
-            for name, (raw_value, value_type) in random_param_flags.items():
-                combination[name] = parse_random_value(raw_value, value_type)
-
-            # Add configid
-            configid_key = f"{category}_configid" if category else "configid"
-            combination[configid_key] = idx
-
-            combination = dicy(combination)  # Convert to dotsy.dicy object
-
-            combinations.append(combination)
-
-        return combinations
-
-
-# test
-if __name__ == "__main__":
-    builder = HyperparameterBuilder()
-    builder.add_param("learning_rate", 0.01, 0.001, category="model", help="Learning rate for training")
-    builder.add_param("batch_size", 32, 64, category="data", help="Batch size for training")
-    builder.add_flag("use_augmentation", True, category="data", help="Whether to use data augmentation")
-
-    data_combinations = builder.parse_and_generate_combinations(category="data")
-    print("Data combinations:", data_combinations)
-
-    model_combinations = builder.parse_and_generate_combinations(category="model")
-    print("Model combinations:", model_combinations)

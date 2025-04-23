@@ -1,11 +1,16 @@
 
+import itertools
+import os
+import traceback
 import numpy as np
+import pandas as pd
 import chunked_dataset
 import epoch_managers
 import lr_schedule
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 import data
 import torch
+import models_baseline
 import stream
 from optimum import Optimum, summarize, unrolloptims
 import stream_plot as plotstream
@@ -180,7 +185,7 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
         y_pred = eval_model(model, x, t, ids)
         if supervise_steps:
             y_pred = y_pred[1:]
-            y_true = z[1:]  # TODO: supervised interpolation with new data source
+            y_true = z[1:]  # TODO: Fix: implement supervised interpolation with new data source
         else:
             y_pred = y_pred[-1:]
             y_true = y.unsqueeze(0)  # TODO: may not need this unsqueeze if we stop supporting supervised interpolation
@@ -269,195 +274,6 @@ def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
         for key in paramsA
     }
     model.load_state_dict(averaged_params)
-
-
-def find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples, accumulated_minibatches, noise, device,
-            min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn, weight_decay, initial_lr,
-            verbosity=1, seed=None, run_validation=False):  # Set the seed for reproducibility
-    # TODO: Modify my approach. I should only use live-analysis to detect when to stop. Then return the complete results, which I will apply front-to-back analyses on to identify the points of significance (steepest point on cliff, bottom and top of cliff)
-    
-    # assert(data.check_leakage([(x, y, x_valid, y_valid)]))
-    
-    if seed is not None:
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-    
-    total_samples = x.size(0)
-    steps_per_epoch = ceildiv(total_samples, minibatch_examples * accumulated_minibatches)
-    
-    model = model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
-    # manager = epoch_managers.DivergenceManager(memory=0.95, threshold=0.025, mode="rel_start", min_epochs=min_epochs*steps_per_epoch, max_epochs=max_epochs*steps_per_epoch)
-    manager = epoch_managers.ConvergenceManager(memory=0.95, threshold=10.0, mode="rel",
-                                                min_epochs=min_epochs * steps_per_epoch,
-                                                max_epochs=max_epochs * steps_per_epoch)
-    base_scheduler = lr_schedule.ExponentialLR(optimizer, epoch_lr_factor=100.0,
-                                               steps_per_epoch=2 * steps_per_epoch)  # multiplying by 2 as a cheap way to say I want the LR to increase by epoch_lr_factor after 4 actual epochs (the names here are misleading, the manager is actually managing minibatches and calling them epochs)
-    scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=initial_lr)
-    
-    # filepath_out_incremental = f'results/logs/{model_config}_{dataname}_LRRangeSearch.csv'
-    old_lr = scheduler.get_last_lr()
-    train_examples_seen = 0
-    smoothed_loss_opt = Optimum('manager_metric', 'min')
-    last_opt = Optimum(metric=None)
-    
-    total_samples = x.size(0)
-    minibatches = ceildiv(total_samples, minibatch_examples)
-    current_index = 0
-    
-    model.train()
-    optimizer.zero_grad()
-    
-    stream_interval = 1  # minibatches
-    
-    total_loss = 0
-    total_penalty = 0
-    stream_loss = 0
-    stream_penalty = 0
-    stream_examples = 0
-    
-    done = False
-    while not done:
-        x_batch, y_batch, current_index = data.get_batch_raw(x, y, t, minibatch_examples, current_index, noise_level_x=noise, noise_level_y=noise)
-        if current_index >= total_samples:
-            current_index = 0
-            x, y = data.shuffle_data(x, y)
-        
-        y_pred = eval_model(model, x_batch, timesteps)[-1]
-        y_pred = y_pred.to(device)
-        loss = loss_fn(y_pred, y_batch) / accumulated_minibatches
-        scaler.scale(loss).backward()
-        
-        distr_error = distr_error_fn(y_pred)
-        total_loss += loss.item() * x_batch.size(0)
-        total_penalty += distr_error.item() * x_batch.size(0)
-        train_examples_seen += x_batch.size(0)
-        
-        if (manager.epoch + 1) % accumulated_minibatches == 0:
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.batch_step()
-            optimizer.zero_grad()
-        
-        stream_loss += total_loss
-        stream_penalty += total_penalty
-        stream_examples += x_batch.size(0)
-        
-        scheduler.epoch_step(loss)
-        
-        # quick and dirty way to get these in dictinoary format. I should refactor the above code so that the variables are always in a dictionary instead.
-        dict = {"epoch": manager.epoch, "trn_loss": loss, "lr": old_lr, "manager_metric": manager.get_metric(), "manager_threshold": manager.get_threshold()}
-        
-        # TODO: Fix bug, manager.get_metric will be behind by 1 epoch, truncating final values
-        smoothed_loss_opt.track_best(dict)
-        last_opt.track_best(dict)
-        
-        old_lr = scheduler.get_last_lr()
-        
-        stop = manager.should_stop(last_opt)
-        metric = manager.get_metric()
-        if metric is not None:
-            metric = metric.item()
-        
-        if manager.epoch % stream_interval == 0:
-            # VALIDATION
-            if run_validation:
-                l_val, l_dki_val, p_val = validate_epoch(model, x_valid, y_valid, minibatch_examples, timesteps,
-                                                         loss_fn, score_fn,
-                                                         distr_error_fn, device)
-                plotstream.plot(f"Raw LRRS for {model_name}", "log( Learning Rate )", "loss",
-                                [f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Val",
-                                 f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr} - Trn"],
-                                scheduler.get_last_lr(),
-                                [l_val, loss.item()], add_point=False, x_log=True)
-            else:
-                plotstream.plot_single(f"Raw LRRS for {model_name}", "log( Learning Rate )", "Raw Loss",
-                                       f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
-                                       scheduler.get_last_lr(), loss.item(), add_point=False, x_log=True)
-            
-            # plotstream.plot_single("LRRS Loss vs Minibatches", "Minibatches", "Smoothed Loss", model_name,
-            #                    manager.epoch, manager.get_metric().item(), add_point=False)
-            # plotstream.plot_single(f"LRRS metric for {model_name}", "log( Learning Rate )", "Smoothed Loss", f"{model_name}, wd:{weight_decay}, init_lr:{initial_lr}",
-            #                    scheduler.get_last_lr(), metric, add_point=False, x_log=True)
-        
-        stream_loss = 0
-        stream_penalty = 0
-        stream_examples = 0
-        
-        if stop:
-            break
-    
-    print(f"Last LR: {last_opt.lr}")
-    print(f"Best LR: {smoothed_loss_opt.lr}")
-    
-    # TODO: Track the SLOPE of the smoothed loss, and use a mix of that LR and the "best" LR. The minimum is occurring when it has stopped improving, so using a point after that is causing me to overestimate the point at which "slight divergence" occurs.
-    # TODO: Draw the point that is chosen onto the LR Finder curve plot. I'll need to add a new method for that.
-    # TODO: Tune the LR Finder / OneCycle params. I'm not really getting good performance right now. It might be too few epochs.
-    # TODO: Most importantly, I need to do some fast hyperparameter searching on each model using the LR Finder as metric (in particular WD).
-    # alpha = 0.9
-    # diverge_lr = math.exp(alpha * math.log(smoothed_loss_opt.lr) + (1.0 - alpha) * math.log(last_opt.lr))
-    diverge_lr = smoothed_loss_opt.lr  # * 0.5
-    diverge_loss = smoothed_loss_opt.trn_loss
-    diverge_metric = smoothed_loss_opt.manager_metric
-    
-    # TODO: if averaging along the logarithmic scale (to find halfway point between 1e-3 and 1e-2 for eample), do the geometric mean sqrt(a*b). We want to use this to find e.g. the point between two optima measurements. If we need to weight that geometric mean, it's exp(alpha * log(a) + (1-alpha) * log(b))
-    
-    # plotstream.plot_point(f"LRRS metric for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr, diverge_metric.item(), symbol="*")
-    plotstream.plot_point(f"Raw LRRS for {model_name}", f"{model_name}, wd:{weight_decay}", diverge_lr,
-                          diverge_loss.item(), symbol="*")
-    
-    print(f"Peak LR: {diverge_lr}")
-    return diverge_lr
-
-
-# Search for hyperparameters by identifying the values that lead to the highest learning rate before divergence
-# Based on notes found here: https://sgugger.github.io/the-1cycle-policy.html
-def hyperparameter_search_with_LRfinder(model_constr, model_args, model_name, scaler, data_folded, minibatch_examples,
-                                        accumulated_minibatches,
-                                        device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn,
-                                        distr_error_fn,
-                                        threshold_proportion=0.9, verbosity=1, seed=None, run_validation=False):
-    x, y, x_valid, y_valid = data_folded[0]
-    
-    # weight_decay_values = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0] # SLPReplicator
-    # weight_decay_values = [1.0, 3.3, 10] #[1e-1, 0.33, 1e0, 3.3, 1e1, 33] # cNODE2
-    weight_decay_values = [0.0, 1e-3, 1e-2, 1e-1, 0.32, 1e0, 3.2]
-    # weight_decay_values = [1e-1, 0.33, 1e0, 3.3, 1e1]
-    initial_lr_values = [0.03]
-    
-    highest_lr = -np.inf
-    lr_results = {}
-    
-    model_base = model_constr(model_args)
-    
-    # Perform the hyperparameter search
-    for wd in weight_decay_values:
-        for initial_lr in initial_lr_values:
-            model = model_constr(model_args)
-            model.load_state_dict(model_base.state_dict())
-            
-            diverge_lr = find_LR(model, model_name, scaler, x, y, x_valid, y_valid, minibatch_examples,
-                                 accumulated_minibatches,
-                                 device, min_epochs, max_epochs, dataname, timesteps, loss_fn, score_fn, distr_error_fn,
-                                 wd, initial_lr,
-                                 verbosity, seed=seed, run_validation=True)
-            lr_results[wd] = diverge_lr
-            plotstream.plot_single(f"WD vs divergence LR", "WD", "Divergence LR", model_name, wd, diverge_lr,
-                                   False, y_log=True, x_log=True)
-            
-            if diverge_lr > highest_lr:
-                highest_lr = diverge_lr
-    
-    # Determine the valid weight_decay values within the threshold proportion
-    valid_weight_decays = [wd for wd, lr in lr_results.items() if lr >= threshold_proportion * highest_lr]
-    
-    # Select the largest valid weight_decay
-    optimal_weight_decay = max(valid_weight_decays)
-    optimal_lr = lr_results[optimal_weight_decay]
-    
-    plotstream.plot_point(f"WD vs divergence LR", model_name, optimal_weight_decay, optimal_lr, symbol="*")
-    
-    return optimal_weight_decay, optimal_lr
 
 
 def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
@@ -827,3 +643,280 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
     
     return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, val_loss_curves, test_scores
 
+
+
+def unrolldict(d):
+    unrolled_items = list(itertools.chain(*(d.items())))
+    return unrolled_items
+
+
+class DummyGradScaler:
+    def scale(self, loss):
+        return loss  # no scaling, just return as-is
+
+    def step(self, optimizer):
+        optimizer.step()
+
+    def update(self):
+        pass
+
+
+
+def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr_constructors, loss_fn, score_fn, distr_error_fn, identity_loss, identity_score, dense_columns, sparse_columns):
+    # things that are needed for reporting an exception, so they go before the try block
+    jobid_substring = int(cp.jobid.split('_')[0])
+    jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
+    filepath_out_expt = f'results/expt/{dp.y_dataset}{jobstring}_experiments.csv'
+    num_params = -1
+    optdict = {"epoch": -1, "mini_epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
+            "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
+            "metric": -1.0, "stop_metric": -1.0, "stop_threshold": -1.0}
+    val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
+    trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
+    val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
+    trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
+    final_optims = [Optimum(metric=None, dict=optdict)]
+
+    # if True:
+    try:
+        # computed hyperparams
+        hp.data_dim = dense_columns
+        hp.sparse_data_dim = sparse_columns
+        # hp.WD = hp.lr * hp.wd_factor
+        hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+        hp.model_config = f"{hp.model_name}_{dp.data_configid}x{hp.configid}"
+
+        # conditionally adjust epochs to compensate for subset size
+        if hp.subset_increases_epochs:
+            hp.adjusted_epochs = int(hp.epochs // dp.data_fraction)
+            print(f"Adjusted epochs from {hp.epochs} to {hp.adjusted_epochs} to compensate for subset size")
+        else:
+            hp.adjusted_epochs = hp.epochs
+
+        assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+        
+        model_constr = models[hp.model_name]
+        epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
+        
+        if device.type == "cuda":
+            scaler = torch.cuda.amp.GradScaler()
+        else:
+            scaler = DummyGradScaler()
+
+        # load timesteps from file
+        print(f"Loading time steps from {hp.ode_timesteps_file}")
+        timesteps = pd.read_csv(hp.ode_timesteps_file, header=None).values.flatten()
+        # ode_timemax = 100.0
+        # ode_stepsize = ode_timemax / hp.ode_timesteps
+        # timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
+        
+        # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
+        # Model dictionary. Hyperparam override(s)
+        
+        seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
+        print(f"Seed: {seed}")
+        
+        # test construction and print parameter count
+        print(f"\nModel construction test for: {hp.model_config}")
+        model = model_constr(hp)
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters in model: {num_params}")
+        
+        # find optimal LR
+        # hp.WD, hp.lr = hyperparameter_search_with_LRfinder(
+        #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
+        #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
+        # print(f"LR:{hp.lr}, WD:{hp.WD}")
+        
+        # hp = ui.ask(hp, keys=["LR", "WD"])
+        
+        # print hyperparams
+        for key, value in hp.items():
+            print(f"{key}: {value}")
+        
+        # Just for the sake of logging experiments before cross validation...
+        stream.stream_scores(filepath_out_expt, True, True, True,
+                            "mean_val_loss", -1,
+                            "mean_val_loss @ epoch", -1,
+                            "mean_val_loss @ mini-epoch", -1,
+                            "mean_val_loss @ time", -1,
+                            "mean_val_loss @ trn_loss", -1,
+                            "test loss", -1,
+                            "identity loss", identity_loss,
+                            "model parameters", num_params,
+                            "fold", -1,
+                            "device", device,
+                            "solver", os.environ["SOLVER"],
+                            *unrolldict(cp),  # unroll the data params dictionary
+                            *unrolldict(dp),  # unroll the data params dictionary
+                            *unrolldict(hp),  # unroll the hyperparams dictionary
+                            *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                        trn_score_optims[0], final_optims[0]),
+                            prefix="\n=======================================================EXPERIMENT========================================================\n",
+                            suffix="\n=========================================================================================================================\n")
+        
+        
+        # train and test the model across multiple folds
+        val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, training_curves, test_scores = crossvalidate_model(
+            hp.lr, scaler, hp.accumulated_minibatches, data_folded, testdata, dp.total_train_samples, hp.noise, hp.interpolate, hp.interpolate_noise, device, hp.early_stop, hp.patience,
+            dp.kfolds, hp.min_epochs, hp.adjusted_epochs, hp.mini_epoch_size, dp.minibatch_examples, model_constr, epoch_manager_constr, hp,
+            hp.model_name, hp.model_config, dp.y_dataset, timesteps, loss_fn, score_fn, distr_error_fn, hp.wd, verbosity=1,
+            preeval_training_set=hp.preeval_training_set, reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final, 
+            whichfold=dp.whichfold, jobstring=jobstring, use_best_model=hp.use_best_model
+        )
+        
+        # print all folds
+        print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')
+        print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
+        print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
+        print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
+        print(f'Final optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(final_optims)]}\n')
+        print(f'Test scores: \n{[f'Fold {num}: {score}\n' for num, score in enumerate(test_scores)]}\n')
+        
+        # calculate fold summaries
+        avg_val_loss_optim = summarize(val_loss_optims)
+        avg_val_score_optim = summarize(val_score_optims)
+        avg_trn_loss_optim = summarize(trn_loss_optims)
+        avg_trn_score_optim = summarize(trn_score_optims)
+        avg_final_optim = summarize(final_optims)
+
+        # mean of test_scores, which is a list of either numbers or Nones
+        avg_test_score = np.nanmean([score for score in test_scores if score is not None])
+        
+        # print summaries
+        print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
+        print(f'Avg Val Score optimum: {avg_val_score_optim}')
+        print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
+        print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
+        print(f'Avg Final optimum: {avg_final_optim}')
+        print(f'Avg Test score: {avg_test_score}')
+        
+        # find optimal mini-epoch
+        # training_curves is a list of dictionaries, convert to a dataframe
+        all_data = [entry for fold in training_curves for entry in fold]
+        df = pd.DataFrame(all_data)
+        df_clean = df.dropna(subset=['val_loss'])
+        # Check if df_clean is not empty
+        if not df_clean.empty:
+            average_metrics = df_clean.groupby('mini_epoch').mean(numeric_only=True).reset_index()
+            min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
+            best_epoch_metrics = min_val_loss_epoch.to_dict()
+        else:
+            min_val_loss_epoch = None  # or handle the empty case as needed
+            best_epoch_metrics = {"epoch": -1, "mini_epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
+        
+        # write folds to log file
+        for i in range(len(val_loss_optims)):
+            stream.stream_scores(filepath_out_expt, True, True, True,
+                                "optimal early stop val_loss", best_epoch_metrics["val_loss"],
+                                "optimal early stop epoch", best_epoch_metrics["epoch"],
+                                "optimal early stop mini-epoch", best_epoch_metrics["mini_epoch"],
+                                "optimal early stop time", best_epoch_metrics["time"],
+                                "optimal early stop trn_loss", best_epoch_metrics["trn_loss"],
+                                "test loss", test_scores[i],
+                                "identity loss", identity_loss,
+                                "model parameters", num_params,
+                                "fold", i if dp.whichfold < 0 else dp.whichfold,
+                                "device", device,
+                                "solver", os.environ["SOLVER"],
+                                *unrolldict(cp),  # unroll the data params dictionary
+                                *unrolldict(dp),  # unroll the data params dictionary
+                                *unrolldict(hp),  # unroll the hyperparams dictionary
+                                *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
+                                            trn_score_optims[i], final_optims[i]),
+                                prefix="\n=======================================================EXPERIMENT========================================================\n",
+                                suffix="\n=========================================================================================================================\n")
+        
+    except Exception as e:
+        stream.stream_scores(filepath_out_expt, True, True, True,
+                        "mean_val_loss", -1,
+                        "mean_val_loss @ epoch", -1,
+                        "mean_val_loss @ mini-epoch", -1,
+                        "mean_val_loss @ time", -1,
+                        "mean_val_loss @ trn_loss", -1,
+                        "test loss", -1,
+                        "identity loss", identity_loss,
+                        "model parameters", num_params,
+                        "fold", -1,
+                        "device", device,
+                        "solver", os.environ["SOLVER"],
+                        *unrolldict(cp),  # unroll the data params dictionary
+                        *unrolldict(dp),  # unroll the data params dictionary
+                        *unrolldict(hp),  # unroll the hyperparams dictionary
+                        *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
+                                    trn_score_optims[0], final_optims[0]),
+                        prefix="\n=======================================================EXPERIMENT========================================================\n",
+                        suffix="\n=========================================================================================================================\n")
+        print(f"Model {hp.model_name} failed with error:\n{e}")
+        traceback.print_exc()
+
+
+
+def test_identity_model(dp, data_folded, device, loss_fn, score_fn, distr_error_fn):
+
+    # Establish baseline performance and add to plots
+    identity_model = models_baseline.ReturnInput()
+    identity_loss, identity_score, identity_distro_error = validate_epoch(identity_model, False, data_folded[0][1], 100,  # using 100 instead of hp.minibatch_examples, because this model doesn't learn so the only concern is computational throughput.
+                                                                    [0.0, 1.0], loss_fn, score_fn, distr_error_fn,
+                                                                    device)
+    print(f"\n\nIDENTITY MODEL loss: {identity_loss}, score: {identity_score}\n\n")
+    plotstream.plot_horizontal_line(f"loss {dp.y_dataset}", identity_loss, f"Identity")
+    # plotstream.plot_horizontal_line(f"score {dp.y_dataset}", identity_score, f"Identity")
+
+    return identity_loss, identity_score
+
+
+
+
+def process_config_params(cp):
+    for key, value in cp.items():
+        print(f"{key}: {value}")
+
+
+def process_data_params(dp):
+    # datasets
+    base_filepath = f"data/{dp.x_dataset}/"
+
+    filenames = {
+        chunked_dataset.DK_BINARY: f"{dp.x_dataset}_binary",
+        chunked_dataset.DK_IDS: f"{dp.x_dataset}_ids-sparse",
+        chunked_dataset.DK_X: f"{dp.x_dataset}_x0", 
+        chunked_dataset.DK_XSPARSE: f"{dp.x_dataset}_x0-sparse",
+        chunked_dataset.DK_Y: f"{dp.y_dataset}_y",
+        chunked_dataset.DK_YSPARSE: f"{dp.y_dataset}_y-sparse",
+    }
+
+    data_folded, dp.total_train_samples, dp.data_fraction, dense_columns, sparse_columns = chunked_dataset.load_folded_datasets(
+        base_filepath, 
+        filenames,
+        dp.minibatch_examples,
+        dp.data_subset,
+        dp.data_validation_samples,
+        dp.kfolds
+    )
+    print(f"length of data_folded: {len(data_folded)}")
+    # dimensions are (kfolds, train vs valid, datasets tuple, batches, samples)
+    # previously, dimensions were (kfolds, datasets [x, y, xcon, ycon, or idcon], train vs valid, samples, features)
+
+    if dp.whichfold >= 0:
+        data_folded = [data_folded[dp.whichfold]]
+        print(f"Using ONLY fold {dp.whichfold} of {len(data_folded)}")
+
+    if dp.run_test:
+        testdata = chunked_dataset.TestCSVDataset(base_filepath, filenames, dp.minibatch_examples)
+        print(f"Test samples: {testdata.total_samples}")
+    else:
+        testdata = None
+    
+    print('-' * 50 + '\n')
+    
+    for key, value in dp.items():
+        print(f"{key}: {value}")
+
+    print('-' * 50 + '\n')
+
+    # # assert (data.check_leakage(data_folded))
+    # # assert(data.check_simplex(y))
+    # # assert(data.check_finite(y))
+
+    return data_folded, testdata, dense_columns, sparse_columns

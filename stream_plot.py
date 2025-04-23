@@ -121,12 +121,12 @@ def _ensure_plot_process(plot_name):
 def _register_shutdown():
     # Ensure shutdown happens automatically
     def shutdown_handler(*args):
-        wait_for_plot_exit()
+        finish_up()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
-    atexit.register(wait_for_plot_exit)
+    atexit.register(finish_up)
 
 
 def _live_plot(plot_name, q, config, wait_on_exit):
@@ -326,7 +326,7 @@ def plot_push(plot_name, line_name, data_point_or_list, style=None, *, plot_conf
     queue.put((line_name, data_point_or_list, style))
 
 
-def wait_for_plot_exit(block=True):
+def finish_up(block=True):
     mode = get_plot_mode()
 
     if mode == 'off':
@@ -593,4 +593,4 @@ if __name__ == '__main__':
 
     set_plot_mode('inline', wait_on_exit=False)
     data_producer()
-    wait_for_plot_exit()
+    finish_up()

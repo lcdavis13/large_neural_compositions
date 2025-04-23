@@ -1,6 +1,22 @@
 from abc import ABC, abstractmethod
 import math
 
+
+
+
+def get_epoch_manager_constructors():
+    # Epoch managers
+    # TODO: make all of these args accessible to command line
+    epoch_mngr_constructors = {
+        "Fixed": lambda args: FixedManager(max_epochs=args.adjusted_epochs),
+        "AdaptiveValPlateau": lambda args: AdaptiveValPlateauManager(memory=0.75, rate_threshold_factor=0.05, min_epochs=args.min_epochs, max_epochs=args.adjusted_epochs, patience=args.patience),
+    }
+    return epoch_mngr_constructors
+
+
+
+
+
 #
 # # holt winters
 # # single exponential smoothing
