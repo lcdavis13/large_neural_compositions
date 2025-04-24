@@ -91,7 +91,7 @@ class HyperparameterComposer:
             "type": param_type,
             "defaults": default_values,
             "help": help,
-            "multiple": True,
+            "is_flag": False,
             "category": category,
         }
 
@@ -117,7 +117,7 @@ class HyperparameterComposer:
             "type": bool,
             "defaults": [default],
             "help": help,
-            "multiple": False,
+            "is_flag": True,
             "category": category,
         }
 
@@ -146,39 +146,19 @@ class HyperparameterComposer:
 
         return self
 
-
-    def parse_and_generate_combinations(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Parse command-line arguments, handle types, and generate combinations.
-        Only include parameters from the matching category.
-
-        :param category: Optional subcategory to filter by.
-        :return: List of dictionaries representing all hyperparameter combinations.
-        """
-
-        # Filter parameters by category
-        param_names = self.categories.get(category, [])
-
-        # run either csv or argparse mode
-        if self.load_mode:
-            return self._parse_csv_mode(param_names, category)
-        else:
-            return self._parse_argparse_mode(param_names, category)
-        
-    def _parse_argparse_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
-        # Argparse mode (uses permutation and random selection)
-        
-        args = vars(self.parser.parse_args())
-
+    def _parse_and_generate_combinations_for_rawvalues(self, args: dict) -> List[Dict[str, Any]]:
         # Process parameters and types
         fixed_param_lists = {}
         random_param_flags = {}
+
+        param_names = list(args.keys())
+        category = self.params[param_names[0]]["category"] if param_names else None
 
         for name in param_names:
             config = self.params[name]
             raw_value = args[name]
 
-            if config["multiple"]:
+            if not config["is_flag"]:
                 if isinstance(raw_value, str) and raw_value.startswith("[") and raw_value.endswith("]"):
                     # Mark this param as needing random sampling
                     random_param_flags[name] = (raw_value, config["type"])
@@ -215,6 +195,43 @@ class HyperparameterComposer:
             combinations.append(combination)
 
         return combinations
+
+
+    def parse_and_generate_combinations(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Parse command-line arguments, handle types, and generate combinations.
+        Only include parameters from the matching category.
+
+        :param category: Optional subcategory to filter by.
+        :return: List of dictionaries representing all hyperparameter combinations.
+        """
+
+        # Filter parameters by category
+        param_names = self.categories.get(category, [])
+
+        # run either csv or argparse mode
+        if self.load_mode:
+            return self._parse_csv_mode(param_names, category)
+        else:
+            return self._parse_argparse_mode(param_names, category)
+        
+    def _parse_argparse_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
+        # Argparse mode (uses permutation and random selection)
+        
+        args = vars(self.parser.parse_args())
+        
+        # Filter parameters by category
+        param_names = [name for name in param_names if name in args]
+        args = {name: args[name] for name in param_names}
+
+        # retrieve defaults for missing params in category
+        for name in param_names:
+            if name not in args:
+                args[name] = self.params[name]["defaults"][0]
+
+        return self._parse_and_generate_combinations_for_rawvalues(args)
+
+        
 
     def _parse_csv_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
         # First call: outer loop
