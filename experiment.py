@@ -685,7 +685,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         hp.sparse_data_dim = sparse_columns
         # hp.WD = hp.lr * hp.wd_factor
         hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
-        hp.model_config = f"{hp.model_name}_{dp.data_configid}x{hp.configid}"
+        hp.model_config = f"{hp.model_name} hp-{cp.config_configid}-{dp.data_configid}-{hp.configid}"
 
         # conditionally adjust epochs to compensate for subset size
         if hp.subset_increases_epochs:
