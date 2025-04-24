@@ -1,39 +1,38 @@
 import os
+import torch
 
-# Set a default value if the environment variable is not specified
+# Set a default value if the environment variable is not specified (must be done before importing models)
 # os.environ.setdefault("SOLVER", "torchdiffeq")
 # os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
 # os.environ.setdefault("SOLVER", "torchode")
 # os.environ.setdefault("SOLVER", "torchode_memsafe")
 os.environ.setdefault("SOLVER", "trapezoid")
 
-import pandas as pd
-import torch
-
+import models
+import experiment as expt
 import epoch_managers
 import hyperparams
 import loss_function
-import models
 import stream_plot as plotstream
-import experiment as expt
 
 
 def run_experiments(hyperparam_csv=None):
     """
-    Run a set of experiments defined by hyperparameters.
-    Two modes:
-    1. CSV mode: load specific combinations of hyperparameters from a CSV file. 
-        - Each row is one complete experiment configuration
-    2. Argparse/defaults mode: load hyperparameters from command-line arguments, or use their default values if not specified in the command (if running from IDE without special configs, it will be this version with defaults). 
-        - Each argument can be a single value, multiple values to be run in sequential permutations, or a uniform random distribution in linear or exponential scale. 
-            - permutations of multiple values: use a comma-separated list e.g. "0.1,0.01,0.001"
-            - linearly-uniform random distribution specified as a range with this syntax: "[a...b]" 
-            - exponentially-uniform random distribution specified as a range with this syntax: "[a^^^b]" (range must not include zero)
-            - UNTESTED: bernoulli random booleans specified with this syntax: "[a]" where a is the probability of True
-        - Will run all permutations, so if you have e.g. two parameters with two values and one parameter with three values, it will run 2 * 2 * 3 = 12 experiments.
+    Run an experiment or set of experiments, defined by hyperparameters.
 
-    Note that any missing arguments will use default values in either mode.
-    -permutations/randoms in CSV mode TBD not working yet
+    Hyperparameters are determined by the following sources, in order of precedence:
+    1. CSV file (inaccessible from command line, passed as an argument to this function)
+        - Each row is a separate "base" configuration (but see about permutations below) which will be run sequentially
+    2. Command-line arguments
+        - Only a single "base" configuration (but see about permutations below)
+    3. Default values defined in hyperparams.py
+
+    Each hyperparameter argument can be
+     (a) a single literal value
+     (b) multiple literal values to be run in sequential permutations, using a comma-separated string e.g. "0.1,0.01,0.001"
+        - all list-style arguments will be combinatorically permuted with all other list-style arguments, so if you have e.g. two parameters with two values and one parameter with three values, it will multiply the number of experiments by 2*2*3 = 12
+     (c) a uniform random distribution specified as a range with this syntax: "[a...b]" 
+     (d) an exponentially-uniform random distribution specified as a range with this syntax: "[a^^^b]" (range must not include zero)
     """
 
     # device
@@ -79,4 +78,4 @@ def run_experiments(hyperparam_csv=None):
 
 # main
 if __name__ == "__main__":
-    run_experiments()
+    run_experiments() #("batch/HPsearch_256-random_1k_lowEpoch.csv")

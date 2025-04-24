@@ -55,17 +55,21 @@ class HyperparameterComposer:
         self.load_mode = hyperparam_csv is not None
 
         # params for tracking state in CSV load mode
-        self.outer_loop_selected = False
-        self.outer_category = None
-        self.loaded_rows = None
-        self.csv_data = None
-        self.current_load_index = None
-        self.inner_category_row_tracker = set()  # Tracks which categories accessed the current row
+        self.category_call_order = []
+        self.per_category_multiplier = {}
+        self.csv_data = []
+        self.csv_index = 0
+        self.innermost_call_count = 0
+        self.innermost_category = None
+        self.innermost_found = False
+        self.outer_product = 1000000
 
         if self.load_mode:
             with open(hyperparam_csv, newline='') as csvfile:
                 reader = csv.DictReader(csvfile)
                 self.csv_data = list(reader)
+
+
 
 
     def add_param(self, name: str, *default_values: Any, category: str = None, help: str = "") -> "HyperparameterComposer":
@@ -89,7 +93,6 @@ class HyperparameterComposer:
 
         self.params[name] = {
             "type": param_type,
-            "defaults": default_values,
             "help": help,
             "is_flag": False,
             "category": category,
@@ -115,7 +118,6 @@ class HyperparameterComposer:
         """
         self.params[name] = {
             "type": bool,
-            "defaults": [default],
             "help": help,
             "is_flag": True,
             "category": category,
@@ -139,9 +141,8 @@ class HyperparameterComposer:
             # IDE-like behavior: use provided default
             self.parser.add_argument(
                 f"--{name}",
-                type=str2bool,
-                default=default,
-                help=f"{help} (default: {default})",
+                action="store_false" if default else "store_true",
+                help=f"{help} (default: False, set to true by passing the flag)",
             )
 
         return self
@@ -165,10 +166,17 @@ class HyperparameterComposer:
                     fixed_param_lists[name] = [None]  # Placeholder
                 else:
                     # Parse comma-separated fixed values
-                    values = raw_value.split(",")
+                    if isinstance(raw_value, str):
+                        values = raw_value.split(",")
+                    else:
+                        values = [raw_value]
+                    if config["type"] == bool:
+                        values = [str2bool(v) for v in values]
                     fixed_param_lists[name] = [config["type"](v) for v in values]
             else:
                 # Single value for flags
+                if config["type"] == bool:
+                    raw_value = str2bool(raw_value)
                 fixed_param_lists[name] = [config["type"](raw_value)]
 
         # Generate combinations
@@ -221,62 +229,94 @@ class HyperparameterComposer:
         args = vars(self.parser.parse_args())
         
         # Filter parameters by category
-        param_names = [name for name in param_names if name in args]
-        args = {name: args[name] for name in param_names}
+        param_names_subset = [name for name in param_names if name in args]
+        args = {name: args[name] for name in param_names_subset}
 
-        # retrieve defaults for missing params in category
-        for name in param_names:
-            if name not in args:
-                args[name] = self.params[name]["defaults"][0]
+        # # retrieve defaults for missing params in category
+        # for name in param_names:
+        #     if name not in args:
+        #         args[name] = self.params[name]["defaults"]
 
         return self._parse_and_generate_combinations_for_rawvalues(args)
 
-        
-
     def _parse_csv_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
-        # First call: outer loop
-        if not self.outer_loop_selected:
-            self.outer_loop_selected = True
-            self.outer_category = category
-            self.loaded_rows = self.csv_data
-            self.current_row_index = 0
-            self.inner_category_row_tracker = set()
 
-            results = []
-            for idx, row in enumerate(self.loaded_rows):
-                config = {}
-                for name in param_names:
-                    if name in row:
-                        param_type = self.params[name]["type"]
-                        config[name] = param_type(row[name])
-                configid_key = f"{category}_configid" if category else "configid"
-                config[configid_key] = idx
-                results.append(dicy(config))
-            return results
+        # Step 1: Record call order
+        outermost = False
+        if category not in self.category_call_order:
+            if len(self.category_call_order) == 0:
+                outermost = True
 
-        # Inner category calls
-        if self.current_row_index >= len(self.loaded_rows):
-            return []  # All rows processed
+            self.category_call_order.append(category)
 
-        row = self.loaded_rows[self.current_row_index]
-        config = {}
-        for name in param_names:
-            if name in row:
-                param_type = self.params[name]["type"]
-                config[name] = param_type(row[name])
-        configid_key = f"{category}_configid" if category else "configid"
-        config[configid_key] = self.current_row_index
+        # If outermost category, we want to use all CSV rows immediately (this is the only time it will be called)
+        if outermost:
+            indices = list(range(len(self.csv_data)))
+        # Otherwise, we only want to grab the current row from CSV.
+        else:
+            # figure out what the innermost category is
+            if not self.innermost_found: 
+                # the first time we find a repeated category, set it as the innermost category
+                if category in self.per_category_multiplier: # relies on the fact that this dict isn't filled until later in the function
+                    # print(f"Category '{category}' is already in per_category_multiplier, setting as innermost category.")
+                    self.innermost_category = category
+                    self.innermost_call_count = 0 # we know it was called once previously, but we'll increment it below
+                    self.innermost_found = True
+                    self.outer_product = 1
+                    for cat in self.category_call_order[:-1]:  # exclude innermost
+                        self.outer_product *= self.per_category_multiplier[cat]
+                    # print (f"Outer product is {self.outer_product}")
+                    # print(f"from categories {[self.per_category_multiplier[i] for i in self.category_call_order[:-1]]}")
 
-        # Track which inner categories have been called for this row
-        self.inner_category_row_tracker.add(category)
+            # Step 5: If this is the innermost category, increment row every a*b calls
+            is_innermost = category == self.innermost_category
+            if is_innermost:
+                self.innermost_call_count += 1
 
-        # If all categories except the outer one have fetched their values, advance the row
-        expected_inner_categories = set(self.categories.keys()) - {self.outer_category}
-        if self.inner_category_row_tracker >= expected_inner_categories:
-            self.current_row_index += 1
-            self.inner_category_row_tracker.clear()
+                if self.innermost_found and self.innermost_call_count >= self.outer_product:
+                    self.csv_index += 1
+                    self.innermost_call_count = 0
 
-        return [dicy(config)]
+            # We've decided whether or not we needed to increment the index, now grab row
+            indices = [self.csv_index]
+
+        defaults = vars(self.parser.parse_args())
+
+        # This section is basically equivalent to _parse_argparse_mode but once per row we've retrieved.
+        expand_rate = 1
+        combos = []
+        for i in indices:
+            # print(i)
+            args = self.csv_data[i]
+            
+            # Filter parameters by category
+            param_names_subset = [name for name in param_names if name in args]
+            args = {name: args[name] for name in param_names_subset}
+
+            # retrieve defaults for missing params in category
+            for name in param_names:
+                if name not in args:
+                    args[name] = defaults[name]
+                    # print(f"Param '{name}' not found in CSV row {i}, using default value: {args[name]}")
+
+            # print(args)
+
+            # Step 3: Parse combinations for this category
+            new_combos = self._parse_and_generate_combinations_for_rawvalues(args)
+            expand_rate = len(new_combos)
+            combos.extend([dicy(new_combo) for new_combo in new_combos])
+
+        # Below is logic to track if we need to increment the CSV index for our inner category loops. Only increment when the outer loops have all completed a single pass through their respective expansion rates.
+
+
+        # Step 4: Track multiplier on first call
+        if category not in self.per_category_multiplier:
+            self.per_category_multiplier[category] = expand_rate
+
+        # Step 6: Return results as-is (no repetition or alignment necessary)
+        return combos
+
+
 
 
 # test
