@@ -1,8 +1,8 @@
 from hyperparam_composer import HyperparameterComposer
 
 
-def construct_hyperparam_composer():
-    hpbuilder = HyperparameterComposer()
+def construct_hyperparam_composer(hyperparam_csv=None):
+    hpbuilder = HyperparameterComposer(hyperparam_csv=hyperparam_csv)
 
     hpbuilder.add_param("model_name", 
                         # "junk", 

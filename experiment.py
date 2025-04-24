@@ -667,6 +667,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
     jobid_substring = int(cp.jobid.split('_')[0])
     jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
     filepath_out_expt = f'results/expt/{dp.y_dataset}{jobstring}_experiments.csv'
+    filepath_out_hyperparams = f'results/hp/{dp.y_dataset}{jobstring}_hyperparams.csv'
     num_params = -1
     optdict = {"epoch": -1, "mini_epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
             "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
@@ -735,24 +736,14 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
             print(f"{key}: {value}")
         
         # Just for the sake of logging experiments before cross validation...
-        stream.stream_scores(filepath_out_expt, True, True, True,
-                            "mean_val_loss", -1,
-                            "mean_val_loss @ epoch", -1,
-                            "mean_val_loss @ mini-epoch", -1,
-                            "mean_val_loss @ time", -1,
-                            "mean_val_loss @ trn_loss", -1,
-                            "test loss", -1,
-                            "identity loss", identity_loss,
+        stream.stream_scores(filepath_out_hyperparams, True, True, True,
                             "model parameters", num_params,
-                            "fold", -1,
                             "device", device,
                             "solver", os.environ["SOLVER"],
                             *unrolldict(cp),  # unroll the data params dictionary
                             *unrolldict(dp),  # unroll the data params dictionary
                             *unrolldict(hp),  # unroll the hyperparams dictionary
-                            *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-                                        trn_score_optims[0], final_optims[0]),
-                            prefix="\n=======================================================EXPERIMENT========================================================\n",
+                            prefix="\n=======================================================HYPERPARAMS=======================================================\n",
                             suffix="\n=========================================================================================================================\n")
         
         

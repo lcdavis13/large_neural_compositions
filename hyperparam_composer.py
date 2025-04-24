@@ -1,4 +1,5 @@
 import argparse
+import csv
 import itertools
 import sys
 from typing import Any, List, Dict, Optional
@@ -46,10 +47,26 @@ def parse_random_value(value: str, expected_type: type) -> Any:
 
 
 class HyperparameterComposer:
-    def __init__(self):
+    def __init__(self, hyperparam_csv: str = None):
         self.params = {}
         self.categories = {}
         self.parser = argparse.ArgumentParser(description="Experiment Hyperparameters")
+        self.hyperparam_csv = hyperparam_csv
+        self.load_mode = hyperparam_csv is not None
+
+        # params for tracking state in CSV load mode
+        self.outer_loop_selected = False
+        self.outer_category = None
+        self.loaded_rows = None
+        self.csv_data = None
+        self.current_load_index = None
+        self.inner_category_row_tracker = set()  # Tracks which categories accessed the current row
+
+        if self.load_mode:
+            with open(hyperparam_csv, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                self.csv_data = list(reader)
+
 
     def add_param(self, name: str, *default_values: Any, category: str = None, help: str = "") -> "HyperparameterComposer":
         """
@@ -138,10 +155,20 @@ class HyperparameterComposer:
         :param category: Optional subcategory to filter by.
         :return: List of dictionaries representing all hyperparameter combinations.
         """
-        args = vars(self.parser.parse_args())
 
         # Filter parameters by category
         param_names = self.categories.get(category, [])
+
+        # run either csv or argparse mode
+        if self.load_mode:
+            return self._parse_csv_mode(param_names, category)
+        else:
+            return self._parse_argparse_mode(param_names, category)
+        
+    def _parse_argparse_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
+        # Argparse mode (uses permutation and random selection)
+        
+        args = vars(self.parser.parse_args())
 
         # Process parameters and types
         fixed_param_lists = {}
@@ -188,6 +215,51 @@ class HyperparameterComposer:
             combinations.append(combination)
 
         return combinations
+
+    def _parse_csv_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
+        # First call: outer loop
+        if not self.outer_loop_selected:
+            self.outer_loop_selected = True
+            self.outer_category = category
+            self.loaded_rows = self.csv_data
+            self.current_row_index = 0
+            self.inner_category_row_tracker = set()
+
+            results = []
+            for idx, row in enumerate(self.loaded_rows):
+                config = {}
+                for name in param_names:
+                    if name in row:
+                        param_type = self.params[name]["type"]
+                        config[name] = param_type(row[name])
+                configid_key = f"{category}_configid" if category else "configid"
+                config[configid_key] = idx
+                results.append(dicy(config))
+            return results
+
+        # Inner category calls
+        if self.current_row_index >= len(self.loaded_rows):
+            return []  # All rows processed
+
+        row = self.loaded_rows[self.current_row_index]
+        config = {}
+        for name in param_names:
+            if name in row:
+                param_type = self.params[name]["type"]
+                config[name] = param_type(row[name])
+        configid_key = f"{category}_configid" if category else "configid"
+        config[configid_key] = self.current_row_index
+
+        # Track which inner categories have been called for this row
+        self.inner_category_row_tracker.add(category)
+
+        # If all categories except the outer one have fetched their values, advance the row
+        expected_inner_categories = set(self.categories.keys()) - {self.outer_category}
+        if self.inner_category_row_tracker >= expected_inner_categories:
+            self.current_row_index += 1
+            self.inner_category_row_tracker.clear()
+
+        return [dicy(config)]
 
 
 # test
