@@ -2,9 +2,9 @@
 # See https://slurm.schedmd.com/job_array.html
 
 #SBATCH --job-name=cnode-hpsearch
-#SBATCH --array=0-1792  ## Make sure this is enough for all hyperparam/fold combos
+#SBATCH --array=0-4607  ## Make sure this is enough for all hyperparam/fold combos
 
-#SBATCH --time=0-12:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
+#SBATCH --time=0-16:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=kill-shared
 #SBATCH --gpus-per-node=1
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
@@ -35,16 +35,15 @@ NUM_FOLDS=5                 # Number of folds
 declare -A hyperparams
 hyperparams["x_dataset"]="256"
 hyperparams["y_dataset"]="256-random"
-hyperparams["data_subset"]="100000"
-hyperparams["data_validation_samples"]="1000"
+hyperparams["data_subset"]="1000"
+hyperparams["data_validation_samples"]="0"
 hyperparams["mini_epoch_size"]="0"
-hyperparams["model_name"]="baseline-constShaped,baseline-SLPMultShaped,baseline-cNODE0 cNODE1 cNODE2 cNODE-hourglass canODE-FitMat canODE-attendFit transformShaped"
-hyperparams["epochs"]="[1...10]"
-hyperparams["minibatch_examples"]="100"
+hyperparams["model_name"]="baseline-ConstSoftmax,baseline-SLPMultSoftmax,baseline-cNODE0 cNODE1 cNODE-hourglass canODE-FitMat canODE-attendFit transformSoftmax"
+hyperparams["epochs"]="[10^^^100] [100^^^1000]"
+hyperparams["minibatch_examples"]="250"
 hyperparams["ode_timesteps_file"]="t.csv t_shortlinear.csv"
 hyperparams["lr"]="[0.000001^^^1.0]"
-hyperparams["reptile_lr"]="1.0 [0.0...1.0]"
-hyperparams["noise"]="0.0" # [0.001^^^0.3]"
+hyperparams["noise"]="0.0 [0.0001^^^1.0]"
 hyperparams["wd"]="0.0 [0.001^^^100.0]"
 hyperparams["interpolate"]="False"
 hyperparams["interpolate_noise"]="False"
@@ -52,9 +51,9 @@ hyperparams["cnode_bias"]="False True"
 hyperparams["cnode1_init_zero"]="False True"
 hyperparams["identity_gate"]="False True"
 hyperparams["num_heads"]="[1...16]"
-hyperparams["hidden_dim"]="[4^^^128]"
+hyperparams["hidden_dim"]="[8^^^64]"
 hyperparams["attend_dim_per_head"]="[1...16]"
-hyperparams["depth"]="[1...6]"
+hyperparams["depth"]="[2...6]"
 hyperparams["ffn_dim_multiplier"]="[0.5^^^4.0]"
 hyperparams["dropout"]="0.0 [0.0...0.8]"
 
@@ -131,7 +130,11 @@ echo "Launching job array task: Job ID $SLURM_ARRAY_JOB_ID, Task ID $SLURM_ARRAY
 # 6. Run the Python Script
 # -------------------------
 source activate lnc
-python run.py --kfolds $NUM_FOLDS --headless \
+python run.py \
+    --headless \
+    --run_test \
+    --reeval_training_set_final \
+    --kfolds $NUM_FOLDS \
     --batchid $SLURM_ARRAY_JOB_ID \
     --taskid $SLURM_ARRAY_TASK_ID \
     --jobid $SLURM_JOB_ID \
@@ -141,13 +144,9 @@ python run.py --kfolds $NUM_FOLDS --headless \
     --data_subset ${hyperparam_values["data_subset"]} \
     --data_validation_samples ${hyperparam_values["data_validation_samples"]} \
     --mini_epoch_size ${hyperparam_values["mini_epoch_size"]} \
-    --subset_increases_epochs \
-    --run_test \
-    --reeval_training_set_final \
     --model_name ${hyperparam_values["model_name"]} \
     --epochs ${hyperparam_values["epochs"]} \
     --lr ${hyperparam_values["lr"]} \
-    --reptile_lr ${hyperparam_values["reptile_lr"]} \
     --wd ${hyperparam_values["wd"]} \
     --noise ${hyperparam_values["noise"]} \
     --interpolate ${hyperparam_values["interpolate"]} \
@@ -163,3 +162,5 @@ python run.py --kfolds $NUM_FOLDS --headless \
     --dropout ${hyperparam_values["dropout"]} \
     --ode_timesteps_file ${hyperparam_values["ode_timesteps_file"]} \
     --minibatch_examples ${hyperparam_values["minibatch_examples"]} \
+
+#    --subset_increases_epochs \
