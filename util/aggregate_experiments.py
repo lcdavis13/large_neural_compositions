@@ -164,7 +164,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "./results/hpsearch_4-22/expt/"
+    folder = "./results/hpsearch_4-22_100k/expt/"
     path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     

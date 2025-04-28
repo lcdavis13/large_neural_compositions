@@ -39,7 +39,7 @@ class DirectToZero(torch.optim.lr_scheduler.LRScheduler):
         self.warmup_proportion = warmup_proportion
         self.warmup_steps = int(update_steps * warmup_proportion)
 
-        self.stepnum = 0
+        self.stepnum = -1
         
         super().__init__(optimizer)
 
@@ -50,6 +50,7 @@ class DirectToZero(torch.optim.lr_scheduler.LRScheduler):
             lr = self.peak_lr * ((self.stepnum / self.warmup_steps) if self.warmup_steps > 0 else 1.0)
         else:
             lr = self.peak_lr * (1 - (self.stepnum - self.warmup_steps) / (self.update_steps - self.warmup_steps))
+        lr = max(lr, 0.0)
         
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr

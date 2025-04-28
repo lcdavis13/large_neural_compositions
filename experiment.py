@@ -534,8 +534,21 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
         #     else:
         #         data_test = None
 
-        
-        steps_per_epoch = ceildiv(mini_epoch_size if mini_epoch_size > 0 else total_train_samples, minibatch_examples * accumulated_minibatches)
+        epoch_size = mini_epoch_size if mini_epoch_size > 0 else total_train_samples
+        stepsize = minibatch_examples * accumulated_minibatches
+        steps_per_epoch = ceildiv(epoch_size, stepsize)
+        final_epoch_minsamples = (max_epochs % 1.0) * epoch_size 
+        final_epoch_minibatches = ceildiv(final_epoch_minsamples, minibatch_examples)
+        update_steps = (max_epochs // 1.0)*steps_per_epoch + final_epoch_minibatches
+        # print("==========================")
+        # print(f"total_train_samples: {epoch_size}")
+        # print(f"step size: {stepsize}")
+        # print(f"steps per epoch: {steps_per_epoch}")
+        # print(f"final epoch min samples: {final_epoch_minsamples}")
+        # print(f"final epoch minibatches: {final_epoch_minibatches}")
+        # print(f"update steps: {update_steps}")
+        # print("==========================")
+
         # print(f"Steps per epoch: {steps_per_epoch}")
         # base_scheduler = lr_schedule.ConstantLR(optimizer)
         # base_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.3, patience=patience // 2, cooldown=patience,
@@ -543,7 +556,6 @@ def crossvalidate_model(LR, scaler, accumulated_minibatches, data_folded, data_t
         # base_scheduler = OneCycleLR(
         #     optimizer, max_lr=LR, epochs=min_epochs, steps_per_epoch=steps_per_epoch, div_factor=1.0/LR_start_factor,
         #     final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
-        update_steps = max_epochs*steps_per_epoch
         base_scheduler = lr_schedule.DirectToZero(optimizer, peak_lr=LR, update_steps=update_steps, warmup_proportion=0.1)
         scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=LR * LR_start_factor)
         

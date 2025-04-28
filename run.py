@@ -16,7 +16,14 @@ import loss_function
 import stream_plot as plotstream
 
 
-def run_experiments(hyperparam_csv=None):
+def override_dict(target_dict, override_dict):
+    for key in target_dict:
+        if key in override_dict:
+            target_dict[key] = override_dict[key]
+    # return target_dict
+
+
+def run_experiments(hyperparam_csv=None, overrides=None):
     """
     Run an experiment or set of experiments, defined by hyperparameters.
 
@@ -54,13 +61,15 @@ def run_experiments(hyperparam_csv=None):
 
     # loop through possible combinations of dataset hyperparams, though if we aren't in CSV mode there should only be one configuration
     for cp in hpbuilder.parse_and_generate_combinations(category=config_param_cat): 
-    
+        override_dict(cp, overrides)
+
         expt.process_config_params(cp)
 
         plotstream.set_plot_mode(cp.plot_mode, wait_on_exit=cp.plots_wait_for_exit)
 
         # loop through possible combinations of dataset hyperparams
         for dp in hpbuilder.parse_and_generate_combinations(category=data_param_cat):
+            override_dict(dp, overrides)
 
             data_folded, testdata, dense_columns, sparse_columns = expt.process_data_params(dp)
 
@@ -68,6 +77,7 @@ def run_experiments(hyperparam_csv=None):
 
             # loop through possible combinations of generic hyperparams
             for hp in hpbuilder.parse_and_generate_combinations():
+                override_dict(hp, overrides)
 
                 expt.run_experiment(cp, dp, hp, data_folded, testdata, device, model_constructors, epoch_mngr_constructors, loss_fn, score_fn, distr_error_fn, identity_loss, identity_score, dense_columns, sparse_columns)
 
@@ -78,4 +88,4 @@ def run_experiments(hyperparam_csv=None):
 
 # main
 if __name__ == "__main__":
-    run_experiments() #("batch/HPsearch_256-random_1k_lowEpoch.csv")
+    run_experiments("batch/HPsearch_256-random_1k_lowEpoch.csv", overrides={"plot_mode": "window", "plots_wait_for_exit": True, "whichfold": 0})
