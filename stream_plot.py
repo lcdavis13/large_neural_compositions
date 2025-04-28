@@ -8,6 +8,8 @@ import atexit
 import itertools
 import matplotlib
 from collections import defaultdict
+from multiprocessing.queues import Queue as MpQueue
+
 
 
 
@@ -91,31 +93,37 @@ def _ensure_plot_process(plot_name):
         return
 
     if get_plot_mode() == "inline":
-        # No multiprocessing: initialize inline state
         if plot_name not in _plot_queues:
-            _plot_queues[plot_name] = []  # Use a list as a stand-in "queue"
+            _plot_queues[plot_name] = []  # Inline uses simple list
         return
 
-    # 'window' mode (multiprocessing)
-
+    # window mode (multiprocessing)
     _ensure_mp_start_method()
     global _plot_started, _shutdown_registered
 
-    if plot_name not in _plot_queues:
-        # Lazy creation of the queue and process
+    if plot_name not in _plot_queues or not isinstance(_plot_queues[plot_name], MpQueue):
+        # Create queue and process
+        pending = _plot_queues.get(plot_name, [])  # get any pending points (or empty)
         q = mp.Queue()
         _plot_queues[plot_name] = q
+
         config = _plot_configs.get(plot_name, {})
         print(f"[DEBUG] Creating plot process for '{plot_name}' with config: {config}")
         p = mp.Process(target=_live_plot, args=(plot_name, q, config, _PLOT_WAIT_ON_EXIT))
         p.start()
         _plot_processes[plot_name] = p
 
+        # Flush pending points into real queue
+        for item in pending:
+            q.put(item)
+
         if not _shutdown_registered:
             _register_shutdown()
             _shutdown_registered = True
 
         _plot_started = True
+
+
 
 
 def _register_shutdown():
@@ -162,6 +170,13 @@ def _live_plot(plot_name, q, config, wait_on_exit):
                 label = item['label']
                 y_value = item['y_value']
                 style = item.get('style', {'linestyle': '--', 'color': 'gray'})
+
+                plot_config = item.get('plot_config')
+                if plot_config:
+                    ax.set_title(plot_config.get('title', plot_name))
+                    ax.set_xlabel(plot_config.get('xlabel', ''))
+                    ax.set_ylabel(plot_config.get('ylabel', ''))
+
                 if label not in horizontal_lines:
                     line = ax.axhline(y=y_value, label=label, **style)
                     horizontal_lines[label] = line
@@ -222,13 +237,6 @@ def _live_plot(plot_name, q, config, wait_on_exit):
 
 
 
-
-# from collections import defaultdict
-# import matplotlib.pyplot as plt
-
-# _inline_plot_data = defaultdict(lambda: defaultdict(lambda: ([], [], None)))
-# _inline_plot_figures = {}
-
 def _render_inline_plot(plot_name):
     # Create or reuse figure
     if plot_name not in _inline_plot_figures:
@@ -238,7 +246,7 @@ def _render_inline_plot(plot_name):
         fig, ax = _inline_plot_figures[plot_name]
         ax.clear()
 
-    # Apply config
+    # Always apply config (even if no new points)
     config = _plot_configs.get(plot_name, {})
     ax.set_title(config.get("title", plot_name))
     ax.set_xlabel(config.get("xlabel", ""))
@@ -258,17 +266,20 @@ def _render_inline_plot(plot_name):
             ax.axhline(y=y, label=lbl, **line_style)
             new_queue.append(item)
         else:
-            line_name, data_points, style, _ = item
+            line_name, data_points, style, plot_config = item
             xdata, ydata, prev_style = _inline_plot_data[plot_name][line_name]
 
-            # Add only the new points once
             for x, y in data_points:
                 xdata.append(x)
                 ydata.append(y)
 
             _inline_plot_data[plot_name][line_name] = (xdata, ydata, style or prev_style)
 
-    # Clear the queue so we don't keep adding same points
+            # Update config if plot_config is passed here
+            if plot_config:
+                _plot_configs[plot_name] = plot_config
+
+    # Clear queue
     _plot_queues[plot_name] = new_queue
 
     # Plot all lines
@@ -283,17 +294,15 @@ def _render_inline_plot(plot_name):
 
         ax.plot(xdata, ydata, label=(line_name if not is_marker_only else None), **style)
 
-
     ax.legend()
     fig.canvas.draw()
     plt.pause(0.001)
 
-    # Prevent re-rendering of already drawn plots
-    _inline_plot_figures[plot_name][1].legend()
-    _plot_queues[plot_name] = []
-
-
-
+    # NEW: Save the figure if requested
+    if config.get("save_on_exit", False):
+        filename = f"{plot_name}.png"
+        fig.savefig(filename)
+        print(f"[INFO] Saved inline plot '{plot_name}' to {filename}")
 
 
 # === Public API ===
@@ -302,28 +311,34 @@ def plot_push(plot_name, line_name, data_point_or_list, style=None, *, plot_conf
     if get_plot_mode() == "off":
         return
 
-    # 'inline' mode
+    if isinstance(data_point_or_list, tuple):
+        data_point_or_list = [data_point_or_list]
 
     if get_plot_mode() == "inline":
-        if isinstance(data_point_or_list, tuple):
-            data_point_or_list = [data_point_or_list]
+        if plot_config:
+            _plot_configs[plot_name] = plot_config
         if plot_name not in _plot_queues:
             _plot_queues[plot_name] = []
         _plot_queues[plot_name].append((line_name, data_point_or_list, style, plot_config))
         return
 
-    # 'window' mode
-
+    # window mode
     if plot_name not in _plot_queues:
-        if plot_config:
+        _plot_queues[plot_name] = []  # Start as a pending list
+
+    if plot_config:
+        if plot_name not in _plot_configs:
             _plot_configs[plot_name] = plot_config
-        _ensure_plot_process(plot_name)
+        _ensure_plot_process(plot_name)  # Now we can start the process
 
-    queue = _plot_queues[plot_name]
-    if isinstance(data_point_or_list, tuple):
-        data_point_or_list = [data_point_or_list]
+    if isinstance(_plot_queues[plot_name], list):
+        # Pending list mode (waiting for process)
+        _plot_queues[plot_name].append((line_name, data_point_or_list, style))
+    else:
+        # Process already started
+        queue = _plot_queues[plot_name]
+        queue.put((line_name, data_point_or_list, style))
 
-    queue.put((line_name, data_point_or_list, style))
 
 
 def finish_up(block=True):
@@ -404,8 +419,7 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
             plot_push(title, marker_label, (x_value, y), style=marker_style, plot_config=plot_config)
 
 
-
-def plot_horizontal_line(title, y_value, label, style=None):
+def plot_horizontal_lline(title, y_value, label, style=None):
     """
     Draw a horizontal line at y = y_value in the specified plot.
     Works for both 'inline' and 'window' modes.
@@ -416,27 +430,29 @@ def plot_horizontal_line(title, y_value, label, style=None):
     if style is None:
         style = {'linestyle': '--', 'color': 'gray'}
 
-    if get_plot_mode() == 'inline':
-        if title not in _plot_queues:
-            _plot_queues[title] = []
-
-        _plot_queues[title].append({
-            'cmd': 'add_horizontal_line',
-            'label': label,
-            'y_value': y_value,
-            'style': style
-        })
-        return
-
-    # For 'window' mode (multiprocessing)
-    _ensure_plot_process(title)
-    queue = _plot_queues[title]
-    queue.put({
+    cmd = {
         'cmd': 'add_horizontal_line',
         'label': label,
         'y_value': y_value,
-        'style': style
-    })
+        'style': style,
+    }
+
+    if get_plot_mode() == 'inline':
+        if title not in _plot_queues:
+            _plot_queues[title] = []
+        _plot_queues[title].append(cmd)
+        return
+
+    # window mode
+    if title not in _plot_queues:
+        _plot_queues[title] = []  # Start as pending list
+    if isinstance(_plot_queues[title], list):
+        # Still pending stage, accumulate
+        _plot_queues[title].append(cmd)
+    else:
+        # Process already started, send immediately
+        queue = _plot_queues[title]
+        queue.put(cmd)
 
 
 
@@ -586,8 +602,8 @@ if __name__ == '__main__':
 
             if x == 50:
                 # Example: horizontal reference line
-                plot_horizontal_line('Dynamic Linear Plot', y_value=200, label='Threshold')
-                plot_horizontal_line('Dynamic Logarithmic Plot', y_value=500, label='Reference')
+                plot_horizontal_lline('Dynamic Linear Plot', y_value=200, label='Threshold')
+                plot_horizontal_lline('Dynamic Logarithmic Plot', y_value=500, label='Reference')
 
             time.sleep(0.1)
 

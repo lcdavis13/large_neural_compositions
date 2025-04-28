@@ -236,7 +236,7 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
                                        mini_epoch_num + mb / minibatches, scheduler.get_last_lr(), False, y_log=False)
             if loss_plot:
                 plotstream.plot_loss(loss_plot, f"{model_config} fold {fold}", mini_epoch_num + mb / minibatches,
-                                     stream_loss / stream_examples, None, add_point=False)
+                                     stream_loss / stream_examples, None, add_point=False, xlabel='Update Steps', ylabel='Bray-Curtis Loss')
             if lr_loss_plot:
                 plotstream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_config} fold {fold}",
                                        scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
@@ -331,7 +331,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                           "Peak RAM (GB)", cpuRam  / (1024 ** 3),
                           prefix="================PRE-VALIDATION===============\n",
                           suffix="\n=============================================\n")
-    plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", 0, l_trn, l_val, add_point=False)
+    plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", 0, l_trn, l_val, add_point=False)
     # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", 0, score_trn, score_val, add_point=False)
     plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
     # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
@@ -378,7 +378,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
             outputs_per_epoch, train_examples_seen, update_steps, 
             fold, epoch, manager.epoch, model_config, dataname, loss_fn, score_fn,
             distr_error_fn, device, filepath_out_incremental,
-            lr_plot="Learning Rate", verbosity=verbosity - 1
+            lr_plot=f"Learning Rate {dataname}", verbosity=verbosity - 1
         )
         # if reptile_rate > 0.0:
         #     # Meta-update logic
@@ -456,8 +456,8 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                               prefix="==================VALIDATION=================\n",
                               suffix="\n=============================================\n")
         
-        plotstream.plot_loss(f"loss {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, l_trn, l_val,
-                             add_point=add_point)
+        plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, l_trn, l_val,
+                             add_point=add_point, xlabel='Epoch' if mini_epoch_size <= 0 else 'Update Steps', ylabel='Bray-Curtis Loss')
         # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", manager.epoch, score_trn, score_val, add_point=add_point)
         plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
         # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
@@ -701,7 +701,10 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
 
         # conditionally adjust epochs to compensate for subset size
         if hp.subset_increases_epochs:
-            hp.adjusted_epochs = int(hp.epochs // dp.data_fraction)
+            if hp.base_data_subset > 0:
+                hp.adjusted_epochs = int(hp.epochs // (dp.data_subset / hp.base_data_subset))
+            else:            
+                hp.adjusted_epochs = int(hp.epochs // dp.data_fraction)
             print(f"Adjusted epochs from {hp.epochs} to {hp.adjusted_epochs} to compensate for subset size")
         else:
             hp.adjusted_epochs = hp.epochs
@@ -863,7 +866,7 @@ def test_identity_model(dp, data_folded, device, loss_fn, score_fn, distr_error_
                                                                     [0.0, 1.0], loss_fn, score_fn, distr_error_fn,
                                                                     device)
     print(f"\n\nIDENTITY MODEL loss: {identity_loss}, score: {identity_score}\n\n")
-    plotstream.plot_horizontal_line(f"loss {dp.y_dataset}", identity_loss, f"Identity")
+    plotstream.plot_horizontal_lline(f"Loss {dp.y_dataset}", identity_loss, f"Identity")
     # plotstream.plot_horizontal_line(f"score {dp.y_dataset}", identity_score, f"Identity")
 
     return identity_loss, identity_score

@@ -23,7 +23,7 @@ def override_dict(target_dict, override_dict):
     # return target_dict
 
 
-def run_experiments(hyperparam_csv=None, overrides=None):
+def run_experiments(hyperparam_csv=None, overrides={}):
     """
     Run an experiment or set of experiments, defined by hyperparameters.
 
@@ -45,9 +45,6 @@ def run_experiments(hyperparam_csv=None, overrides=None):
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
-    
-    # Experiment configuration & hyperparameter space
-    # Each is also a command-line argument which can accept multiple comma-separate values for a gridsearch which will be evaluated in sequence.
 
     hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv)
 
@@ -56,10 +53,8 @@ def run_experiments(hyperparam_csv=None, overrides=None):
     epoch_mngr_constructors = epoch_managers.get_epoch_manager_constructors()
 
     loss_fn, score_fn, distr_error_fn = loss_function.get_loss_functions()
-    
-    all_rows = []
 
-    # loop through possible combinations of dataset hyperparams, though if we aren't in CSV mode there should only be one configuration
+    # loop through possible combinations of dconfig hyperparams, though if we aren't in CSV mode there should only be one configuration
     for cp in hpbuilder.parse_and_generate_combinations(category=config_param_cat): 
         override_dict(cp, overrides)
 
@@ -88,4 +83,4 @@ def run_experiments(hyperparam_csv=None, overrides=None):
 
 # main
 if __name__ == "__main__":
-    run_experiments("batch/HPsearch_256-random_1k_lowEpoch.csv", overrides={"plot_mode": "window", "plots_wait_for_exit": True, "whichfold": 0})
+    run_experiments() 

@@ -64,6 +64,7 @@ def load_and_process_csv_files(path_pattern):
                 # Calculate additional summary statistics for val_loss_col if it exists
                 if val_loss_col in group_df.columns:
                     val_loss_stats = {
+                        'val_loss_n': group_df[val_loss_col].count(),
                         'val_loss_median': group_df[val_loss_col].median(),
                         'val_loss_std': group_df[val_loss_col].std(),
                         'val_loss_min': group_df[val_loss_col].min(),
@@ -71,6 +72,7 @@ def load_and_process_csv_files(path_pattern):
                     }
                 else:
                     val_loss_stats = {
+                        'val_loss_n': None,
                         'val_loss_median': None,
                         'val_loss_std': None,
                         'val_loss_min': None,
@@ -80,6 +82,7 @@ def load_and_process_csv_files(path_pattern):
                 # Calculate additional summary statistics for test_loss_col if it exists
                 if test_loss_col in group_df.columns:
                     test_loss_stats = {
+                        'test_loss_n': group_df[test_loss_col].count(),
                         'test_loss_median': group_df[test_loss_col].median(),
                         'test_loss_std': group_df[test_loss_col].std(),
                         'test_loss_min': group_df[test_loss_col].min(),
@@ -87,6 +90,7 @@ def load_and_process_csv_files(path_pattern):
                     }
                 else:
                     test_loss_stats = {
+                        'test_loss_n': None,
                         'test_loss_median': None,
                         'test_loss_std': None,
                         'test_loss_min': None,
@@ -133,8 +137,8 @@ def save_master_csv(master_df, output_path):
             'noise', 'interpolate', 'interpolate_noise',
             "update steps", "Avg Training Loss", "Elapsed Time", "VRAM (GB)", "Peak RAM (GB)",
             # 'mean_val_loss @ epoch', 'mean_val_loss @ time', 'mean_val_loss @ trn_loss',
-            'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
-            'test_loss_median', 'test_loss_std', 'test_loss_min', 'test_loss_max'
+            'val_loss_n', 'val_loss_median', 'val_loss_std', 'val_loss_min', 'val_loss_max'
+            'test_loss_n', 'test_loss_median', 'test_loss_std', 'test_loss_min', 'test_loss_max'
         ]
 
         # Define the columns that should always appear last
@@ -164,7 +168,7 @@ def save_master_csv(master_df, output_path):
 
 
 def main():
-    folder = "./results/hpsearch_4-22_100k/expt/"
+    folder = "./results/hpsearch_4-22_1k/expt/"
     path_pattern = f"{folder}*_job*_experiments.csv"
     output_path = f"{folder}_experiments.csv"
     

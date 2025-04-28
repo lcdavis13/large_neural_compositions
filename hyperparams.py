@@ -88,6 +88,8 @@ def construct_hyperparam_composer(hyperparam_csv=None):
                         # True,
                         False, 
                         help="if true, epochs will be adjusted based on the subset size to run the same number of total samples")
+    hpbuilder.add_param("base_data_subset", -1,
+                        help="Base data subset size to use for calculating epochs when subset_increases_epochs is true. If -1, the max dataset size is used instead.",)
     hpbuilder.add_param("min_epochs", 1, 
                         help="minimum number of epochs")
     hpbuilder.add_param("accumulated_minibatches", 1, 
