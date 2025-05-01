@@ -1,8 +1,8 @@
 from hyperparam_composer import HyperparameterComposer
 
 
-def construct_hyperparam_composer(hyperparam_csv=None):
-    hpbuilder = HyperparameterComposer(hyperparam_csv=hyperparam_csv)
+def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
+    hpbuilder = HyperparameterComposer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
     hpbuilder.add_param("model_name", 
                         # "junk", 
@@ -72,7 +72,7 @@ def construct_hyperparam_composer(hyperparam_csv=None):
                         # "off",
                         help="plotting mode: window, inline, or off", 
                         category=config_cat)
-    hpbuilder.add_flag("plots_wait_for_exit", True,
+    hpbuilder.add_flag("plots_wait_for_exit", False,
                         help="wait for plots to be closed by user before exiting",
                         category=config_cat)
     

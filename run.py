@@ -1,4 +1,5 @@
 import os
+import sys
 import torch
 
 # Set a default value if the environment variable is not specified (must be done before importing models)
@@ -23,7 +24,7 @@ def override_dict(target_dict, override_dict):
     # return target_dict
 
 
-def run_experiments(hyperparam_csv=None, overrides={}):
+def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
     """
     Run an experiment or set of experiments, defined by hyperparameters.
 
@@ -46,7 +47,7 @@ def run_experiments(hyperparam_csv=None, overrides={}):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
 
-    hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv)
+    hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
     model_constructors = models.get_model_constructors()
 
@@ -83,4 +84,4 @@ def run_experiments(hyperparam_csv=None, overrides={}):
 
 # main
 if __name__ == "__main__":
-    run_experiments() 
+    run_experiments(cli_args=sys.argv[1:]) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 

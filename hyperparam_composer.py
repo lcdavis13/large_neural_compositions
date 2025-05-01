@@ -47,7 +47,10 @@ def parse_random_value(value: str, expected_type: type) -> Any:
 
 
 class HyperparameterComposer:
-    def __init__(self, hyperparam_csv: str = None):
+    def __init__(self, hyperparam_csv: str = None, cli_args: List[str] = None):
+        # default to not use global CLI, must be passed in explicitly, while avoiding a mutable default in the function signature
+        self.cli_args = cli_args if cli_args is not None else []
+
         self.params = {}
         self.categories = {}
         self.parser = argparse.ArgumentParser(description="Experiment Hyperparameters")
@@ -226,7 +229,7 @@ class HyperparameterComposer:
     def _parse_argparse_mode(self, param_names: List[str], category: Optional[str] = None) -> List[Dict[str, Any]]:
         # Argparse mode (uses permutation and random selection)
         
-        args = vars(self.parser.parse_args())
+        args = vars(self.parser.parse_args(self.cli_args))
         
         # Filter parameters by category
         param_names_subset = [name for name in param_names if name in args]
@@ -280,7 +283,7 @@ class HyperparameterComposer:
             # We've decided whether or not we needed to increment the index, now grab row
             indices = [self.csv_index]
 
-        defaults = vars(self.parser.parse_args())
+        defaults = vars(self.parser.parse_args(self.cli_args))
 
         # This section is basically equivalent to _parse_argparse_mode but once per row we've retrieved.
         expand_rate = 1

@@ -896,9 +896,9 @@ def process_data_params(dp):
         base_filepath, 
         filenames,
         dp.minibatch_examples,
-        dp.data_subset,
-        dp.data_validation_samples,
-        dp.kfolds
+        data_train_samples=dp.data_subset,
+        data_validation_samples=dp.data_validation_samples,
+        kfolds=dp.kfolds,
     )
     print(f"length of data_folded: {len(data_folded)}")
     # dimensions are (kfolds, train vs valid, datasets tuple, batches, samples)
