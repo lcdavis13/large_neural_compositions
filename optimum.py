@@ -94,26 +94,34 @@ def summarize(optimum_list):
     return Optimum(metric, metric_type, summary_dict)
 
 
+def _unroll_items(opt):
+    optimized_key = opt.metric_name or "mini_epoch"
+    optimized_value = opt.dict.get(optimized_key)
+
+    pairs = []
+
+    # Add the optimized key-value pair first
+    if optimized_key in opt.dict:
+        pairs.append((optimized_key, optimized_value))
+
+    # Then, add all other key-value pairs with prefix
+    for key, value in opt.dict.items():
+        if key != optimized_key:
+            prefixed_key = f"{optimized_key} @ {key}"
+            pairs.append((prefixed_key, value))
+
+    return pairs
+
 def unrolloptims(*optimums):
     unrolled_items = []
-    
     for opt in optimums:
-        # First, add the optimized key-value pair
-        optimized_key = opt.metric_name
-        if optimized_key is None:
-            optimized_key = "mini_epoch"
-        optimized_value = opt.dict.get(optimized_key)
-        
-        # Append the optimized key-value pair first
-        if optimized_key in opt.dict:
-            unrolled_items.append(optimized_key)
-            unrolled_items.append(optimized_value)
-        
-        # Then, append all other key-value pairs, prefixed by the optimized key
-        for key, value in opt.dict.items():
-            if key != optimized_key:
-                prefixed_key = f"{optimized_key} @ {key}"
-                unrolled_items.append(prefixed_key)
-                unrolled_items.append(value)
-    
+        for key, value in _unroll_items(opt):
+            unrolled_items.extend([key, value])
     return unrolled_items
+
+def unrolloptims_dict(*optimums):
+    unrolled_dict = {}
+    for opt in optimums:
+        for key, value in _unroll_items(opt):
+            unrolled_dict[key] = value
+    return unrolled_dict

@@ -13,7 +13,9 @@ def get_loss_functions():
     
     distr_error_fn = distribution_error
 
-    return loss_fn, score_fn, distr_error_fn
+    score_fns = {"score": score_fn, "simplex_distance": distr_error_fn}
+
+    return loss_fn, score_fns
 
 
 
@@ -62,12 +64,46 @@ def loss_bc_unbounded(y_pred, y_true, avg_richness, epsilon=1e-10):
     return batch_loss / y_pred.shape[0]
 
 
-def distribution_error(x):  # penalties for invalid distributions
-    a = 1.0
-    b = 1.0
-    feature_penalty = torch.sum(torch.clamp(torch.abs(x - 0.5) - 0.5, min=0.0))  # each feature penalized for distance from range [0,1]. Currently not normalized.
-    sum_penalty = torch.sum(torch.abs(torch.sum(x, dim=-1) - 1.0))  # sum penalized for distance from 1.0
-    # normalize by the product of all dimensions except the final one?
-    return a * feature_penalty + b * sum_penalty
+# def distribution_error(x, y=None):  # penalties for invalid distributions. y is unused but included to match signautre of other score functions.
+#     a = 1.0
+#     b = 1.0
+#     feature_penalty = torch.sum(torch.clamp(torch.abs(x - 0.5) - 0.5, min=0.0))  # each feature penalized for distance from range [0,1]. Currently not normalized.
+#     sum_penalty = torch.sum(torch.abs(torch.sum(x, dim=-1) - 1.0))  # sum penalized for distance from 1.0
+#     # normalize by the product of all dimensions except the final one?
+#     return a * feature_penalty + b * sum_penalty
+
+
+def distribution_error(x, y=None):  # penalties for invalid distributions. y is unused but included to match signautre of other score functions.
+    """
+    For a batch of vectors, compute the Euclidean distance from each to the probability simplex.
+    
+    Args:
+        batch (Tensor): shape (B, N), where B is batch size and N is vector length.
+    
+    Returns:
+        distances (Tensor): shape (B,), Euclidean distance of each vector to the simplex.
+        Note that this is an L2 distance, not L1, so not directly comparable to Bray-Curtis in magnitude. Finding the minimum L1 distance to the simplex would be more complex.
+    """
+
+    def project_onto_simplex(v, axis=-1):
+        """
+        Projects each vector in `v` onto the probability simplex along the specified axis.
+        """
+        v_sorted, _ = torch.sort(v, descending=True, dim=axis)
+        cssv = torch.cumsum(v_sorted, dim=axis) - 1
+        ind = torch.arange(1, v.size(axis)+1, device=v.device).view([1]*axis + [-1])
+        cond = v_sorted - cssv / ind > 0
+
+        rho = cond.cumsum(dim=axis)
+        rho[cond == 0] = 0
+        rho_max, _ = rho.max(dim=axis, keepdim=True)
+
+        theta = (cssv.gather(axis, rho_max - 1)) / rho_max.type(v.dtype)
+        return torch.clamp(v - theta, min=0.0)
+
+    projected = project_onto_simplex(x)
+    distances = torch.norm(x - projected, dim=1)
+    return torch.mean(distances)
+
 
 

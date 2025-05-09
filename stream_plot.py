@@ -419,7 +419,7 @@ def plot(title, xlabel, ylabel, line_labels, x_value, y_values, add_point=False,
             plot_push(title, marker_label, (x_value, y), style=marker_style, plot_config=plot_config)
 
 
-def plot_horizontal_lline(title, y_value, label, style=None):
+def plot_horizontal_line(title, y_value, label, style=None):
     """
     Draw a horizontal line at y = y_value in the specified plot.
     Works for both 'inline' and 'window' modes.
@@ -453,6 +453,20 @@ def plot_horizontal_lline(title, y_value, label, style=None):
         # Process already started, send immediately
         queue = _plot_queues[title]
         queue.put(cmd)
+
+def plot_horizontal_lines(title, line_dict, style=None):
+    """
+    Draw multiple horizontal lines in the specified plot.
+    Works for both 'inline' and 'window' modes.
+    """
+    if get_plot_mode() == 'off':
+        return
+
+    if style is None:
+        style = {'linestyle': '--', 'color': 'gray'}
+
+    for label, y_value in line_dict.items():
+        plot_horizontal_line(title, y_value, label, style=style)
 
 
 
@@ -602,8 +616,8 @@ if __name__ == '__main__':
 
             if x == 50:
                 # Example: horizontal reference line
-                plot_horizontal_lline('Dynamic Linear Plot', y_value=200, label='Threshold')
-                plot_horizontal_lline('Dynamic Logarithmic Plot', y_value=500, label='Reference')
+                plot_horizontal_line('Dynamic Linear Plot', y_value=200, label='Threshold')
+                plot_horizontal_line('Dynamic Logarithmic Plot', y_value=500, label='Reference')
 
             time.sleep(0.1)
 
