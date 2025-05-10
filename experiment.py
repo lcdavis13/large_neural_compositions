@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 import data
 import torch
 import models_baseline
+import models_fitted
 import stream
 from optimum import Optimum, summarize, unrolloptims, unrolloptims_dict
 import stream_plot as plotstream
@@ -909,50 +910,54 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         print(f"Model {hp.model_name} failed with error:\n{e}")
         traceback.print_exc()
 
-# def evaluate_identity_function(data_train, data_valid, data_test, fold_num, score_fn, verbosity=0):
+
+def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns):
     
-#     train_x = data_train["x"]
-#     train_y = data_train["y"]
-#     valid_x = data_valid["x"]
-#     valid_y = data_valid["y"]
-#     test_x = data_test["x"]
-#     test_y = data_test["y"]
+    benchmark_losses = {}
 
-#     trn_score = score_fn(train_x, train_y)
-#     val_score = score_fn(valid_x, valid_y)
-#     test_score = score_fn(test_x, test_y)
-
-#     fold_stats_dict = {
-#         "train_score": trn_score,
-#         "valid_score": val_score,
-#         "test_score": test_score,
-#     }
-#     other_stats_dict = {}
-
-#     if verbosity > 0:
-#         print(f"\n\nIDENTITY MODEL score for fold {fold_num}: {val_score}\n\n")
-
-#     return fold_stats_dict, other_stats_dict
-
-
-# def test_identity_model(dp, data_folded, device, loss_fn, score_fn, distr_error_fn):
-
-#     # Establish baseline performance and add to plots
-#     identity_model = models_baseline.ReturnInput()
-#     identity_loss, identity_score, identity_distro_error = validate_epoch(identity_model, False, data_folded[0][1], 100,  # using 100 instead of hp.minibatch_examples, because this model doesn't learn so the only concern is computational throughput.
-#                                                                     [0.0, 1.0], loss_fn, score_fn, distr_error_fn,
-#                                                                     device)
-#     print(f"\n\nIDENTITY MODEL loss: {identity_loss}, score: {identity_score}\n\n")
-#     plotstream.plot_horizontal_line(f"Loss {dp.y_dataset}", identity_loss, f"Identity")
-#     # plotstream.plot_horizontal_line(f"score {dp.y_dataset}", identity_score, f"Identity")
-
-#     benchmark_losses = {
-#         "identity_loss": identity_loss,
-#         # "identity_score": identity_score,
-#     }
-
-#     return benchmark_losses
-
+    if dp.eval_benchmarks:
+        mean_id_scores, _, _, _ = crossvalidate(
+                    fit_and_evaluate_fn=models_fitted.evaluate_identity_function, 
+                    data_folded=data_folded, data_test=testdata, 
+                    score_fns=score_fns,
+                    whichfold=dp.whichfold, 
+                    filepath_out_expt="results/benchmarks/expt.csv",
+                    filepath_out_fold="results/benchmarks/fold.csv",
+                    out_rowinfo_dict={
+                        "model": "identity", 
+                        "dataset": dp.y_dataset, 
+                        "kfolds": dp.kfolds, 
+                        "config_configid": cp.config_configid, 
+                        "dataset_configid": dp.data_configid
+                    }
+                )
+                # models_fitted.fit_and_evaluate_linear_regression(data_train, data_valid, data_test, fold_num, score_fn, data_dim, verbosity=0)
+        lambda_linreg = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.fit_and_evaluate_linear_regression(
+                    data_train, data_valid, data_test, fold_num, score_fns, dense_columns, verbosity=verbosity)
+        mean_lin_scores, _, _, _ = crossvalidate(
+                    fit_and_evaluate_fn=lambda_linreg, 
+                    data_folded=data_folded, data_test=testdata, 
+                    score_fns=score_fns,
+                    whichfold=dp.whichfold, 
+                    filepath_out_expt="results/benchmarks/expt.csv",
+                    filepath_out_fold="results/benchmarks/fold.csv",
+                    out_rowinfo_dict={
+                        "model": "LinearRegression", 
+                        "dataset": dp.y_dataset, 
+                        "kfolds": dp.kfolds, 
+                        "config_configid": cp.config_configid, 
+                        "dataset_configid": dp.data_configid
+                    },
+                    required_scores=["train_score", "train_mse"]
+                )
+        benchmark_losses = {
+                    "identity": mean_id_scores["mean_valid_score"],
+                    "Linear Regression - Trn": mean_lin_scores["mean_train_score"],
+                    "Linear Regression - Val": mean_lin_scores["mean_valid_score"],
+                    # "LinReg_test": mean_lin_scores["mean_test_score"],
+                }
+        
+    return benchmark_losses
 
 
 

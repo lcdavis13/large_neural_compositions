@@ -120,6 +120,48 @@ class SingleLayerPerceptron(nn.Module):
 #         y = masked_softmax(f, x)
         
 #         return y
+
+
+
+class Linear(nn.Module):
+        # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N):
+        super().__init__()
+        self.f1 = nn.Linear(N, N)
+
+        # Identity initialization
+        with torch.no_grad():
+            self.f1.weight.copy_(torch.eye(N))
+            self.f1.bias.zero_()
+    
+    def forward(self, x):
+        f = self.f1(x)
+        
+        return f
+
+
+class LinearFilteredNormalized(nn.Module):
+        # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+    def __init__(self, N, identity_gate):
+        super().__init__()
+        self.f1 = nn.Linear(N, N)
+
+        if identity_gate:
+            self.gateA = nn.Parameter(torch.tensor(0.0))
+            self.gateB = nn.Parameter(torch.tensor(1.0))
+        else:
+            self.register_buffer('gateA', torch.tensor(1.0))
+            self.register_buffer('gateB', torch.tensor(0.0))
+    
+    def forward(self, x):
+        f = self.f1(x)
+        
+        y = masked_softmax(f, x)
+
+        gated_y = self.gateA*y + self.gateB*x
+        
+        return gated_y
+
     
 
 class SLPFilteredNormalized(nn.Module):

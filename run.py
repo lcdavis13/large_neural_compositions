@@ -10,7 +10,6 @@ import torch
 os.environ.setdefault("SOLVER", "trapezoid")
 
 import models
-import models_fitted
 import experiment as expt
 import epoch_managers
 import hyperparams
@@ -70,48 +69,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
             data_folded, testdata, dense_columns, sparse_columns = expt.process_data_params(dp)
 
-            mean_id_scores, _, _, _ = expt.crossvalidate(
-                fit_and_evaluate_fn=models_fitted.evaluate_identity_function, 
-                data_folded=data_folded, data_test=testdata, 
-                score_fns=score_fns,
-                whichfold=dp.whichfold, 
-                filepath_out_expt="results/benchmarks/expt.csv",
-                filepath_out_fold="results/benchmarks/fold.csv",
-                out_rowinfo_dict={
-                    "model": "identity", 
-                    "dataset": dp.y_dataset, 
-                    "kfolds": dp.kfolds, 
-                    "config_configid": cp.config_configid, 
-                    "dataset_configid": dp.data_configid
-                }
-            )
-            # models_fitted.fit_and_evaluate_linear_regression(data_train, data_valid, data_test, fold_num, score_fn, data_dim, verbosity=0)
-            lambda_linreg = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.fit_and_evaluate_linear_regression(
-                data_train, data_valid, data_test, fold_num, score_fns, dense_columns, verbosity=verbosity)
-            mean_lin_scores, _, _, _ = expt.crossvalidate(
-                fit_and_evaluate_fn=lambda_linreg, 
-                data_folded=data_folded, data_test=testdata, 
-                score_fns=score_fns,
-                whichfold=dp.whichfold, 
-                filepath_out_expt="results/benchmarks/expt.csv",
-                filepath_out_fold="results/benchmarks/fold.csv",
-                out_rowinfo_dict={
-                    "model": "LinearRegression", 
-                    "dataset": dp.y_dataset, 
-                    "kfolds": dp.kfolds, 
-                    "config_configid": cp.config_configid, 
-                    "dataset_configid": dp.data_configid
-                },
-                required_scores=["train_score", "train_mse"]
-            )
-            benchmark_losses = {
-                # "identity_train": mean_id_scores["mean_train_score"],
-                # "identity_val": mean_id_scores["mean_valid_score"],
-                # "identity_test": mean_id_scores["mean_test_score"],
-                "linear_train": mean_lin_scores["mean_train_score"],
-                "linear_val": mean_lin_scores["mean_valid_score"],
-                "linear_test": mean_lin_scores["mean_test_score"],
-            }
+            benchmark_losses = expt.run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns)
 
             # loop through possible combinations of generic hyperparams
             for hp in hpbuilder.parse_and_generate_combinations():
@@ -126,16 +84,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
 # main
 if __name__ == "__main__":
-    # default values for overrides
-    hyperparam_csv = "batch/1kLow/HPResults.csv"
-    # hyperparam_csv = "batch/1kLow/HPResults_baseline-SLPMultSoftmax.csv"
-    overrides = {
-        "plot_mode": "window", 
-        "plots_wait_for_exit": True, 
-        "use_best_model": False,
-        "reeval_training_set_epoch": True,
-        "whichfold": 0,
-        # "model_name": "baseline-SLPSoftmax",
-        # "identity_gate": True,
-        } 
+    hyperparam_csv = None
+    overrides = {}
+    
     run_experiments(cli_args=sys.argv[1:], hyperparam_csv=hyperparam_csv, overrides=overrides) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 

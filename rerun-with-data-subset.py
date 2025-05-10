@@ -3,15 +3,17 @@ import run
 
 # define arg for CSV file path, mini-epoch size, and data subset
 parser = argparse.ArgumentParser(description="Run experiments with different data subsets")
-parser.add_argument("--csv_file", type=str, default="batch/HPsearch_256-random_1k_lowEpoch.csv", help="Path to the CSV file containing hyperparameters.")
+parser.add_argument("--csv_file", type=str, default="batch/1kLow/HPResults_cNODE1.csv", help="Path to the CSV file containing hyperparameters.")
 parser.add_argument("--mini_epoch_size", type=int, default=800, help="Size of mini-epoch for training.")
-parser.add_argument("--data_subset", type=int, default=80, help="Data subset size")
+parser.add_argument("--data_subset", type=int, default=200, help="Data subset size")
 parser.add_argument("--data_validation_samples", type=int, default=1000, help="Number of validation samples to reserve. If positive, reserved validation samples are used instead of K-Folds.")
+parser.add_argument("--whichfold", type=int, default=0, help="Which fold to use. If -1, all K folds are used.")
 
 # batchid, taskid, jobid
 parser.add_argument("--batchid", type=int, default=0, help="Slurm array job id.")
 parser.add_argument("--taskid", type=int, default=0, help="Slurm array task id.")
 parser.add_argument("--jobid", type=str, default="-1", help="Slurm job id.")
+
 parser.add_argument("--plot_mode", type=str, default="window", help="Plotting mode: window, inline, or off.")
 parser.add_argument("--plots_wait_for_exit", action="store_true", help="Wait for exit after plotting.")
 
@@ -22,7 +24,8 @@ overrides = {
     "data_subset": args.data_subset, 
     "data_validation_samples": args.data_validation_samples, 
     "subset_increases_epochs": False, 
-    "whichfold": 0, 
+    "whichfold": args.whichfold, 
+    "eval_benchmarks": False,
 }
 
 # jobid etc added if not default
