@@ -210,6 +210,27 @@ class ChunkedCSVDataset(IterableDataset):
             return batch_tensors
 
         raise StopIteration
+    
+    def stream_by_chunk(self, device=None):
+        for chunk_idx in self.chunk_order:
+            row_indices = self.chunk_to_indices[chunk_idx]
+            if not row_indices:
+                continue  # skip empty chunks
+
+            chunk_data = self._load_chunk(chunk_idx)
+            filtered_chunk = {}
+
+            for key, df in chunk_data.items():
+                rows = df.iloc[row_indices].values
+                tensor = torch.tensor(rows, dtype=self.dtypes[key])
+                if device:
+                    tensor = tensor.to(device)
+                filtered_chunk[key] = tensor
+
+            yield filtered_chunk
+
+
+
 
 
 
@@ -262,6 +283,17 @@ class TestCSVDataset(IterableDataset):
 
         self.current_idx = end_idx
         return batch
+    
+    def stream_by_chunk(self, device=None):
+        """Yields the full test data as one dictionary-style chunk."""
+        chunk = {
+            key: torch.tensor(df.values, dtype=self.dtypes[key])
+            for key, df in self.dataframes.items()
+        }
+        if device:
+            chunk = {k: v.to(device) for k, v in chunk.items()}
+        yield chunk
+
 
 
 def load_folded_datasets(

@@ -53,7 +53,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
     epoch_mngr_constructors = epoch_managers.get_epoch_manager_constructors()
 
-    loss_fn, score_fn, distr_error_fn = loss_function.get_loss_functions()
+    loss_fn, score_fns = loss_function.get_loss_functions()
 
     # loop through possible combinations of dconfig hyperparams, though if we aren't in CSV mode there should only be one configuration
     for cp in hpbuilder.parse_and_generate_combinations(category=config_param_cat): 
@@ -69,13 +69,13 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
             data_folded, testdata, dense_columns, sparse_columns = expt.process_data_params(dp)
 
-            identity_loss, identity_score = expt.test_identity_model(dp, data_folded, device, loss_fn, score_fn, distr_error_fn)
+            benchmark_losses = expt.run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns)
 
             # loop through possible combinations of generic hyperparams
             for hp in hpbuilder.parse_and_generate_combinations():
                 override_dict(hp, overrides)
 
-                expt.run_experiment(cp, dp, hp, data_folded, testdata, device, model_constructors, epoch_mngr_constructors, loss_fn, score_fn, distr_error_fn, identity_loss, identity_score, dense_columns, sparse_columns)
+                expt.run_experiment(cp=cp, dp=dp, hp=hp, data_folded=data_folded, testdata=testdata, device=device, models=model_constructors, epoch_mngr_constructors=epoch_mngr_constructors, loss_fn=loss_fn, score_fns=score_fns, benchmark_losses=benchmark_losses, dense_columns=dense_columns, sparse_columns=sparse_columns)
 
 
     print("\n\nDONE")
@@ -84,4 +84,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
 # main
 if __name__ == "__main__":
-    run_experiments(cli_args=sys.argv[1:]) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 
+    hyperparam_csv = None
+    overrides = {}
+    
+    run_experiments(cli_args=sys.argv[1:], hyperparam_csv=hyperparam_csv, overrides=overrides) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 

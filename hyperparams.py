@@ -54,6 +54,9 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder.add_param("minibatch_examples", 100, 
                         help="minibatch size",
                         category=datacat)
+    hpbuilder.add_flag("eval_benchmarks", True,
+                        help="whether or not to evaluate the benchmark models on the dataset", 
+                        category=datacat) 
     
     # slurm params
     config_cat = "config"

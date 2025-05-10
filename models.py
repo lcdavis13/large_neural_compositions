@@ -11,7 +11,9 @@ def get_model_constructors():
     models = {
         # most useful models
         'baseline-ConstSoftmax': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
-        'baseline-SLPMultSoftmax': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
+        'baseline-SLPSoftmax': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
+        'baseline-Linear': lambda args: models_baseline.Linear(args.data_dim),
+        'baseline-LinearSoftmax': lambda args: models_baseline.LinearFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
         'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, bias=args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, bias=True, identity_gate=args.identity_gate),
         'transformSoftmax': lambda args: models_embedded.TransformerNormalized(
@@ -19,7 +21,7 @@ def get_model_constructors():
             ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout, 
             identity_gate=args.identity_gate
         ),
-        # 'transformRZShaped': lambda args: models_embedded.RZTransformerNormalized(
+        # 'transformRZSoftmax': lambda args: models_embedded.RZTransformerNormalized(
         #     data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
         #     ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
         # ),
@@ -41,11 +43,11 @@ def get_model_constructors():
         
         # additional baseline models
         'baseline-1const': lambda args: models_baseline.SingleConst(),
-        'baseline-1constShaped': lambda args: models_baseline.SingleConstFilteredNormalized(),
+        'baseline-1constSoftmax': lambda args: models_baseline.SingleConstFilteredNormalized(),
         'baseline-const': lambda args: models_baseline.ConstOutput(args.data_dim),
-        'baseline-SLPShaped': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim),
-        'baseline-SLPSumShaped': lambda args: models_baseline.SLPSumFilteredNormalized(args.data_dim, args.hidden_dim),
-        'baseline-SLPMultSumShaped': lambda args: models_baseline.SLPMultSumFilteredNormalized(args.data_dim, args.hidden_dim),
+        'baseline-SLPSumSoftmax': lambda args: models_baseline.SLPSumFilteredNormalized(args.data_dim, args.hidden_dim),
+        'baseline-SLPMultSoftmax': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
+        'baseline-SLPMultSumSoftmax': lambda args: models_baseline.SLPMultSumFilteredNormalized(args.data_dim, args.hidden_dim),
         'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(args.data_dim, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'baseline-cAttend-1step': lambda args: models_embedded.cAttend_simple(args.data_dim, args.attend_dim, args.attend_dim),

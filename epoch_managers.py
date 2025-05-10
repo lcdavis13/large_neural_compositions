@@ -110,7 +110,7 @@ class MovingAverageEpochManager(EpochManager):
         self.epoch += 1
         
         # choose score metric based on criterion
-        current_score = metrics.val_loss if (self.criterion == 'earlystop') else metrics.trn_loss
+        current_score = metrics["val_loss"] if (self.criterion == 'earlystop') else metrics["trn_loss"]
         
         # tracked stats
         dema_score = self.update_dema(current_score)
@@ -211,7 +211,7 @@ class TrainConvergenceManager(EpochManager):
     def should_stop(self, metrics):
         self.epoch += 1
         
-        current_score = metrics.trn_loss
+        current_score = metrics["trn_loss"]
         
         if self.initial_score is None:
             self.initial_score = current_score
@@ -277,7 +277,7 @@ class AdaptiveValPlateauManager(EpochManager):
         self.prev_ema = None
         
     def set_baseline(self, metrics):
-        self.ema = metrics.val_loss
+        self.ema = metrics["val_loss"]
         self.prev_ema = self.ema
     
     def update_ema(self, value):
@@ -291,7 +291,7 @@ class AdaptiveValPlateauManager(EpochManager):
     def should_stop(self, metrics):
         self.epoch += 1
         
-        current_score = metrics.val_loss
+        current_score = metrics["val_loss"]
         
         # abort in case of infinity
         if (not is_finite_number(current_score)) or current_score > self.inf_score or current_score < -self.inf_score:
@@ -361,8 +361,8 @@ class AdaptiveValDEMAPlateauManager(EpochManager):
         self.prev_dema = None
         
     def set_baseline(self, metrics):
-        self.ema1 = metrics.val_loss
-        self.ema2 = metrics.val_loss
+        self.ema1 = metrics["val_loss"]
+        self.ema2 = metrics["val_loss"]
         self.dema = 2.0 * self.ema1 - self.ema2
         self.prev_dema = self.dema
     
@@ -383,7 +383,7 @@ class AdaptiveValDEMAPlateauManager(EpochManager):
     def should_stop(self, metrics):
         self.epoch += 1
         
-        current_score = metrics.val_loss
+        current_score = metrics["val_loss"]
         
         # abort in case of infinity
         if (not is_finite_number(current_score)) or current_score > self.inf_score or current_score < -self.inf_score:
