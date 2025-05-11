@@ -637,6 +637,8 @@ def crossvalidate(fit_and_evaluate_fn, data_folded, data_test, score_fns, whichf
         fold_valid.append(valid)
         if valid:
             valid_folds += 1
+        else:
+            print(f"WARNING: Fold {fold_num} is invalid. Not including in mean and stddev.")
 
         
         stream.stream_results(filepath_out_fold, verbosity-1 > 0, verbosity-1 > 0, verbosity-1 > -1,
@@ -924,15 +926,17 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns):
                     filepath_out_expt="results/benchmarks/expt.csv",
                     filepath_out_fold="results/benchmarks/fold.csv",
                     out_rowinfo_dict={
-                        "model": "identity", 
+                        "model_name": "identity", 
                         "dataset": dp.y_dataset, 
+                        "data_subset": dp.data_subset,
+                        "data_validation_samples": dp.data_validation_samples,
                         "kfolds": dp.kfolds, 
                         "config_configid": cp.config_configid, 
                         "dataset_configid": dp.data_configid
                     }
                 )
                 # models_fitted.fit_and_evaluate_linear_regression(data_train, data_valid, data_test, fold_num, score_fn, data_dim, verbosity=0)
-        lambda_linreg = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.fit_and_evaluate_linear_regression(
+        lambda_linreg = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.fit_and_evaluate_lr_or_mp(
                     data_train, data_valid, data_test, fold_num, score_fns, dense_columns, verbosity=verbosity)
         mean_lin_scores, _, _, _ = crossvalidate(
                     fit_and_evaluate_fn=lambda_linreg, 
@@ -942,8 +946,10 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns):
                     filepath_out_expt="results/benchmarks/expt.csv",
                     filepath_out_fold="results/benchmarks/fold.csv",
                     out_rowinfo_dict={
-                        "model": "LinearRegression", 
+                        "model_name": "LinearRegression-MP", 
                         "dataset": dp.y_dataset, 
+                        "data_subset": dp.data_subset,
+                        "data_validation_samples": dp.data_validation_samples,
                         "kfolds": dp.kfolds, 
                         "config_configid": cp.config_configid, 
                         "dataset_configid": dp.data_configid
@@ -952,8 +958,8 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns):
                 )
         benchmark_losses = {
                     "identity": mean_id_scores["mean_valid_score"],
-                    "Linear Regression - Trn": mean_lin_scores["mean_train_score"],
-                    "Linear Regression - Val": mean_lin_scores["mean_valid_score"],
+                    "Linear Regression (Moore-Penrose) - Trn": mean_lin_scores["mean_train_score"],
+                    "Linear Regression (Moore-Penrose) - Val": mean_lin_scores["mean_valid_score"],
                     # "LinReg_test": mean_lin_scores["mean_test_score"],
                 }
         

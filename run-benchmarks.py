@@ -19,7 +19,6 @@ def override_dict(target_dict, override_dict):
 
 def run_benchmark_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
-
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
@@ -51,7 +50,10 @@ def run_benchmark_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
 # main
 if __name__ == "__main__":
-    hyperparam_csv = None
-    overrides = {}
+    # hyperparam_csv = "batch/4-31_datascale_experiments.csv"
+    hyperparam_csv = "batch/4-31_datascale_experiments_extraRows.csv"
+    
+    hyperparam_csv = "results/datascale_4-31/expt/256-random_job5972295_experiments.csv"
+    overrides = {} #{"data_subset": 225, "whichfold": -1, }#"data_validation_samples": 10000} # {}
     
     run_benchmark_experiments(cli_args=sys.argv[1:], hyperparam_csv=hyperparam_csv, overrides=overrides) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 
