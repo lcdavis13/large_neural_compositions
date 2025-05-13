@@ -2,11 +2,11 @@
 # See https://slurm.schedmd.com/job_array.html
 
 #SBATCH --job-name=cnode-hpsearch
-#SBATCH --array=0-47  ## Make sure this is enough for all hyperparam/fold combos
+#SBATCH --array=0-120  ## Make sure this is enough for all hyperparam/fold combos
 
 #SBATCH --time=0-16:00:00  ## time format is DD-HH:MM:SS, 3day max on kill-shared
 #SBATCH --partition=kill-shared
-#SBATCH --gpus-per-node=1
+#SBATCH --gpus-per-node=0
 ##SBATCH --gpus-per-node=NV-V100-SXM2:1
 ##SBATCH --gpus-per-node=NV-L40:1
 #SBATCH --mem=16G
@@ -17,7 +17,7 @@
 ##SBATCH --mail-type=FAIL
 ##SBATCH --mail-user=myemail@hawaii.edu
 
-echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID , Fold: $fold_index , running on $HOSTNAME"
+echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID running on $HOSTNAME"
 
 
 # -------------------------
@@ -25,11 +25,13 @@ echo "This is job $SLURM_ARRAY_JOB_ID task $SLURM_ARRAY_TASK_ID , Fold: $fold_in
 # Use spaces for parameters of different jobs, commas for multiple parameter values to run sequentially on the same job
 # -------------------------
 declare -A hyperparams
-hyperparams["csv_file_suffix"]="baseline-ConstSoftmax baseline-SLPMultSoftmax baseline-cNODE0 cNODE1 transformSoftmax cNODE-hourglass canODE-attendFit canODE-FitMat"
+hyperparams["csv_file_suffix"]="baseline-ConstSoftmax baseline-SLPMultSoftmax baseline-cNODE0 baseline-Linear baseline-LinearSoftmax baseline-SLPSoftmax cNODE1 transformSoftmax cNODE-hourglass canODE-attendFit canODE-FitMat"
 hyperparams["mini_epoch_size"]="800"
-hyperparams["data_subset"]="1 10 100 1000 10000 100000"
+hyperparams["data_subset"]="1 3 10 32 100 316 1000 3162 10000 31623 100000"
 hyperparams["plot_mode"]="off"
 hyperparams["data_validation_samples"]="1000"
+
+HPResults_folder="1k"
 
 # -------------------------
 # 3. Calculate Total Combinations
@@ -72,22 +74,21 @@ for param in "${!hyperparams[@]}"; do
 done
 
 # Print debug information
-echo "Fold index: $fold_index"
 for param in "${!hyperparam_values[@]}"; do
     echo "$param: ${hyperparam_values[$param]}"
 done
 
-echo "Launching job array task: Job ID $SLURM_ARRAY_JOB_ID, Task ID $SLURM_ARRAY_TASK_ID, Fold: $fold_index"
+echo "Launching job array task: Job ID $SLURM_ARRAY_JOB_ID, Task ID $SLURM_ARRAY_TASK_ID"
 
 # -------------------------
 # 6. Run the Python Script
 # -------------------------
 source activate lnc
-python run.py \
+python run-datascale.py \
     --batchid $SLURM_ARRAY_JOB_ID \
     --taskid $SLURM_ARRAY_TASK_ID \
     --jobid $SLURM_JOB_ID \
-    --csv_file batch/1kLow/hpresults_${hyperparam_values["csv_file_suffix"]}.csv \
+    --csv_file batch/${HPResults_folder}/HPResults_${hyperparam_values["csv_file_suffix"]}.csv \
     --mini_epoch_size ${hyperparam_values["mini_epoch_size"]} \
     --data_subset ${hyperparam_values["data_subset"]} \
     --plot_mode ${hyperparam_values["plot_mode"]} \
