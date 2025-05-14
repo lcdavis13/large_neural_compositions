@@ -123,16 +123,20 @@ class SingleLayerPerceptron(nn.Module):
 
 
 
-class Linear(nn.Module):
-        # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
+class LinearRegression(nn.Module):
     def __init__(self, N):
         super().__init__()
         self.f1 = nn.Linear(N, N)
 
-        # Identity initialization
+        # zero initialization
         with torch.no_grad():
-            self.f1.weight.copy_(torch.eye(N))
+            self.f1.weight.zero_()
             self.f1.bias.zero_()
+
+        # # Identity initialization
+        # with torch.no_grad():
+        #     self.f1.weight.copy_(torch.eye(N))
+        #     self.f1.bias.zero_()
     
     def forward(self, x):
         f = self.f1(x)
@@ -141,7 +145,6 @@ class Linear(nn.Module):
 
 
 class LinearFilteredNormalized(nn.Module):
-        # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
     def __init__(self, N, identity_gate):
         super().__init__()
         self.f1 = nn.Linear(N, N)
@@ -165,7 +168,6 @@ class LinearFilteredNormalized(nn.Module):
     
 
 class SLPFilteredNormalized(nn.Module):
-        # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
     def __init__(self, N, M, identity_gate):
         super().__init__()
         self.f1 = nn.Linear(N, M)
@@ -192,7 +194,6 @@ class SLPFilteredNormalized(nn.Module):
 
 
 class SLPSumFilteredNormalized(nn.Module):
-    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
     def __init__(self, N, M):
         super().__init__()
         self.f1 = nn.Linear(N, M)
@@ -211,7 +212,6 @@ class SLPSumFilteredNormalized(nn.Module):
 
 
 class SLPMultFilteredNormalized(nn.Module):
-    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
     def __init__(self, N, M, identity_gate):
         super().__init__()
         self.f1 = nn.Linear(N, M)
@@ -239,7 +239,6 @@ class SLPMultFilteredNormalized(nn.Module):
 
 
 class SLPMultSumFilteredNormalized(nn.Module):
-    # This learns a vector for the relative distribution of each species in the dataset. It masks that to match the zero pattern of the input, then normalizes it to sum to 1.
     def __init__(self, N, M):
         super().__init__()
         self.f1 = nn.Linear(N, M)

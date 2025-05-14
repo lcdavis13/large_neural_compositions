@@ -18,17 +18,22 @@ PLOT_TITLE = f'Test Loss vs Training Examples, Hyperparameters fitted to {captio
 X_LABEL = 'Training Examples (log scale)'
 Y_LABEL = 'Test Loss (Bray-Curtis)'
 
+DRAW_TRAIN_SCORES = True
+
+# # Default
 # Y_LIM = (0, 0.3)
 # MODELS_TO_EXCLUDE = [
 #     "baseline-SLPMultSoftmax",
 # ]
 
+# # Zoomed in
 # Y_LIM = (0, 0.06)
 # MODELS_TO_EXCLUDE = [
 #     "identity", 
 #     "baseline-SLPMultSoftmax",
 # ]
 
+# Zoomed out
 Y_LIM = (0, 1.0)
 MODELS_TO_EXCLUDE = [
     "baseline-SLPMultSoftmax",
@@ -43,14 +48,17 @@ MODELS_TO_EXCLUDE = [
 main_columns = {
     'x': 'data_subset',
     'y': 'mean_test_score',
+    'train_y': 'mean_trn_loss',
     'model': 'model_name'
 }
 
 benchmark_columns = {
     'x': 'data_subset',
     'y': 'mean_test_score',
+    'train_y': 'mean_train_score',
     'model': 'model_name'
 }
+
 
 # === Ordered model label definitions ===
 label_dict = OrderedDict([
@@ -75,10 +83,12 @@ def load_and_rename(csv_path, column_map, source_label):
     df = df.rename(columns={
         column_map['x']: 'x',
         column_map['y']: 'y',
+        column_map['train_y']: 'train_y',
         column_map['model']: 'model'
     })
     df['source'] = source_label
-    return df[['x', 'y', 'model', 'source']]
+    return df[['x', 'y', 'train_y', 'model', 'source']]
+
 
 df_main = load_and_rename(CSV_FILE_PATH, main_columns, 'Main')
 df_benchmark = load_and_rename(BENCHMARK_CSV_PATH, benchmark_columns, 'Benchmark')
@@ -135,43 +145,29 @@ last_points = []
 for (model_name, source), group in df_combined.groupby(['model', 'source']):
     label = label_dict.get(model_name, model_name)
     color = model_colors.get(model_name, 'gray')
-    label_added = False
 
-    # Align y-values to expected_x
-    model_data = {
-        row['x']: (row['y'] if row['y'] >= 0 else None)
-        for _, row in group.iterrows()
-    }
-    y_values = [model_data.get(x, None) for x in expected_x]
+    group_sorted = group.sort_values('x')
 
-    prev_x, prev_y = None, None
-    for i, (x, y) in enumerate(zip(expected_x, y_values)):
-        if y is not None:
-            if prev_x is not None and prev_y is not None:
-                plt.plot([prev_x, x], [prev_y, y],
-                         color=color,
-                         linestyle='solid',
-                         marker='o',
-                         label=label if not label_added else None)
-                label_added = True
-            prev_x, prev_y = x, y
-        else:
-            j = i + 1
-            while j < len(expected_x) and y_values[j] is None:
-                j += 1
-            if j < len(expected_x):
-                x_after = expected_x[j]
-                y_after = y_values[j]
-                if prev_x is not None and prev_y is not None:
-                    plt.plot([prev_x, x_after], [prev_y, y_after],
-                             color=color,
-                             linestyle='dashed')
-                prev_x, prev_y = x_after, y_after
-            else:
-                prev_x, prev_y = None, None
+    # Plot test scores (solid line)
+    plt.plot(group_sorted['x'], group_sorted['y'],
+             color=color,
+             linestyle='solid',
+             marker='o',
+             label=label)
 
-    if prev_x is not None and prev_y is not None:
-        last_points.append((prev_x, prev_y, label, color))
+    # Plot train scores (dashed line), if enabled
+    if DRAW_TRAIN_SCORES:
+        plt.plot(group_sorted['x'], group_sorted['train_y'],
+                 color=color,
+                 linestyle='dashed',
+                 marker='x',
+                 label=None)  # Prevents cluttering legend
+
+    # Store last point of test score for annotation
+    last_row = group_sorted.dropna(subset=['y']).iloc[-1]
+    last_points.append((last_row['x'], last_row['y'], label, color))
+
+
 
 
 def reset_text_positions():

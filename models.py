@@ -12,7 +12,7 @@ def get_model_constructors():
         # most useful models
         'baseline-ConstSoftmax': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
         'baseline-SLPSoftmax': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
-        'baseline-Linear': lambda args: models_baseline.Linear(args.data_dim),
+        'baseline-Linear': lambda args: models_baseline.LinearRegression(args.data_dim),
         'baseline-LinearSoftmax': lambda args: models_baseline.LinearFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
         'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, bias=args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
         'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, bias=True, identity_gate=args.identity_gate),
