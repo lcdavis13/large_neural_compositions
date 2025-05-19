@@ -12,13 +12,19 @@ import matplotlib.colors as mcolors
 filename = "expt"
 caption_name = "1k"
 CSV_FILE_PATH = f"results/datascale_5-13_1k/{filename}.csv"
+# caption_name = "100k"
+# CSV_FILE_PATH = f"results/datascale_5-14_100k/{filename}.csv"
 BENCHMARK_CSV_PATH = f"results/datascale_5-13_1k/benchmarks.csv"
 
-PLOT_TITLE = f'Test Loss vs Training Examples, Hyperparameters fitted to {caption_name} examples'
+PLOT_TITLE = f'Test Error vs Training Examples, Hyperparameters fitted to {caption_name} examples'
 X_LABEL = 'Training Examples (log scale)'
-Y_LABEL = 'Test Loss (Bray-Curtis)'
+Y_LABEL = 'Test Error (Bray-Curtis, log scale)'
 
-DRAW_TRAIN_SCORES = True
+# DRAW_TRAIN_SCORES = True
+DRAW_TRAIN_SCORES = False
+
+# DRAW_LEGEND = True
+DRAW_LEGEND = False
 
 # # Default
 # Y_LIM = (0, 0.3)
@@ -26,22 +32,30 @@ DRAW_TRAIN_SCORES = True
 #     "baseline-SLPMultSoftmax",
 # ]
 
-# # Zoomed in
+# Zoomed in
 # Y_LIM = (0, 0.06)
 # MODELS_TO_EXCLUDE = [
 #     "identity", 
 #     "baseline-SLPMultSoftmax",
 # ]
 
-# Zoomed out
-Y_LIM = (0, 1.0)
+# # Zoomed out
+# Y_LIM = (0, 1.0)
+# MODELS_TO_EXCLUDE = [
+#     "baseline-SLPMultSoftmax",
+#     "baseline-SLPSoftmax",
+#     "baseline-cNODE0",
+#     "cNODE-hourglass",
+#     "canODE-attendFit",
+#     "canODE-FitMat",
+# ]
+
+# new logscale version
+Y_LIM = (None, 1.0)
+X_LIM = (10, None)
 MODELS_TO_EXCLUDE = [
     "baseline-SLPMultSoftmax",
-    "baseline-SLPSoftmax",
     "baseline-cNODE0",
-    "cNODE-hourglass",
-    "canODE-attendFit",
-    "canODE-FitMat",
 ]
 
 # === Column Mappings (source-specific to standard schema) ===
@@ -206,19 +220,22 @@ def run_adjust_text():
 
 # Final plot formatting
 plt.xscale('log')
+plt.yscale('log')
 plt.xlabel(X_LABEL)
 plt.ylabel(Y_LABEL)
 plt.title(PLOT_TITLE)
 plt.ylim(*Y_LIM)
+plt.xlim(*X_LIM)
 plt.grid(True)
 
 # custom legend
-models_plotted = df_combined['model'].unique()
-custom_legend = [
-    Line2D([0], [0], color=model_colors[key], marker='o', linestyle='-', label=label_dict[key])
-    for key in label_dict if key in models_plotted
-]
-plt.legend(handles=custom_legend, title='Model')
+if DRAW_LEGEND:
+    models_plotted = df_combined['model'].unique()
+    custom_legend = [
+        Line2D([0], [0], color=model_colors[key], marker='o', linestyle='-', label=label_dict[key])
+        for key in label_dict if key in models_plotted
+    ]
+    plt.legend(handles=custom_legend, title='Model')
 
 
 # Collect annotation objects
