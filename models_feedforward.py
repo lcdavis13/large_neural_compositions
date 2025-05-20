@@ -23,62 +23,96 @@ class UniformFFN(nn.Module):
 
 
 def compute_linear_tapered_widths(N, P, total_layers):
-    k = (total_layers - 1) // 2
+    if total_layers < 1:
+        raise ValueError("total_layers must be >= 1")
 
-    def total_params(w):
-        delta = (w - N) / k
-        widths = [N + i * delta for i in range(k + 1)]
-        total = sum(int(widths[i]) * int(widths[i + 1]) for i in range(k))
-        total *= 2
-        if total_layers % 2 == 0:
-            total += int(widths[-1]) ** 2
-        return total
+    if total_layers % 2 == 1:
+        k = (total_layers + 1) // 2 + 1
 
-    low, high = N, N * 10
-    for _ in range(100):
-        mid = (low + high) / 2
-        if total_params(mid) < P:
-            low = mid
-        else:
-            high = mid
+        def total_params(delta):
+            widths = [N + i * delta for i in range(k)]
+            return 2 * sum(widths[i] * widths[i+1] for i in range(k - 1))
 
-    delta = (high - N) / k
-    first_half = [int(round(N + i * delta)) for i in range(k + 1)]
-    second_half = first_half[::-1] if total_layers % 2 == 0 else first_half[-2::-1]
-    return first_half + second_half
+        low, high = 0.0, N * 10.0
+        for _ in range(100):
+            mid = (low + high) / 2
+            if total_params(mid) < P:
+                low = mid
+            else:
+                high = mid
+
+        delta = (low + high) / 2
+        first_half = [round(N + i * delta) for i in range(k)]
+        second_half = first_half[-2::-1]
+        return first_half + second_half
+
+    else:
+        k = total_layers // 2
+
+        def total_params(delta):
+            widths = [N + i * delta for i in range(k + 1)]
+            return 2 * sum(widths[i] * widths[i+1] for i in range(k)) + widths[-1] ** 2
+
+        low, high = 0.0, N * 10.0
+        for _ in range(100):
+            mid = (low + high) / 2
+            if total_params(mid) < P:
+                low = mid
+            else:
+                high = mid
+
+        delta = (low + high) / 2
+        first_half = [round(N + i * delta) for i in range(k + 1)]
+        second_half = first_half[::-1]
+        return first_half + second_half
+
 
 
 def compute_exponential_tapered_widths(N, P, total_layers):
-    k = (total_layers - 1) // 2
+    if total_layers < 1:
+        raise ValueError("total_layers must be >= 1")
 
-    def total_params(r):
-        widths = [N * (r ** i) for i in range(k + 1)]
-        total = sum(int(widths[i]) * int(widths[i + 1]) for i in range(k))
-        total *= 2
-        if total_layers % 2 == 0:
-            total += int(widths[-1]) ** 2
-        return total
+    def total_params(r, k, even):
+        if even:
+            series_sum = sum(N**2 * r**(2*i + 1) for i in range(k))
+            return 2 * series_sum + (N * r**k) ** 2
+        else:
+            series_sum = sum(N**2 * r**(2*i + 1) for i in range(k - 1))
+            return 2 * series_sum
 
-    low, high = 1.0, 10.0
+    if total_layers % 2 == 1:
+        k = (total_layers + 1) // 2 + 1
+        even = False
+    else:
+        k = total_layers // 2
+        even = True
+
+    low, high = 1.01, 10.0
     for _ in range(100):
         mid = (low + high) / 2
-        if total_params(mid) < P:
+        current = total_params(mid, k, even)
+        if current < P:
             low = mid
         else:
             high = mid
 
-    r = high
-    first_half = [int(round(N * (r ** i))) for i in range(k + 1)]
-    second_half = first_half[::-1] if total_layers % 2 == 0 else first_half[-2::-1]
+    r = (low + high) / 2
+    if even:
+        first_half = [round(N * r**i) for i in range(k + 1)]
+        second_half = first_half[::-1]
+    else:
+        first_half = [round(N * r**i) for i in range(k)]
+        second_half = first_half[-2::-1]
+
     return first_half + second_half
+
 
 
 class LinearTaperedFFN(nn.Module):
     def __init__(self, in_out_dim, num_params, num_hidden_layers, dropout=0.0):
         super().__init__()
         N = in_out_dim
-        widths = compute_linear_tapered_widths(N, num_params, num_hidden_layers + 2)[1:-1]
-        widths = [N] + widths + [N]
+        widths = compute_linear_tapered_widths(N, num_params, num_hidden_layers)
 
         layers = []
         for i in range(len(widths) - 1):
@@ -93,8 +127,7 @@ class ExponentialTaperedFFN(nn.Module):
     def __init__(self, in_out_dim, num_params, num_hidden_layers, dropout=0.0):
         super().__init__()
         N = in_out_dim
-        widths = compute_exponential_tapered_widths(N, num_params, num_hidden_layers + 2)[1:-1]
-        widths = [N] + widths + [N]
+        widths = compute_exponential_tapered_widths(N, num_params, num_hidden_layers)
 
         layers = []
         for i in range(len(widths) - 1):
@@ -113,9 +146,9 @@ if __name__ == "__main__":
         (100, 100000, 2),
         (128, 200000, 3),
         (64, 50000, 4),
-        (256, 300000, 5),
+        (128, 300000, 5),
         (64, 50000, 6),
-        (256, 300000, 7),
+        (128, 300000, 7),
     ]
 
     def extract_layer_widths(model):
