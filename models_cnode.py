@@ -43,7 +43,7 @@ class cNODE2(nn.Module):
 
 
 class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
-    def __init__(self, N, bias, init_zero=True, identity_gate=False):
+    def __init__(self, N, bias, init_zero, identity_gate):
         super().__init__()
         self.fcc1 = nn.Linear(N, N, bias=bias)
         
@@ -78,7 +78,7 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
 
 
 class cNODE1(nn.Module):
-    def __init__(self, N, bias, init_zero=True, identity_gate=False):
+    def __init__(self, N, bias, init_zero, identity_gate):
         self.USES_ODEINT = True
         
         super().__init__()

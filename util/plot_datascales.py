@@ -1,20 +1,19 @@
 from matplotlib.lines import Line2D
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+import seaborn as sns
 from adjustText import adjust_text
 import threading
 from collections import OrderedDict
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
+from collections import defaultdict
 
 # === Configuration ===
 filename = "expt"
 caption_name = "1k"
-CSV_FILE_PATH = f"results/datascale_5-13_1k/{filename}.csv"
+CSV_FILE_PATH = f"results/datascale_5-19_1k/{filename}.csv"
 # caption_name = "100k"
 # CSV_FILE_PATH = f"results/datascale_5-14_100k/{filename}.csv"
-BENCHMARK_CSV_PATH = f"results/datascale_5-13_1k/benchmarks.csv"
+BENCHMARK_CSV_PATH = f"results/datascale_5-19_1k/benchmarks.csv"
 
 PLOT_TITLE = f'Test Error vs Training Examples, Hyperparameters fitted to {caption_name} examples'
 X_LABEL = 'Training Examples (log scale)'
@@ -73,7 +72,6 @@ benchmark_columns = {
     'model': 'model_name'
 }
 
-
 # === Ordered model label definitions ===
 label_dict = OrderedDict([
     ("identity", "Identity"),
@@ -103,7 +101,6 @@ def load_and_rename(csv_path, column_map, source_label):
     df['source'] = source_label
     return df[['x', 'y', 'train_y', 'model', 'source']]
 
-
 df_main = load_and_rename(CSV_FILE_PATH, main_columns, 'Main')
 df_benchmark = load_and_rename(BENCHMARK_CSV_PATH, benchmark_columns, 'Benchmark')
 
@@ -119,69 +116,58 @@ df_combined = df_combined[df_combined['model'].isin(label_dict.keys())]
 # Full sorted set of expected x-values (assumed same in both)
 expected_x = sorted(df_combined['x'].unique())
 
-# Custom extended color list
-_color_list_standard = [
-    # Tableau colors (default matplotlib "tab:" palette)
-    'tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple',
-    'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan',
-
-    # Additional XKCD colors
-    'xkcd:cerulean', 'xkcd:bright orange', 'xkcd:grass green',
-    'xkcd:brick red', 'xkcd:deep violet', 'xkcd:chocolate brown',
-    'xkcd:magenta', 'xkcd:slate grey', 'xkcd:olive green', 'xkcd:cyan',
-
-    # Pastels
-    'xkcd:pastel blue', 'xkcd:pastel orange', 'xkcd:pastel green',
-    'xkcd:pastel red', 'xkcd:pastel purple',
-    'xkcd:pastel pink', 'xkcd:light grey', 'xkcd:pastel yellow',
-
-    # Bonus vivid colors
-    'xkcd:azure', 'xkcd:bright red', 'xkcd:chartreuse', 'xkcd:bright purple',
-    'xkcd:teal', 'xkcd:coral', 'xkcd:royal blue', 'xkcd:neon green',
-]
-
-# Assign colors to models based on their order in label_dict
-if len(label_dict) > len(_color_list_standard):
-    raise ValueError("Not enough colors in _color_list_standard for the number of models in label_dict.")
-
+# === Plot ===
+# Fixed color mapping to ensure consistent colors across filtered runs
+base_colors = sns.color_palette('tab20', n_colors=len(label_dict))
 model_colors = {
-    model_name: _color_list_standard[i]
+    model_name: base_colors[i]
     for i, model_name in enumerate(label_dict.keys())
 }
 
+# === Reshape for single lineplot ===
+# Melt the 'y' and 'train_y' into one column, label them as 'Test' and 'Train'
+df_melted = df_combined.melt(
+    id_vars=['x', 'model', 'source'],
+    value_vars=['y', 'train_y'],
+    var_name='score_type',
+    value_name='score'
+)
+
+# Map 'y' -> 'Test', 'train_y' -> 'Train'
+df_melted['score_type'] = df_melted['score_type'].map({'y': 'Test', 'train_y': 'Train'})
+
+# Remove train scores if not desired
+if not DRAW_TRAIN_SCORES:
+    df_melted = df_melted[df_melted['score_type'] == 'Test']
 
 # === Plot ===
 plt.figure(figsize=(10, 6))
+sns.set(style="whitegrid")
 
-# Store last points for annotation
+# Unified plot with different styles for train/test
+sns.lineplot(
+    data=df_melted,
+    x='x',
+    y='score',
+    hue='model',
+    style='score_type',
+    dashes=True,
+    markers=True,
+    palette=model_colors,
+    legend=False  # Custom legend below
+)
+
+
+
+# Store last points for annotation (only for Test)
 last_points = []
-
-for (model_name, source), group in df_combined.groupby(['model', 'source']):
+for model_name, group in df_melted[df_melted['score_type'] == 'Test'].groupby('model'):
     label = label_dict.get(model_name, model_name)
     color = model_colors.get(model_name, 'gray')
 
     group_sorted = group.sort_values('x')
-
-    # Plot test scores (solid line)
-    plt.plot(group_sorted['x'], group_sorted['y'],
-             color=color,
-             linestyle='solid',
-             marker='o',
-             label=label)
-
-    # Plot train scores (dashed line), if enabled
-    if DRAW_TRAIN_SCORES:
-        plt.plot(group_sorted['x'], group_sorted['train_y'],
-                 color=color,
-                 linestyle='dashed',
-                 marker='x',
-                 label=None)  # Prevents cluttering legend
-
-    # Store last point of test score for annotation
-    last_row = group_sorted.dropna(subset=['y']).iloc[-1]
-    last_points.append((last_row['x'], last_row['y'], label, color))
-
-
+    last_row = group_sorted.dropna(subset=['score']).iloc[-1]
+    last_points.append((last_row['x'], last_row['score'], label, color))
 
 
 def reset_text_positions():
@@ -189,7 +175,6 @@ def reset_text_positions():
         text.set_position(pos)
         text.set_ha(ha)
         text.set_va(va)
-
 
 resize_timer = None
 
@@ -237,13 +222,12 @@ if DRAW_LEGEND:
     ]
     plt.legend(handles=custom_legend, title='Model')
 
-
 # Collect annotation objects
 texts = []
 for x, y, label, color in last_points:
     text = plt.text(x, y, label,
                     color=color,
-                    fontsize=10,
+                    fontsize=12,
                     va='center',
                     ha='left')
     texts.append(text)
@@ -265,3 +249,48 @@ plt.text(256, plt.ylim()[1]*0.95, 'Interpolation Threshold', rotation=90, va='to
 
 plt.tight_layout()
 plt.show()
+
+
+
+def report_sample_counts(df):
+    """
+    Analyze and print the number of samples used per (model, x).
+    Reports expected counts per model and consolidates anomalies.
+    """
+    # Count samples per (model, x)
+    sample_counts = df.groupby(['model', 'x']).size().reset_index(name='count')
+
+    # Determine expected sample count per model (max count)
+    expected_counts = sample_counts.groupby('model')['count'].max().to_dict()
+
+    # Group models by expected count
+    models_by_expected = defaultdict(list)
+    for model, expected in expected_counts.items():
+        models_by_expected[expected].append(model)
+
+    # Consolidate anomalies: group by (model, count) → list of x
+    anomalies = defaultdict(lambda: defaultdict(list))  # model -> count -> [x]
+    for _, row in sample_counts.iterrows():
+        model, x, count = row['model'], row['x'], row['count']
+        expected = expected_counts[model]
+        if count != expected:
+            anomalies[model][count].append(x)
+
+    # === Print Report ===
+    print("=== Sample Count Report ===")
+    for expected_count in sorted(models_by_expected.keys(), reverse=True):
+        model_list = sorted(models_by_expected[expected_count])
+        print(f"{expected_count} samples: {', '.join(model_list)}")
+
+    if any(anomalies.values()):
+        print("\nAnomalies:")
+        for model in sorted(anomalies.keys()):
+            for count in sorted(anomalies[model].keys(), reverse=True):
+                x_vals = sorted(anomalies[model][count])
+                x_str = ",".join(map(str, x_vals))
+                print(f"  {count} samples: {model} x={x_str}")
+    else:
+        print("\nNo anomalies found.")
+
+# === Run the report ===
+report_sample_counts(df_combined)

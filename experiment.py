@@ -763,8 +763,8 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
         # Model dictionary. Hyperparam override(s)
         
-        seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
-        print(f"Seed: {seed}")
+        # seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
+        # print(f"Seed: {seed}")
         
         # test construction and print parameter count
         print(f"\nModel construction test for: {hp.model_config}")
