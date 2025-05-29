@@ -3,8 +3,9 @@ import glob
 import pandas as pd
 
 # === CONFIGURATION ===
-input_folder = "./results/datascale_5-13_1k/expt/"  # Update this to your target folder
-output_file = "./results/datascale_5-13_1k/expt.csv"  # Output path for the merged CSV
+folder = "datascale_256-123"
+input_folder = f"./results/{folder}/expt/"  # Update this to your target folder
+output_file = f"./results/{folder}/expt.csv"  # Output path for the merged CSV
 
 def concatenate_csvs(input_folder, output_file):
     csv_files = glob.glob(os.path.join(input_folder, "*.csv"))
