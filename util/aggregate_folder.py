@@ -3,7 +3,7 @@ import glob
 import pandas as pd
 
 # === CONFIGURATION ===
-folder = "datascale_256-123"
+folder = "datascale_6-4_256@26_transferredFromFullRank"
 input_folder = f"./results/{folder}/expt/"  # Update this to your target folder
 output_file = f"./results/{folder}/expt.csv"  # Output path for the merged CSV
 

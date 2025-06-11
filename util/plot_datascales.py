@@ -10,13 +10,22 @@ from collections import defaultdict
 # === Configuration ===
 filename = "expt"
 caption_name = "1k"
+# CSV_FILE_PATH = f"results/datascale_5-13_1k/{filename}.csv"
 # CSV_FILE_PATH = f"results/datascale_5-19_1k/{filename}.csv"
 # CSV_FILE_PATH = f"results/datascale_5-25_256-random-2/{filename}.csv"
-CSV_FILE_PATH = f"results/datascale_256-123/{filename}.csv"\
-# caption_name = "100k"
-# CSV_FILE_PATH = f"results/datascale_5-14_100k/{filename}.csv"
+# CSV_FILE_PATH = f"results/datascale_256-123/{filename}.csv"
+# CSV_FILE_PATH = f"results/datascale_6-4_256@26/{filename}.csv"
+# CSV_FILE_PATH = f"results/datascale_6-4_256_vs_256@26/{filename}.csv"
+CSV_FILE_PATH = f"results/datascale_6-4_256@26_transferredFromFullRank/{filename}.csv"
+# CSV_FILE_PATH = f"results/datascale_256-123_withoutExtrasFrom1/{filename}.csv"
+
+# BENCHMARK_CSV_PATH = f"results/datascale_5-13_1k/benchmarks.csv"
 # BENCHMARK_CSV_PATH = f"results/datascale_5-19_1k/benchmarks.csv"
-BENCHMARK_CSV_PATH = f"results/datascale_256-123/benchmarks.csv"
+# BENCHMARK_CSV_PATH = f"results/datascale_256-123/benchmarks.csv"
+# BENCHMARK_CSV_PATH = f"results/datascale_6-4_256@26/benchmarks.csv"
+# BENCHMARK_CSV_PATH = f"results/datascale_6-4_256_vs_256@26/benchmarks.csv"
+BENCHMARK_CSV_PATH = f"results/datascale_6-4_256@26_transferredFromFullRank/benchmarks.csv"
+# BENCHMARK_CSV_PATH = f"results/datascale_256-123_withoutExtrasFrom1/benchmarks.csv"
 
 PLOT_TITLE = f'Test Error vs Training Examples, Hyperparameters fitted to {caption_name} examples'
 X_LABEL = 'Training Examples (log scale)'
@@ -27,10 +36,14 @@ DRAW_TRAIN_SCORES = False
 
 PLOT_HUE_COLUMN = 'model'
 PLOT_STYLE_COLUMN = 'dataset'
-PLOT_SIZE_COLUMN = 'score_type'
+# PLOT_STYLE_COLUMN = 'score_type'
+# PLOT_STYLE_COLUMN = None
+# PLOT_SIZE_COLUMN = 'score_type'
+PLOT_SIZE_COLUMN = None
 
 DRAW_LEGEND_HUE = False
 DRAW_LEGEND_STYLE = True
+# DRAW_LEGEND_STYLE = False
 DRAW_LEGEND_SIZE = False
 DRAW_LEGEND = DRAW_LEGEND_HUE or DRAW_LEGEND_STYLE or DRAW_LEGEND_SIZE
 
@@ -64,6 +77,8 @@ X_LIM = (10, None)
 MODELS_TO_EXCLUDE = [
     "baseline-SLPMultSoftmax",
     "baseline-cNODE0",
+    "baseline-SLPSoftmax",
+    "cNODE-hourglass",
 ]
 
 HLINE_MODELS = {} #{"identity"} # currently not using this feature because I had trouble getting it to match the line styles of regular lines correctly

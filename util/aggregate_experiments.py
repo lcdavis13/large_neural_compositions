@@ -23,8 +23,9 @@ COLUMN_MAP = {
 # === Columns that must be > 0 and finite ===
 REQUIRED_POSITIVE_COLUMNS = [VAL_LOSS_COL, TRAIN_LOSS_COL]
 
-rootfolder = "./results/hpsearch_4-22_1k"
+# rootfolder = "./results/hpsearch_4-22_1k"
 # rootfolder = "./results/hpsearch_4-22_100k"
+rootfolder = "./results/hpsearch_6-2_256@26_1k"
 
 folder = f"{rootfolder}/expt/"
 path_pattern = f"{folder}*_job*_experiments.csv"
