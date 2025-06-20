@@ -84,7 +84,7 @@ class Replicator_CustomFitness(nn.Module):
     """
     Replicator dynamics with a custom fitness function.
     """
-    def __init__(self, N, fitness_fn):
+    def __init__(self, fitness_fn):
         super().__init__()
 
         self.USES_ODEINT = True
@@ -102,7 +102,7 @@ class Replicator_CustomFitness_IdEmbedd_XEncode(nn.Module):
     "Fitness" function is expected to return the same shape as input, and will be linearly decoded to produce fitnesses.
     An optional enrichment function can be applied to the embeddings before passing them to the fitness function (e.g., a transformer to encode possible OTU interactions before abundance encodings are added).
     """
-    def __init__(self, N, fitness_fn, data_dim, embed_dim, enrich_fn=None):
+    def __init__(self, fitness_fn, data_dim, embed_dim, enrich_fn=None):
         super().__init__()
 
         self.USES_ODEINT = True
@@ -131,7 +131,7 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
     Unlike other model wrappers, the fitness function is expected to return the final fitnesses directly to allow custom architectures to produce the fitness.
     An optional enrichment function can be applied to the embeddings before passing them to the fitness function (e.g., a transformer to encode possible OTU interactions before abundance encodings are added).
     """
-    def __init__(self, N, fitness_fn, data_dim, embed_dim, enrich_fn=None):
+    def __init__(self, fitness_fn, data_dim, embed_dim, enrich_fn=None):
         super().__init__()
 
         self.USES_ODEINT = True

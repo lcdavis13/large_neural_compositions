@@ -44,7 +44,7 @@ class MultiheadWeightedAttention(nn.Module):
 
         self.q_proj = nn.Linear(embed_dim, dim_qk)
         self.k_proj = nn.Linear(embed_dim, dim_qk)
-        self.v_proj = nn.Linear(embed_dim, dim_v)
+        self.v_proj = nn.Linear(embed_dim, dim_v) 
 
         self.attention = WeightedAttention(attn_dropout)
 
@@ -54,11 +54,14 @@ class MultiheadWeightedAttention(nn.Module):
         self.gelu = nn.GELU()
         self.fcn2 = nn.Linear(mlp_dim_factor * dim_v, 1)  
         
-        # Output
-        self.masked_softmax = MaskedSoftmax()
-        self.blendskip = skips.BlendSkip()
+        # # Output
+        # self.masked_softmax = MaskedSoftmax()
+        # if learnable_skip:
+        #     self.blendskip = skips.BlendSkip()
+        # else:
+        #     self.blendskip = skips.StaticBlendSkip()
 
-    def forward(self, query, key, value, x):
+    def forward(self, x, ids):
         B, L, _ = query.size()
 
         Q = self.q_proj(query).view(B, L, self.num_heads, self.head_qk_dim).transpose(1, 2)
@@ -77,9 +80,10 @@ class MultiheadWeightedAttention(nn.Module):
         y = self.gelu(y)
         y = self.fcn2(y)
 
-        # Softmax and skip
-        y = self.masked_softmax(y, x)
-        y = self.blendskip(y, x)
+        # Not including for now. Skip followed by softmax wouldn't work well because the skip is already on simplex. Softmax followed by skip would have a hard time reaching target values without extensive incremental iteration. Skip without softmax would be crippling itself because it would have no way to stay on the simplex without knowing the current abundance. Normalization by doing x+f(x)*x could work, but then we're already closing in on incorporating the Replicator Equation into the architecture. Although one benefit of that is we could allow it to choose its own timescale for ODE integration...
+        # # Softmax and skip
+        # y = self.masked_softmax(y, x)
+        # y = self.blendskip(y, x)
 
         return y
 
@@ -87,3 +91,4 @@ class MultiheadWeightedAttention(nn.Module):
 # Note: pytorch and original AIAYN paper do dropout after the softmax inside the attention module, before multiplying against V. This makes the weights no longer sum to 1 interestingly. 
 # Important note: Dropout before softmax would not set the weights to zero, it would set them to some "average" value, but they wanted to entirely drop certain attention weights. They would still alter the softmax output though.
 # Getting dropped weights and a valid softmax output would require using my masked softmax using Dropout(Ones()) as the mask to achieve that. It's unclear what the computational hit of my masked softmax is, so I'm a bit hesitant to abandon nn.MultiheadAttention for a custom version with masked dropout in my other transformer blocks. Especially because I would sacrifice their efficient C(?) implementation. But it's an area for future exploration.
+

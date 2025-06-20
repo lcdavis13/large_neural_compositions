@@ -22,6 +22,13 @@ class StaticSkip(SkipGateBase):
 
     def forward(self, h, x0):
         return h + x0
+    
+# class StaticBlendSkip(SkipGateBase):
+#     def __init__(self):
+#         super().__init__()
+
+#     def forward(self, h, x0):
+#         return (h + x0)*0.5
 
 class GateSkip(SkipGateBase):
     def __init__(self):
