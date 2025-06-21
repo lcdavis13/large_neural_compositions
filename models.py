@@ -1,7 +1,7 @@
-
-import models_baseline
-import models_cnode
-import models_embedded
+import models_cNODE1
+import models_core
+import models_replicator
+import models_simplex
 
 
 def get_model_constructors():
@@ -9,75 +9,92 @@ def get_model_constructors():
     # Specify model constructors for experiment
     # Note that each must be a constructor function that takes a dicy/dictionary args. Lamda is recommended.
     models = {
-        # most useful models
-        'baseline-ConstSoftmax': lambda args: models_baseline.ConstOutputFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
-        'baseline-SLPSoftmax': lambda args: models_baseline.SLPFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
-        'baseline-Linear': lambda args: models_baseline.LinearRegression(args.data_dim),
-        'baseline-LinearSoftmax': lambda args: models_baseline.LinearFilteredNormalized(args.data_dim, identity_gate=args.identity_gate),
-        'cNODE1': lambda args: models_cnode.cNODE1(args.data_dim, bias=args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
-        'cNODE2': lambda args: models_cnode.cNODE2(args.data_dim, bias=True, identity_gate=args.identity_gate),
-        'transformSoftmax': lambda args: models_embedded.TransformerNormalized(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout, 
-            identity_gate=args.identity_gate
-        ),
-        # 'transformRZSoftmax': lambda args: models_embedded.RZTransformerNormalized(
-        #     data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-        #     ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
-        # ),
-        'canODE-FitMat': lambda args: models_embedded.canODE_GenerateFitMat(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, 
-            bias=args.cnode_bias, identity_gate=args.identity_gate
-        ),
-        'canODE-attendFit': lambda args: models_embedded.canODE_ReplicatorAttendFit(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, fitness_qk_dim=args.attend_dim, dropout=args.dropout, 
-            identity_gate=args.identity_gate
-        ),
-        'cNODE-hourglass': lambda args: models_cnode.cNODE_HourglassFitness(
-            data_dim=args.data_dim, hidden_dim=args.hidden_dim, depth=args.depth, bias=args.cnode_bias, identity_gate=args.identity_gate
-        ),
-        'baseline-cNODE0': lambda args: models_baseline.cNODE0(args.data_dim, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
+        'cNODE1': lambda args: models_cNODE1.cNODE1(data_dim=args.data_dim),
         
-        
-        # additional baseline models
-        'baseline-1const': lambda args: models_baseline.SingleConst(),
-        'baseline-1constSoftmax': lambda args: models_baseline.SingleConstFilteredNormalized(),
-        'baseline-const': lambda args: models_baseline.ConstOutput(args.data_dim),
-        'baseline-SLPSumSoftmax': lambda args: models_baseline.SLPSumFilteredNormalized(args.data_dim, args.hidden_dim),
-        'baseline-SLPMultSoftmax': lambda args: models_baseline.SLPMultFilteredNormalized(args.data_dim, args.hidden_dim, identity_gate=args.identity_gate),
-        'baseline-SLPMultSumSoftmax': lambda args: models_baseline.SLPMultSumFilteredNormalized(args.data_dim, args.hidden_dim),
-        'baseline-cNODE0-1step': lambda args: models_baseline.cNODE0_singlestep(args.data_dim, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
-        'baseline-cNODE1-1step': lambda args: models_baseline.cNODE1_singlestep(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),
-        'baseline-cAttend-1step': lambda args: models_embedded.cAttend_simple(args.data_dim, args.attend_dim, args.attend_dim),
-        'baseline-SLP-ODE': lambda args: models_baseline.SLPODE(args.data_dim, args.hidden_dim),
-        'baseline-cNODE2-width1': lambda args: models_cnode.cNODE_HourglassFitness(
-            data_dim=args.data_dim, hidden_dim=1, depth=2, bias=args.cnode_bias
+        # identity
+        # Don't include vanilla "identity" since it doesn't need training. Tested separately in the benchmarks.
+        # The embedded versions of both wrappers have some modeling power on their own, so wrapping the identity gives us a benchmakr of that. 
+        # We don't need to test the non-embedded wrappers with identity, since both are equivalent to the pure identity.
+        'EmbeddedSimplexIdentity': lambda args: models_simplex.EmbeddedSimplexIdentity(args.data_dim, args.embed_dim),
+        'EmbeddedReplicatorIdentity': lambda args: models_replicator.EmbeddedReplicatorIdentity(args.data_dim, args.embed_dim),
+
+        # learned constant vector
+        'Constant': lambda args: models_core.LearnedConstantVector(data_dim=args.data_dim),
+        'SimplexConstant': lambda args: models_simplex.SimplexConstant(data_dim=args.data_dim),
+        'ReplicatorConstant': lambda args: models_replicator.ReplicatorConstant(data_dim=args.data_dim),
+
+        # linear
+        'Linear': lambda args: models_core.Linear(data_dim=args.data_dim, out_dim=args.data_dim),
+        'SimplexLinear': lambda args: models_simplex.SimplexLinear(data_dim=args.data_dim),
+        'ReplicatorLinear': lambda args: models_replicator.ReplicatorLinear(data_dim=args.data_dim),
+
+        # shallow MLPs
+        'ShallowMLP': lambda args: models_core.ShallowMLP(data_dim=args.data_dim, hidden_dim=args.hidden_dim),
+        'SimplexShallowMLP': lambda args: models_simplex.SimplexShallowMLP(data_dim=args.data_dim, hidden_dim=args.hidden_dim),
+        'ReplicatorShallowMLP': lambda args: models_replicator.ReplicatorShallowMLP(data_dim=args.data_dim, hidden_dim=args.hidden_dim),
+
+        # Residual MLPs
+        'ResidualMLP': lambda args: models_core.ResidualMLP(
+            dim=args.data_dim, 
+            depth=args.depth, 
+            hidden_dim=args.hidden_dim, 
+            dropout=args.dropout, 
+            learnable_skip=args.learnable_skip
         ),
-        'baseline-cNODE2-width2': lambda args: models_cnode.cNODE_HourglassFitness(
-            data_dim=args.data_dim, hidden_dim=2, depth=2, bias=args.cnode_bias
+        'SimplexResidualMLP': lambda args: models_simplex.SimplexResidualMLP(
+            data_dim=args.data_dim, 
+            depth=args.depth, 
+            hidden_dim=args.hidden_dim, 
+            dropout=args.dropout, 
+            learnable_skip=args.learnable_skip
         ),
-        
-        
-        # additional attention-based models
-        'transformer': lambda args: models_embedded.JustATransformer(
-            data_dim=args.data_dim, id_embed_dim=args.attend_dim, num_heads=args.num_heads, depth=args.depth,
-            ffn_dim_multiplier=args.ffn_dim_multiplier, dropout=args.dropout
+        'ReplicatorResidualMLP': lambda args: models_replicator.ReplicatorResidualMLP(
+            data_dim=args.data_dim, 
+            depth=args.depth, 
+            hidden_dim=args.hidden_dim, 
+            dropout=args.dropout, 
+            learnable_skip=args.learnable_skip
         ),
-        'canODE-transformer': lambda args: models_embedded.canODE_transformer(args.data_dim, args.attend_dim, args.num_heads, args.depth, args.ffn_dim_multiplier),
-        'canODE-noValue': lambda args: models_embedded.canODE_attentionNoValue(args.data_dim, args.attend_dim, args.attend_dim),
-        'canODE-noValue-static': lambda args: models_embedded.canODE_attentionNoValue_static(args.data_dim, args.attend_dim, args.attend_dim),
-        'canODE-attention': lambda args: models_embedded.canODE_attention(args.data_dim, args.attend_dim, args.attend_dim),
-        'canODE-multihead': lambda args: models_embedded.canODE_attentionMultihead(args.data_dim, args.attend_dim, args.num_heads),
-        
-        
-        # sanity test models
-        'cNODE1-GenFn': lambda args: models_cnode.cNODE2_ExternalFitnessFn(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate), # for testing, identical to cNODE1
-        'cNODE2-DKI': lambda args: models_cnode.cNODE2_DKI(args.data_dim, args.cnode_bias), # sanity test, this is the same as cNODE2 but less optimized
-        'cNODE2-Gen': lambda args: models_cnode.cNODEGen_ConstructedFitness(lambda: nn.Sequential(nn.Linear(args.data_dim, args.data_dim, args.cnode_bias), nn.Linear(args.data_dim, args.data_dim, args.cnode_bias)), init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate),  # sanity test, this is the same as cNODE2 but generated at runtime
-        "cNODE2-static": lambda args: models_cnode.cNODE2_ExternalFitness(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate), # sanity test
-        "cNODE2-FnFitness": lambda args: models_cnode.cNODE2_FnFitness(args.data_dim, args.cnode_bias, init_zero=args.cnode1_init_zero, identity_gate=args.identity_gate), # sanity test, this is the same as cNODE2 but testing externally-supplied fitness functions
+
+        # Transformers
+        # no "plain" transformer since embedding is required
+        'SimplexTransformer': lambda args: models_simplex.SimplexTransformer(
+            data_dim=args.data_dim, 
+            embed_dim=args.embed_dim, 
+            num_blocks=args.depth, 
+            num_heads=args.num_heads, 
+            mlp_dim_factor=args.ffn_dim_multiplier,
+            attn_dropout=args.attn_dropout, 
+            mlp_dropout=args.dropout, 
+            learnable_skip=args.learnable_skip
+        ),
+        'ReplicatorTransformer': lambda args: models_replicator.ReplicatorTransformer(
+            data_dim=args.data_dim, 
+            embed_dim=args.embed_dim, 
+            enrich_depth=args.enrich_depth, 
+            fitness_depth=args.fitness_depth,
+            num_heads=args.num_heads, 
+            mlp_dim_factor=args.ffn_dim_multiplier,
+            attn_dropout=args.attn_dropout, 
+            mlp_dropout=args.dropout, 
+            learnable_skip=args.learnable_skip
+        ),
+
+        # Weighted Attention model
+        # Currently only makes sense as a replicator model
+        'ReplicatorWeightedAttention': lambda args: models_replicator.ReplicatorWeightedAttention(
+            data_dim=args.data_dim, 
+            embed_dim=args.embed_dim, 
+            enrich_depth=args.enrich_depth, 
+            fitness_depth=args.fitness_depth,
+            num_heads=args.num_heads, 
+            mlp_dim_factor=args.ffn_dim_multiplier,
+            attn_dropout=args.attn_dropout, 
+            mlp_dropout=args.dropout, 
+            learnable_skip=args.learnable_skip
+        ),
+
+        # Should include old versions of custom models for comparison? transformSoftmax, canODE-FitMat, canODE-attendFit
     }
 
     return models

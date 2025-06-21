@@ -25,7 +25,7 @@ class WeightedAttention(nn.Module):
 
 
 class MultiheadWeightedAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip, dim_qk=None, dim_v=None):
+    def __init__(self, embed_dim, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, dim_qk=None, dim_v=None):
         super().__init__()
 
         self.embed_dim = embed_dim
@@ -62,11 +62,11 @@ class MultiheadWeightedAttention(nn.Module):
         #     self.blendskip = skips.StaticBlendSkip()
 
     def forward(self, x, ids):
-        B, L, _ = query.size()
+        B, L, _ = ids.size()
 
-        Q = self.q_proj(query).view(B, L, self.num_heads, self.head_qk_dim).transpose(1, 2)
-        K = self.k_proj(key).view(B, L, self.num_heads, self.head_qk_dim).transpose(1, 2)
-        V = self.v_proj(value).view(B, L, self.num_heads, self.head_v_dim).transpose(1, 2)
+        Q = self.q_proj(ids).view(B, L, self.num_heads, self.head_qk_dim).transpose(1, 2)
+        K = self.k_proj(ids).view(B, L, self.num_heads, self.head_qk_dim).transpose(1, 2)
+        V = self.v_proj(ids).view(B, L, self.num_heads, self.head_v_dim).transpose(1, 2)
 
         attn_output = self.attention(Q, K, V, x)
 

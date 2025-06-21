@@ -96,7 +96,7 @@ class Replicator_CustomFitness(nn.Module):
         return y
     
 
-class Replicator_CustomFitness_IdEmbedd_XEncode(nn.Module):
+class Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
     """
     Replicator dynamics with a custom fitness function, with id embeddings added to encoded abundances.
     "Fitness" function is expected to return the same shape as input, and will be linearly decoded to produce fitnesses.

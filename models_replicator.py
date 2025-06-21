@@ -1,26 +1,46 @@
 import torch.nn as nn
-import model_core as core
+import models_core as core
 import model_wrappers_replicator as repwrap
 import model_weightedAttention as wat
 
-class ReplicatorIdentity(nn.Module):
-    def __init__(self):
+
+# class ReplicatorIdentity(nn.Module):
+#     def __init__(self):
+#         self.USES_ODEINT = True
+#         super().__init__()
+
+#         self.core_model = core.Identity()
+#         self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
+
+#     def forward(self, t, x):
+#         return self.replicator_model(t, x)
+    
+
+class EmbeddedReplicatorIdentity(nn.Module):
+    def __init__(self, data_dim, embed_dim):
+        self.USES_CONDENSED = True
         self.USES_ODEINT = True
         super().__init__()
 
-        self.core_model = core.Identity()
-        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
+        # self.enrich_model = core.Identity()
+        self.fitness_model = core.Identity()
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
+            fitness_fn=self.fitness_model,
+            data_dim=data_dim,
+            embed_dim=embed_dim,
+            # enrich_fn=self.enrich_model
+        )
 
-    def forward(self, t, x):
-        return self.replicator_model(t, x)
+    def forward(self, t, x, ids):
+        return self.replicator_model(t, x, ids)
     
 
 class ReplicatorConstant(nn.Module):
-    def __init__(self, data_dim, value=1.0):
+    def __init__(self, data_dim):
         self.USES_ODEINT = True
         super().__init__()
 
-        self.core_model = core.LearnedConstantVector(data_dim, value=value)
+        self.core_model = core.LearnedConstantVector(data_dim)
         self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
 
     def forward(self, t, x):
@@ -96,10 +116,10 @@ class ReplicatorTransformer(nn.Module):
             mlp_dropout=mlp_dropout,
             learnable_skip=learnable_skip,
         )
-        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbedd_XEncode(
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
             fitness_fn=self.fitness_model,
             data_dim=data_dim,
-            embed_dim=data_dim,
+            embed_dim=embed_dim,
             enrich_fn=self.enrich_model
         )
 
@@ -108,7 +128,18 @@ class ReplicatorTransformer(nn.Module):
     
 
 class ReplicatorWeightedAttention(nn.Module):
-    def __init__(self, data_dim, embed_dim, enrich_depth, fitness_depth, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip):
+    def __init__(
+            self, 
+            data_dim, 
+            embed_dim, 
+            enrich_depth, 
+            fitness_depth, 
+            num_heads, 
+            mlp_dim_factor, 
+            attn_dropout, 
+            mlp_dropout, 
+            learnable_skip
+        ):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
         super().__init__()
@@ -147,12 +178,13 @@ class ReplicatorWeightedAttention(nn.Module):
         else:
             self.fitness_model = fitness_model_head
 
-        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbedd_XEncode(
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
             fitness_fn=self.fitness_model,
             data_dim=data_dim,
-            embed_dim=data_dim,
+            embed_dim=embed_dim,
             enrich_fn=self.enrich_model
         )
 
     def forward(self, t, x, ids):
         return self.replicator_model(t, x, ids)
+

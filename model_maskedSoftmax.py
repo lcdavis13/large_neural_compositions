@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 
 class MaskedSoftmax(nn.Module):
     def __init__(self, dim: int = -1, eps: float = 1e-13):

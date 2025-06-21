@@ -543,48 +543,6 @@ class TransformerNormalized(nn.Module):
         
         # y = decondense(y, pos, self.data_dim)
         return gated_y
-  
-    
-class RZTransformerNormalized(nn.Module):
-    '''
-    Use a re-zero transformer to directly predict the final relative abundances from the input.
-    This model normalizes the output to sum to 1 in addition to the following:
-    - We concatenate the value onto the ID embedding as a separate channel, and extract a single channel to use as the predicted values
-    - We condense & decondense the sequence if applicable
-    '''
-    def __init__(self, data_dim, id_embed_dim, num_heads, depth, ffn_dim_multiplier, dropout):
-        self.USES_CONDENSED = True
-        super().__init__()
-        
-        self.data_dim = data_dim
-        self.embed = nn.Embedding(data_dim + 1, id_embed_dim - 1)  # Add 1 to account for placeholder ID, subtract one to account for value concat while maintaining divisibility by num_heads
-        
-        # define the transformer
-        encoder_layer = RZTXEncoderLayer(d_model=id_embed_dim, nhead=num_heads,
-                                                   dim_feedforward=math.ceil(id_embed_dim * ffn_dim_multiplier),
-                                                   activation="gelu", batch_first=True, dropout=dropout)
-        self.transform = nn.TransformerEncoder(encoder_layer, num_layers=depth)
-        
-    
-    def forward(self, val, pos):
-        # val, pos = condense(x)
-        
-        # modify v
-        id_embed = self.embed(pos)
-        
-        # concatenate the value onto the id embedding
-        h0 = torch.cat((val.unsqueeze(-1), id_embed), -1)
-        
-        h = self.transform(h0)
-        
-        # extract the value from the transformer output
-        y_raw = h[..., 0]
-        
-        # softmax
-        y = masked_softmax(y_raw, pos)
-        
-        # y = decondense(y, pos, self.data_dim)
-        return y
 
 
 class TransformerSoftmax(nn.Module):

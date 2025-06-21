@@ -1,20 +1,33 @@
-import model_core as core
+import torch.nn as nn
+import models_core as core
 import model_wrappers_simplex as simpwrap
 
 
-class SimplexIdentity(nn.Module):
-    def __init__(self):
+# class SimplexIdentity(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+
+#         self.core_model = core.Identity()
+#         self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
+
+#     def forward(self, x):
+#         return self.simplex_model(x)
+
+
+class EmbeddedSimplexIdentity(nn.Module):
+    def __init__(self, data_dim, embed_dim):
+        self.USES_CONDENSED = True
         super().__init__()
 
         self.core_model = core.Identity()
-        self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
+        self.simplex_model = simpwrap.ResidualSimplexModel_IdEmbed(self.core_model, data_dim, embed_dim)
 
-    def forward(self, x):
-        return self.simplex_model(x)
+    def forward(self, x, ids):
+        return self.simplex_model(x, ids)
     
 
 class SimplexConstant(nn.Module):
-    def __init__(self, data_dim, value=1.0):
+    def __init__(self, data_dim):
         super().__init__()
 
         self.core_model = core.LearnedConstantVector(data_dim)
