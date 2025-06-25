@@ -3,7 +3,7 @@ import model_skipgates as skips
 
 
 class ResidualMLPBlock(nn.Module):
-    def __init__(self, dim, hidden_dim, dropout, learnable_skip):
+    def __init__(self, residual_dim, hidden_dim, dropout, learnable_skip):
         """
         Args:
             dim (int): Input and output dimension.
@@ -12,11 +12,11 @@ class ResidualMLPBlock(nn.Module):
             learnable_gate (bool): Whether to use a learnable gated skip connection.
         """
         super(self).__init__()
-        self.layernorm = nn.LayerNorm(dim)
-        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.layernorm = nn.LayerNorm(residual_dim)
+        self.fc1 = nn.Linear(residual_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.gelu = nn.GELU()
-        self.fc2 = nn.Linear(hidden_dim, dim)
+        self.fc2 = nn.Linear(hidden_dim, residual_dim)
         if learnable_skip:
             self.skip = skips.GateSkip()
         else:

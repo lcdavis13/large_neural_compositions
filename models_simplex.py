@@ -1,17 +1,7 @@
 import torch.nn as nn
+from introspection import construct
 import models_core as core
 import model_wrappers_simplex as simpwrap
-
-
-# class SimplexIdentity(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-
-#         self.core_model = core.Identity()
-#         self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
-
-#     def forward(self, x):
-#         return self.simplex_model(x)
 
 
 class EmbeddedSimplexIdentity(nn.Module):
@@ -21,9 +11,18 @@ class EmbeddedSimplexIdentity(nn.Module):
 
         self.core_model = core.Identity()
         self.simplex_model = simpwrap.ResidualSimplexModel_IdEmbed(self.core_model, data_dim, embed_dim)
-
+    
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
+    
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "embed_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
     
 
 class SimplexConstant(nn.Module):
@@ -61,14 +60,23 @@ class SimplexShallowMLP(nn.Module):
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
     
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
+    
 
 class SimplexResidualMLP(nn.Module):
-    def __init__(self, data_dim, depth, hidden_dim, dropout, learnable_skip):
+    def __init__(self, data_dim, num_blocks, hidden_dim, dropout, learnable_skip):
         super().__init__()
 
         self.core_model = core.ResidualMLP(
-            dim=data_dim,
-            depth=depth,
+            data_dim=data_dim,
+            num_blocks=num_blocks,
             hidden_dim=hidden_dim,
             dropout=dropout,
             learnable_skip=learnable_skip
@@ -77,6 +85,16 @@ class SimplexResidualMLP(nn.Module):
     
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
+    
+    @classmethod
+    def init_2d(cls, width, depth, **kwargs):
+
+        override = {
+            "num_blocks": depth,
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
     
 
 class SimplexTransformer(nn.Module):
@@ -87,7 +105,7 @@ class SimplexTransformer(nn.Module):
 
         self.core_model = core.Transformer(
             embed_dim=embed_dim,
-            depth=num_blocks,
+            num_blocks=num_blocks,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,
             attn_dropout=attn_dropout,
@@ -103,3 +121,22 @@ class SimplexTransformer(nn.Module):
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
     
+    @classmethod
+    def init(cls, **kwargs):
+        override = {
+            "embed_dim": max(kwargs["embed_dim"] // kwargs["num_heads"], 1) * kwargs["num_heads"],
+        }
+        return construct(cls, kwargs, override), override
+    
+    @classmethod
+    def init_2d(cls, width, depth, **kwargs):
+        num_heads = kwargs["num_heads"]
+
+        override = {
+            "embed_dim": max(width // num_heads, 1) * num_heads,
+            "num_blocks": depth,
+        }
+
+        return construct(cls, kwargs, override), override
+    
+        

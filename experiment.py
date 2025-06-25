@@ -11,6 +11,7 @@ import lr_schedule
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 import data
 import torch
+import models
 import models_baseline
 import models_fitted
 import stream
@@ -704,7 +705,7 @@ class DummyGradScaler:
 
 
 
-def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns):
+def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns):
     # things that are needed for reporting an exception, so they go before the try block
     jobid_substring = int(cp.jobid.split('_')[0])
     jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
@@ -730,7 +731,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         hp.data_dim = dense_columns
         hp.sparse_data_dim = sparse_columns
         # hp.WD = hp.lr * hp.wd_factor
-        hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+        # hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
         hp.model_config = f"{hp.model_name} hp-{cp.config_configid}-{dp.data_configid}-{hp.configid}"
 
         # conditionally adjust epochs to compensate for subset size
@@ -743,9 +744,9 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         else:
             hp.adjusted_epochs = hp.epochs
 
-        assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+        # assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
         
-        model_constr = models[hp.model_name]
+        model_class = model_classes[hp.model_name]
         epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
         
         if device.type == "cuda":
@@ -766,9 +767,13 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         # seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
         # print(f"Seed: {seed}")
         
-        # test construction and print parameter count
+        # Test construction. If using parameter_target, this will find a model configuration with approximately correct parameter count and return the specific config hyperparameters.
         print(f"\nModel construction test for: {hp.model_config}")
-        model = model_constr(hp)
+        model, config_overrides = models.construct_model_parameterized(model_class, hp.parameter_target, hp.width_depth_tradeoff, hp)
+        if config_overrides:
+            print(f"Model configuration overrides: {config_overrides}")
+            hp.update(config_overrides) 
+            # NOTE: This mutates hp in the calling context. Currently that's fine because we only send hp to this function and then construct a new hp on each step through the loop, but if things change, that could be problematic.
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
@@ -801,7 +806,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
             data_train=data_train, data_valid=data_valid, data_test=data_test, 
             fold_num=fold_num, 
             cp=cp, dp=dp, hp=hp, 
-            model_constr=model_constr, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
+            model_constr=model_class, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
             scaler=scaler, device=device, 
             timesteps=timesteps, loss_fn=loss_fn, score_fns=score_fns,
             jobstring=jobstring, verbosity=verbosity

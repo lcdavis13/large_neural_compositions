@@ -58,37 +58,3 @@ class ResidualSimplexModel_IdEmbed(nn.Module):
 
         return h
     
-    
-# class ResidualSimplexModel_IdEmbed_XEncode(nn.Module):
-#     """
-#     Explicit composition model with an ID embedder and a learned Fourier abundance encoder.
-#     The utility of the abundance encoder for explicit models is questionable, because the abundance is equal for all OTUs in the input. The only information it would actually encode is: how many OTUs are present. And adding that to every embedding seems more likely to cause interference than any benefit.
-#     """"
-#     def __init__(self, core_model, data_dim, embed_dim):
-#         super().__init__()
-#         self.USES_CONDENSED = True
-
-#         self.embed = encoders.IdEmbedder(data_dim, embed_dim)
-#         self.encode = encoders.AbundanceEncoder_LearnedFourier(embed_dim)
-
-#         self.core_model = core_model
-
-#         self.decode = encoders.Decoder(embed_dim)
-#         self.softmax = MaskedSoftmax()
-#         self.blendskip = skips.BlendSkip()
-        
-
-#     def forward(self, x, ids):
-#         # preprocessing
-#         h = self.embed(ids) + self.encode(x)
-
-#         # core model
-#         h = self.core_model(h)
-
-#         # postprocessing
-#         h = self.decode(h)
-#         h = self.softmax(h, x)
-#         h = self.blendskip(h, x)
-
-#         return h
-    

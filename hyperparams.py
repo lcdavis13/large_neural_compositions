@@ -164,32 +164,44 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         help="whether or not to use independent noise for interpolation")
     
     # Model architecture params
-    hpbuilder.add_param("identity_gate", 
+    hpbuilder.add_param("hidden_dim", 512, 
+                        help="hidden dimension for MLP-based models")
+    hpbuilder.add_param("embed_dim", 128,
+                        help="dimension of embedding for embedding-based models")
+    hpbuilder.add_param("num_blocks", 3, 
+                        help="depth of model")
+    hpbuilder.add_param("learnable_skip", 
                         True,
                         # False, 
-                        help="whether or not to use 'ReZero'-style learnable gate scalars, initialized such that each model starts as an identity function")
-    hpbuilder.add_param("cnode1_init_zero", 
-                        True, 
-                        # False, 
-                        help="whether or not to use 'ReZero'-style gates to ensure all models start as an identity function")
-    hpbuilder.add_param("cnode_bias", 
-                        True, 
-                        # False,
-                        help="whether or not to use a bias term when predicting fitness in cNODE and similar models")
-    hpbuilder.add_param("num_heads", 15,  
-                        help="number of attention heads in transformer-based models")
-    hpbuilder.add_param("hidden_dim", 8, 
-                        help="hidden dimension")
-    hpbuilder.add_param("attend_dim_per_head", 9,
-                        help="dimension of attention embedding, per attention head")
-    hpbuilder.add_param("depth", 2, 
-                        help="depth of model")
-    hpbuilder.add_param("ffn_dim_multiplier", 
-                        # 4.0,
-                        3.924555754,  
-                        help="multiplier for feedforward network dimension in transformer-based models")
-    hpbuilder.add_param("dropout", 0.04137076975, 
+                        help="Whether or not to use learnable scalar weights on the skip connections.")
+    hpbuilder.add_param("dropout", 
+                        0.5,
                         help="dropout rate")
-                        
+    hpbuilder.add_param("num_heads", 16,  
+                        help="number of attention heads in transformer-based models")
+    hpbuilder.add_param("fcn_dim_multiplier", 
+                        4.0,
+                        help="dim multiplier for FCN sublayer in transformer blocks, relative to embedding dimension")
+    hpbuilder.add_param("attn_dropout", 
+                        0.1,
+                        help="dropout rate in attention layers")
+    hpbuilder.add_param("fcn_dropout", 
+                        0.1,
+                        help="dropout rate for FCN sublayer in transformer blocks")
+    
+    # Model architecture re-parameterization params
+    hpbuilder.add_param("parameter_target", 
+                        0, 
+                        # 256 ** 2, 
+                        # 2_000_000, 
+                        help="target number of parameters for the model. If <= 0, the model will not be re-parameterized and will use only explicit architecture parameters.")
+    hpbuilder.add_param("width_depth_tradeoff",
+                        # 0.0, 
+                        # 0.25, 
+                        0.5, 
+                        # 0.75,
+                        # 1.0,  
+                        help="tradeoff between width and depth for re-parameterization when parameter_target > 0. 0.0 means all width, 1.0 means all depth, and 0.5 is a balanced tradeoff.")
+
     return hpbuilder, datacat, config_cat
 

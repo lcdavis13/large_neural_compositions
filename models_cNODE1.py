@@ -14,9 +14,6 @@ class ODEFunc_cNODE1(nn.Module):  # optimized implementation of cNODE2
         fx = self.fcc1(x)  # B x N
         
         xT_fx = torch.sum(x * fx, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
-        # print(f"shape of x: {x.shape}")
-        # print(f"shape of fx: {fx.shape}")
-        # print(f"shape of xT_fx: {xT_fx.shape}")
         diff = fx - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
 

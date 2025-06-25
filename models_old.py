@@ -1,7 +1,6 @@
-import models_cNODE1
-import models_core
-import models_replicator
-import models_simplex
+import models_baseline
+import models_cnode
+import models_embedded
 
 
 def get_model_constructors():

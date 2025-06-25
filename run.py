@@ -49,7 +49,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
     hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
-    model_constructors = models.get_model_constructors()
+    model_classes = models.get_model_classes()
 
     epoch_mngr_constructors = epoch_managers.get_epoch_manager_constructors()
 
@@ -75,7 +75,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
             for hp in hpbuilder.parse_and_generate_combinations():
                 override_dict(hp, overrides)
 
-                expt.run_experiment(cp=cp, dp=dp, hp=hp, data_folded=data_folded, testdata=testdata, device=device, models=model_constructors, epoch_mngr_constructors=epoch_mngr_constructors, loss_fn=loss_fn, score_fns=score_fns, benchmark_losses=benchmark_losses, dense_columns=dense_columns, sparse_columns=sparse_columns)
+                expt.run_experiment(cp=cp, dp=dp, hp=hp, data_folded=data_folded, testdata=testdata, device=device, model_classes=model_classes, epoch_mngr_constructors=epoch_mngr_constructors, loss_fn=loss_fn, score_fns=score_fns, benchmark_losses=benchmark_losses, dense_columns=dense_columns, sparse_columns=sparse_columns)
 
 
     print("\n\nDONE")

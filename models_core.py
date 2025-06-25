@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from introspection import construct
 import model_commonblocks as blocks
 
 
@@ -20,23 +21,32 @@ class LearnedConstantVector(nn.Module):
 
 class ShallowMLP(nn.Module):
     """A simple single-hidden-layer MLP with GELU activation. None of the fancy features of the comparable ResidualMLPBlock."""
-    def __init__(self, dim: int, hidden_dim: int):
+    def __init__(self, data_dim: int, hidden_dim: int):
         super().__init__()
-        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.fc1 = nn.Linear(data_dim, hidden_dim)
         self.gelu = nn.GELU()
-        self.fc2 = nn.Linear(hidden_dim, dim)
+        self.fc2 = nn.Linear(hidden_dim, data_dim)
 
     def forward(self, x):
         x = self.fc1(x)
         x = self.gelu(x)
         x = self.fc2(x)
         return x
+    
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
 
 
 class ResidualMLP(nn.Module):
     def __init__(self, 
-                 dim: int, 
-                 depth: int, 
+                 data_dim: int, 
+                 num_blocks: int, 
                  hidden_dim: int, 
                  dropout: float, 
                  learnable_skip: bool):
@@ -45,27 +55,38 @@ class ResidualMLP(nn.Module):
 
         Args:
             dim (int): Input and output dimension of each block.
-            depth (int): Number of ResidualMLPBlocks.
+            num_blocks (int): Number of ResidualMLPBlocks.
             hidden_dim (int): Hidden dimension in the MLP.
             dropout (float): Dropout rate for MLP layers.
             learnable_skip (bool): Use learnable gated skip connections if True, vanilla skip otherwise.
         """
         super().__init__()
         self.blocks = nn.ModuleList([
-            blocks.ResidualMLPBlock(dim=dim, hidden_dim=hidden_dim, dropout=dropout, learnable_skip=learnable_skip)
-            for _ in range(depth)
+            blocks.ResidualMLPBlock(residual_dim=data_dim, hidden_dim=hidden_dim, dropout=dropout, learnable_skip=learnable_skip)
+            for _ in range(num_blocks)
         ])
-
+        
     def forward(self, x):
         for block in self.blocks:
             x = block(x)
         return x
+    
+    @classmethod
+    def init_2d(cls, width, depth, **kwargs):
+
+        override = {
+            "num_blocks": depth,
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
+
 
 
 class Transformer(nn.Module):
     def __init__(self, 
                  embed_dim: int, 
-                 depth: int, 
+                 num_blocks: int, 
                  num_heads: int, 
                  mlp_dim_factor: float, 
                  attn_dropout: float, 
@@ -92,7 +113,7 @@ class Transformer(nn.Module):
                 attn_dropout=attn_dropout,
                 mlp_dropout=mlp_dropout,
                 learnable_skip=learnable_skip
-            ) for _ in range(depth)
+            ) for _ in range(num_blocks)
         ])
 
     def forward(self, x):
