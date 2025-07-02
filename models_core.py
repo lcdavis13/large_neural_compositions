@@ -4,16 +4,28 @@ from introspection import construct
 import model_commonblocks as blocks
 
 
-# aliases for "models" that are a single pytorch module
-Identity = nn.Identity
-Linear = nn.Linear
+class Identity(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return x
+
+
+class Linear(nn.Module):
+    def __init__(self, data_dim: int):
+        super().__init__()
+        self.linear = nn.Linear(data_dim, data_dim)
+
+    def forward(self, x):
+        return self.linear(x)
 
 
 class LearnedConstantVector(nn.Module):
     """A learnable constant vector. Initializes to 1/N (the mean for simplex / relative abundance vectors)."""
-    def __init__(self, dim: int):
+    def __init__(self, data_dim: int):
         super().__init__()
-        self.constant = nn.Parameter(torch.ones(dim) / dim)
+        self.constant = nn.Parameter(torch.ones(data_dim) / data_dim)
 
     def forward(self, x):
         return self.constant.unsqueeze(0).expand(x.size(0), -1)
@@ -80,7 +92,6 @@ class ResidualMLP(nn.Module):
         }
 
         return construct(cls, kwargs, override), override
-
 
 
 class Transformer(nn.Module):

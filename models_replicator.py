@@ -108,14 +108,14 @@ class ReplicatorResidualMLP(nn.Module):
     
 
 class ReplicatorTransformer(nn.Module):
-    def __init__(self, data_dim, embed_dim, enrich_depth, fitness_depth, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip):
+    def __init__(self, data_dim, embed_dim, enrich_blocks, fitness_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
         super().__init__()
 
         self.enrich_model = core.Transformer(
             embed_dim=embed_dim,
-            num_blocks=enrich_depth,
+            num_blocks=enrich_blocks,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,
             attn_dropout=attn_dropout, 
@@ -124,7 +124,7 @@ class ReplicatorTransformer(nn.Module):
         )
         self.fitness_model = core.Transformer(
             embed_dim=embed_dim,
-            num_blocks=fitness_depth,
+            num_blocks=fitness_blocks,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,
             attn_dropout=attn_dropout,
@@ -157,8 +157,64 @@ class ReplicatorTransformer(nn.Module):
 
         override = {
             "embed_dim": max(width // num_heads, 1) * num_heads,
-            "fitness_depth": depth_fitness,
-            "enrich_depth": depth - depth_fitness,
+            "fitness_blocks": depth_fitness,
+            "enrich_blocks": depth - depth_fitness,
+        }
+
+        return construct(cls, kwargs, override), override
+    
+
+class ReplicatorWeightedAttention_NoXEncode(nn.Module):
+    def __init__(
+            self, data_dim, embed_dim, enrich_blocks, num_heads, 
+            mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip
+        ):
+        self.USES_CONDENSED = True
+        self.USES_ODEINT = True
+        super().__init__()
+
+        self.enrich_model = core.Transformer(
+            embed_dim=embed_dim,
+            num_blocks=enrich_blocks,
+            num_heads=num_heads,
+            mlp_dim_factor=mlp_dim_factor,
+            attn_dropout=attn_dropout, 
+            mlp_dropout=mlp_dropout,
+            learnable_skip=learnable_skip,
+        )
+
+        self.fitness_model = wat.MultiheadPopulationAttention_NotResidual(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            mlp_dim_factor=mlp_dim_factor,
+            attn_dropout=attn_dropout,
+            mlp_dropout=mlp_dropout,
+        )
+
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed(
+            fitness_fn=self.fitness_model,
+            data_dim=data_dim,
+            embed_dim=embed_dim,
+            enrich_fn=self.enrich_model
+        )
+
+    def forward(self, t, x, ids):
+        return self.replicator_model(t, x, ids)
+    
+    @classmethod
+    def init(cls, **kwargs):
+        override = {
+            "embed_dim": max(kwargs["embed_dim"] // kwargs["num_heads"], 1) * kwargs["num_heads"],
+        }
+        return construct(cls, kwargs, override), override
+    
+    @classmethod
+    def init_2d(cls, width, depth, **kwargs):
+        num_heads = kwargs["num_heads"]
+
+        override = {
+            "embed_dim": max(width // num_heads, 1) * num_heads,
+            "enrich_blocks": depth - 1,
         }
 
         return construct(cls, kwargs, override), override
@@ -166,7 +222,7 @@ class ReplicatorTransformer(nn.Module):
 
 class ReplicatorWeightedAttention(nn.Module):
     def __init__(
-            self, data_dim, embed_dim, enrich_depth, fitness_depth, 
+            self, data_dim, embed_dim, enrich_blocks, fitness_blocks, 
             num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip
         ):
         self.USES_CONDENSED = True
@@ -175,7 +231,7 @@ class ReplicatorWeightedAttention(nn.Module):
 
         self.enrich_model = core.Transformer(
             embed_dim=embed_dim,
-            num_blocks=enrich_depth,
+            num_blocks=enrich_blocks,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,
             attn_dropout=attn_dropout, 
@@ -183,9 +239,10 @@ class ReplicatorWeightedAttention(nn.Module):
             learnable_skip=learnable_skip,
         )
 
-        # Fitness model is a stack of Transformer blocks with Weighted attention block at the end. Since this isn't useful for non-replicator models, it isn't defined externally like the other models.
+        # Fitness model is a stack of Transformer blocks (different from enrichment blocks b/c the abundance encodings are added to the embeddings) 
+        # with Weighted attention block at the end. Since this isn't useful for non-replicator models, it isn't defined externally like the other models.
 
-        fitness_model_head = wat.MultiheadWeightedAttention(
+        fitness_model_head = wat.MultiheadPopulationAttention_NotResidual(
             embed_dim=embed_dim,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,
@@ -193,10 +250,10 @@ class ReplicatorWeightedAttention(nn.Module):
             mlp_dropout=mlp_dropout,
         )
 
-        if fitness_depth > 1:
+        if fitness_blocks > 1:
             ode_transformer = core.Transformer(
                     embed_dim=embed_dim,
-                    num_blocks=fitness_depth - 1,
+                    num_blocks=fitness_blocks - 1,
                     num_heads=num_heads,
                     mlp_dim_factor=mlp_dim_factor,
                     attn_dropout=attn_dropout,
@@ -233,8 +290,8 @@ class ReplicatorWeightedAttention(nn.Module):
 
         override = {
             "embed_dim": max(width // num_heads, 1) * num_heads,
-            "fitness_depth": depth_fitness,
-            "enrich_depth": depth - depth_fitness,
+            "fitness_blocks": depth_fitness,
+            "enrich_blocks": depth - depth_fitness,
         }
 
         return construct(cls, kwargs, override), override
@@ -244,14 +301,14 @@ class ReplicatorWeightedAttention(nn.Module):
 #     """
 #     First enriches embeddings with a Transformer, then applies a Residual MLP to predict fitness.
 #     """
-#     def __init__(self, data_dim, embed_dim, enrich_depth, hidden_dim, fitness_depth, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, dropout, learnable_skip):
+#     def __init__(self, data_dim, embed_dim, enrich_blocks, hidden_dim, fitness_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, dropout, learnable_skip):
 #         # self.USES_CONDENSED = True  # MLP doesn't make sense on condensed data. It can do it, but it isn't permutation invariant, so presumably all it can do is overfit. 
 #         self.USES_ODEINT = True
 #         super().__init__()
 
 #         self.enrich_model = core.Transformer(
 #             embed_dim=embed_dim,
-#             num_blocks=enrich_depth,
+#             num_blocks=enrich_blocks,
 #             num_heads=num_heads,
 #             mlp_dim_factor=mlp_dim_factor,
 #             attn_dropout=attn_dropout, 
@@ -264,7 +321,7 @@ class ReplicatorWeightedAttention(nn.Module):
         
 #         self.fitness_model = core.ResidualMLP(
 #             data_dim=sparse_data_dim * embed_dim,  
-#             num_blocks=fitness_depth,
+#             num_blocks=fitness_blocks,
 #             hidden_dim=hidden_dim,
 #             dropout=dropout,
 #             learnable_skip=learnable_skip
@@ -307,8 +364,8 @@ class ReplicatorWeightedAttention(nn.Module):
 #         override = {
 #             "embed_dim": embed_dim,
 #             "hidden_dim": hidden_dim,
-#             "fitness_depth": depth_fitness,
-#             "enrich_depth": depth - depth_fitness,
+#             "fitness_blocks": depth_fitness,
+#             "enrich_blocks": depth - depth_fitness,
 #         }
 
 #         return construct(cls, kwargs, override), override

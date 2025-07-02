@@ -171,24 +171,28 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder.add_param("num_blocks", 3, 
                         help="depth of model")
     hpbuilder.add_param("learnable_skip", 
-                        True,
+                        True, 
                         # False, 
                         help="Whether or not to use learnable scalar weights on the skip connections.")
     hpbuilder.add_param("dropout", 
-                        0.5,
+                        0.5, 
                         help="dropout rate")
-    hpbuilder.add_param("num_heads", 16,  
+    hpbuilder.add_param("num_heads", 16, 
                         help="number of attention heads in transformer-based models")
     hpbuilder.add_param("fcn_dim_multiplier", 
-                        4.0,
+                        4.0, 
                         help="dim multiplier for FCN sublayer in transformer blocks, relative to embedding dimension")
     hpbuilder.add_param("attn_dropout", 
-                        0.1,
+                        0.1, 
                         help="dropout rate in attention layers")
     hpbuilder.add_param("fcn_dropout", 
-                        0.1,
+                        0.1, 
                         help="dropout rate for FCN sublayer in transformer blocks")
-    
+    hpbuilder.add_param("enrich_blocks", 4, 
+                        help="number of transformer blocks to use for enriching embeddings in embedding-based ODE models")
+    hpbuilder.add_param("fitness_blocks", 1, 
+                        help="number of transformer blocks to use for the fitness function in embedding-based ODE models")
+
     # Model architecture re-parameterization params
     hpbuilder.add_param("parameter_target", 
                         0, 

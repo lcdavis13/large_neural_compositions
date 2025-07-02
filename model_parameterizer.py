@@ -64,6 +64,7 @@ def logspace_allocate_on_fixed_param_surface(w_est, d_est, R):
     d = C / (w ** 2)
     return int(round(d)), int(round(w))
 
+
 def refine_width_given_depth(factory_fn, depth, P_target, init_width, tol=1e-3):
     def objective(w):
         w_int = max(1, int(round(w)))
@@ -72,6 +73,7 @@ def refine_width_given_depth(factory_fn, depth, P_target, init_width, tol=1e-3):
 
     res = minimize_scalar(objective, bounds=(init_width // 2, init_width * 2), method='bounded', options={'xatol': tol})
     return int(round(res.x))
+
 
 def choose_depth_and_width(R, P_target, factory_fn,
                            depth_fit_range=[1, 2, 3, 4],
@@ -127,6 +129,7 @@ def choose_width(P_target, factory_fn, width_fit_range=[32, 64, 128, 256]):
     return {
         "width": w_refined,
     }
+
 
 def load_model_1d(factory_fn, parameter_target, args):
     def wrapped_factory_fn(depth_unused, width):

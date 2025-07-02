@@ -58,7 +58,7 @@ class ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
 
 
 class ODEFunc_Replicator_CustomFitness_IdEmbed(nn.Module):
-    def __init__(self, fitness_fn, embed_dim):
+    def __init__(self, fitness_fn):
         super().__init__()
 
         self.fn = fitness_fn
@@ -140,7 +140,7 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
         self.embed = encoders.IdEmbedder(data_dim, embed_dim)
         self.enrich_fn = enrich_fn
 
-        self.ode_func = ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(fitness_fn, embed_dim)
+        self.ode_func = ODEFunc_Replicator_CustomFitness_IdEmbed(fitness_fn)
     
     def forward(self, t, x, ids):
         # preprocess embeddings

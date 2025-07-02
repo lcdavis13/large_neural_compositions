@@ -10,7 +10,7 @@ class EmbeddedSimplexIdentity(nn.Module):
         super().__init__()
 
         self.core_model = core.Identity()
-        self.simplex_model = simpwrap.ResidualSimplexModel_IdEmbed(self.core_model, data_dim, embed_dim)
+        self.simplex_model = simpwrap.SimplexModel_IdEmbed(self.core_model, data_dim, embed_dim)
     
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
@@ -30,7 +30,7 @@ class SimplexConstant(nn.Module):
         super().__init__()
 
         self.core_model = core.LearnedConstantVector(data_dim)
-        self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model)
 
     def forward(self, x):
         return self.simplex_model(x)
@@ -41,7 +41,7 @@ class SimplexLinear(nn.Module):
         super().__init__()
 
         self.core_model = core.Linear(data_dim, data_dim)
-        self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model)
 
     def forward(self, x):
         return self.simplex_model(x)
@@ -55,7 +55,7 @@ class SimplexShallowMLP(nn.Module):
             data_dim=data_dim,
             hidden_dim=hidden_dim
         )
-        self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model)
     
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
@@ -81,7 +81,7 @@ class SimplexResidualMLP(nn.Module):
             dropout=dropout,
             learnable_skip=learnable_skip
         )
-        self.simplex_model = simpwrap.ResidualSimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model)
     
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
@@ -112,7 +112,7 @@ class SimplexTransformer(nn.Module):
             mlp_dropout=mlp_dropout,
             learnable_skip=learnable_skip
         )
-        self.simplex_model = simpwrap.ResidualSimplexModel_IdEmbed(
+        self.simplex_model = simpwrap.SimplexModel_IdEmbed(
             self.core_model, 
             data_dim, 
             embed_dim
