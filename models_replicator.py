@@ -1,7 +1,7 @@
 import torch.nn as nn
 import models_core as core
 import model_wrappers_replicator as repwrap
-import model_weightedAttention as wat
+import model_populationAttention as patt
 from introspection import construct
     
 
@@ -183,7 +183,7 @@ class ReplicatorWeightedAttention_NoXEncode(nn.Module):
             learnable_skip=learnable_skip,
         )
 
-        self.fitness_model = wat.MultiheadPopulationAttention_NotResidual(
+        self.fitness_model = patt.MultiheadPopulationAttention_NotResidual(
             embed_dim=embed_dim,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,
@@ -242,7 +242,7 @@ class ReplicatorWeightedAttention(nn.Module):
         # Fitness model is a stack of Transformer blocks (different from enrichment blocks b/c the abundance encodings are added to the embeddings) 
         # with Weighted attention block at the end. Since this isn't useful for non-replicator models, it isn't defined externally like the other models.
 
-        fitness_model_head = wat.MultiheadPopulationAttention_NotResidual(
+        fitness_model_head = patt.MultiheadPopulationAttention_NotResidual(
             embed_dim=embed_dim,
             num_heads=num_heads,
             mlp_dim_factor=mlp_dim_factor,

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import math
 from model_commonblocks import ResidualMLPBlock
 from model_maskedSoftmax import MaskedSoftmax
+from model_normedLog import normed_log
 import model_skipgates as skips
 
 
@@ -265,6 +266,7 @@ class IterativePopulationTransformer(nn.Module):
             self.skips = nn.ModuleList([
                 skips.StaticSkip() for _ in range(num_steps)
             ])
+        self.masked_softmax = MaskedSoftmax(dim=-1)
     
     def forward(self, x, z):
         """
@@ -274,6 +276,7 @@ class IterativePopulationTransformer(nn.Module):
             y: Updated population abundances after num_steps iterations, shape (..., L)
         """
         logx = normed_log(x)
+        # Note: could also include a learnable offset for initial logx. Learnable scale isn't necessary because learnable skip of first layer will cover that.
         for l in range(self.num_steps):
             layer = self.pop_transforms[l]
             skip = self.skips[l]
@@ -285,7 +288,7 @@ class IterativePopulationTransformer(nn.Module):
             logx = skip(log_dx, logx)
 
             # Apply softmax to get linear-space (relative) population abundances
-            x = masked_softmax(logx, dim=-1)
+            x = self.masked_softmax(logx)
 
 
 # Note: pytorch and original AIAYN paper do dropout after the softmax inside the attention module, before multiplying against V. 
