@@ -8,7 +8,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # "junk", 
                         # 'baseline-ConstSoftmax',
                         # 'baseline-SLPMultSoftmax',
-                        # 'cNODE1',
+                        'cNODE1',
                         # 'cNODE2',
                         # 'transformSoftmax',
                         # 'transformShaped-AbundEncoding',
@@ -16,7 +16,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 'canODE-FitMat',
                         # 'canODE-attendFit',
                         # "canODE-FitMat-AbundEncoding", 
-                        'cNODE-hourglass',
+                        # 'cNODE-hourglass',
                         # 'baseline-cNODE0',
                         help="model(s) to run")
 

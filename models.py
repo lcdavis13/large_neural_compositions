@@ -48,9 +48,6 @@ def get_model_classes():
         # Currently only makes sense as a replicator model
         'ReplicatorWeightedAttention': models_replicator.ReplicatorWeightedAttention,
 
-        # Transformer enrichment followed by MLP replicator
-        'ReplicatorTransformerMLP': models_replicator.ReplicatorTransformerMLP,
-
         # Should include old versions of custom models for comparison? transformSoftmax, canODE-FitMat, canODE-attendFit
     }
 

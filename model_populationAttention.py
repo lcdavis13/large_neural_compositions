@@ -240,31 +240,31 @@ class PopulationTransformer(nn.Module):
     
 
 class IterativePopulationTransformer(nn.Module):
-    def __init__(self, embed_dim, num_blocks_per_step, num_steps, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip, dispersion=True):
+    def __init__(self, embed_dim, num_subblocks, num_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip, dispersion=True):
         """
         A stack of PopulationTransformers, each of which residually updates the population in logspace and then softmaxes it to return to a population.
         """
         super().__init__()
-        self.num_steps = num_steps
+        self.num_steps = num_blocks
         self.pop_transforms = nn.ModuleList([
             PopulationTransformer(
                 embed_dim=embed_dim,
-                num_blocks=num_blocks_per_step,
+                num_blocks=num_subblocks,
                 num_heads=num_heads,
                 mlp_dim_factor=mlp_dim_factor,
                 attn_dropout=attn_dropout,
                 mlp_dropout=mlp_dropout,
                 learnable_skip=learnable_skip,
                 dispersion=dispersion
-            ) for _ in range(num_steps)
+            ) for _ in range(num_blocks)
         ])
         if learnable_skip:
             self.skips = nn.ModuleList([
-                skips.GateSkip() for _ in range(num_steps)
+                skips.GateSkip() for _ in range(num_blocks)
             ])
         else:
             self.skips = nn.ModuleList([
-                skips.StaticSkip() for _ in range(num_steps)
+                skips.StaticSkip() for _ in range(num_blocks)
             ])
         self.masked_softmax = MaskedSoftmax(dim=-1)
     
@@ -273,22 +273,22 @@ class IterativePopulationTransformer(nn.Module):
         x: Population abundances, shape (..., L)
         z: Population embeddings, shape (..., L, D)
         Returns:
-            y: Updated population abundances after num_steps iterations, shape (..., L)
+            y: Updated population abundances
         """
         logx = normed_log(x)
         # Note: could also include a learnable offset for initial logx. Learnable scale isn't necessary because learnable skip of first layer will cover that.
         for l in range(self.num_steps):
-            layer = self.pop_transforms[l]
+            pop_transform = self.pop_transforms[l]
             skip = self.skips[l]
 
             # Update the population embeddings using the transformer
-            log_dx = layer(x, z)
+            log_dx = pop_transform(x, z)
 
             # Residually update logspace representation of population abundances
             logx = skip(log_dx, logx)
 
             # Apply softmax to get linear-space (relative) population abundances
-            x = self.masked_softmax(logx)
+            x = self.masked_softmax(logx, x)
 
 
 # Note: pytorch and original AIAYN paper do dropout after the softmax inside the attention module, before multiplying against V. 

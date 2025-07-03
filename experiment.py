@@ -6,24 +6,16 @@ import traceback
 import numpy as np
 import pandas as pd
 import chunked_dataset
-import epoch_managers
+from introspection import construct
 import lr_schedule
-from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 import data
 import torch
 import models
-import models_baseline
 import models_fitted
 import stream
-from optimum import Optimum, summarize, unrolloptims, unrolloptims_dict
+from optimum import Optimum, unrolloptims_dict
 import stream_plot as plotstream
 import time
-
-
-import copy
-import time
-
-import torch
 
 
 import tracemalloc
@@ -455,7 +447,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 def train_model(data_train, data_valid, data_test,
                 cp, dp, hp, 
                 fold_num, 
-                model_constr, epoch_manager_constr, model_args, 
+                model_class, epoch_manager_constr, model_args, 
                 scaler, device, 
                 timesteps, loss_fn, score_fns,
                 jobstring, verbosity=1):
@@ -489,7 +481,7 @@ def train_model(data_train, data_valid, data_test,
     # LR_start_factor = 1.0  # constantLR
     LR_start_factor = 0.0 # warm up
 
-    model = model_constr(model_args).to(device)
+    model = construct(model_class, model_args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=hp.lr * LR_start_factor, weight_decay=hp.wd)
 
     manager = epoch_manager_constr(model_args)
@@ -806,7 +798,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epo
             data_train=data_train, data_valid=data_valid, data_test=data_test, 
             fold_num=fold_num, 
             cp=cp, dp=dp, hp=hp, 
-            model_constr=model_class, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
+            model_class=model_class, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
             scaler=scaler, device=device, 
             timesteps=timesteps, loss_fn=loss_fn, score_fns=score_fns,
             jobstring=jobstring, verbosity=verbosity
