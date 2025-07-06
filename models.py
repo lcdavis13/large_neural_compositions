@@ -76,7 +76,7 @@ def construct_model_parameterized(model_cls: Type[nn.Module], parameter_target: 
     # Fallback to standard init() if available, to retrieve overrides
     factory_fn = getattr(model_cls, "init", None)
     if callable(factory_fn):
-        return call(factory_fn, args)
+        return call(factory_fn, args)  # BUG: can't use call() here because it will automatically 
 
     # Final fallback: use constructor directly, assume no overrides
     return construct(model_cls, args), {}

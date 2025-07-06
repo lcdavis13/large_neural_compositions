@@ -7,10 +7,14 @@ def call(fn, full_args: dict):
     extra arguments that are not part of the function's signature.
     """
     sig = inspect.signature(fn)
-    accepted_args = {
-        k: v for k, v in full_args.items()
-        if k in sig.parameters
-    }
+    
+    if 'kwargs' in sig.parameters:
+        accepted_args = full_args
+    else: 
+        accepted_args = {
+            k: v for k, v in full_args.items()
+            if k in sig.parameters
+        }
     return fn(**accepted_args)
 
 

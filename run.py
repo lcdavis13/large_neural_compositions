@@ -85,6 +85,8 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 # main
 if __name__ == "__main__":
     hyperparam_csv = None
-    overrides = {}
+    overrides = {
+        "plots_wait_for_exit": True, 
+    }
     
     run_experiments(cli_args=sys.argv[1:], hyperparam_csv=hyperparam_csv, overrides=overrides) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 

@@ -24,8 +24,8 @@ class SimplexModel_IdEmbed(nn.Module):
     """
     Explicit composition model with preprocessing to embed IDs for the input, and linearly decode output to an abundance vector.
     Core model is expected to return the same shape as input (i.e. enriched embeddings).
-    After decoding, this applies a softmax and a learned "blend" skip gate which interpolates between input and output.
-    The gate is initialized such that the model starts as an identity function.
+    
+    After decoding, this applies a masked softmax which preserves the zero pattern of the input.
     """
     def __init__(self, core_model, data_dim, embed_dim):
         super().__init__()

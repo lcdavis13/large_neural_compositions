@@ -66,10 +66,16 @@ class ODEFunc_Replicator_CustomFitness_IdEmbed(nn.Module):
         self.gate = skips.ZeroGate()
     
     def forward(self, t, x, embeddings):
+        print(x.shape)
+        print(embeddings.shape)
+        print(t.shape)
+
         # eval fitness function, passing embeddings for custom handling
         fitness = self.fn(x, embeddings)
         
         # Replicator dynamics
+        print(x.shape)
+        print(fitness.shape)
         xT_fx = torch.sum(x * fitness, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
         diff = fitness - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N

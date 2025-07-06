@@ -3,16 +3,20 @@ import model_skipgates as skips
 
 
 class ResidualMLPBlock(nn.Module):
-    def __init__(self, residual_dim, hidden_dim, dropout, learnable_skip):
+    def __init__(self, residual_dim, hidden_dim, dropout, learnable_skip, no_norm=False):
         """
         Args:
             dim (int): Input and output dimension.
             hidden_dim (int): Hidden dimension for the MLP.
             dropout (float): Dropout rate.
             learnable_gate (bool): Whether to use a learnable gated skip connection.
+            no_norm (bool): Whether to skip layer normalization. Use this if the input is raw data that hasn't passed through any layer/projection yet.
         """
-        super(self).__init__()
-        self.layernorm = nn.LayerNorm(residual_dim)
+        super().__init__()
+        if no_norm:
+            self.layernorm = nn.Identity()
+        else:
+            self.layernorm = nn.LayerNorm(residual_dim)
         self.fc1 = nn.Linear(residual_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.gelu = nn.GELU()
@@ -40,7 +44,7 @@ class ResidualAttentionBlock(nn.Module):
             dropout (float): Dropout rate for attention.
             learnable_skip (bool): Whether to use a learnable gated skip connection.
         """
-        super(self).__init__()
+        super().__init__()
         self.layernorm = nn.LayerNorm(embed_dim)
         self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         if learnable_skip:
@@ -56,7 +60,7 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip):
+    def __init__(self, embed_dim, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip):
         """
         Args:
             embed_dim (int): Embedding dimension.
@@ -66,9 +70,9 @@ class TransformerBlock(nn.Module):
             mlp_dropout (float): Dropout rate for MLP.
             learnable_skip (bool): Whether to use a learnable gated skip connection.
         """
-        super(self).__init__()
+        super().__init__()
         self.attention = ResidualAttentionBlock(embed_dim, num_heads, attn_dropout, learnable_skip)
-        self.mlp = ResidualMLPBlock(embed_dim, int(embed_dim * mlp_dim_factor), mlp_dropout, learnable_skip)
+        self.mlp = ResidualMLPBlock(embed_dim, int(embed_dim * fcn_dim_factor), fcn_dropout, learnable_skip)
 
     def forward(self, x):
         h = self.attention(x)

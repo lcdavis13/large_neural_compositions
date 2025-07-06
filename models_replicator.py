@@ -48,7 +48,7 @@ class ReplicatorLinear(nn.Module):
         self.USES_ODEINT = True
         super().__init__()
 
-        self.core_model = core.Linear(data_dim, data_dim)
+        self.core_model = core.Linear(data_dim)
         self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
 
     def forward(self, t, x):
@@ -108,7 +108,7 @@ class ReplicatorResidualMLP(nn.Module):
     
 
 class ReplicatorTransformer(nn.Module):
-    def __init__(self, data_dim, embed_dim, enrich_blocks, fitness_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip):
+    def __init__(self, data_dim, embed_dim, enrich_blocks, fitness_blocks, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
         super().__init__()
@@ -117,18 +117,18 @@ class ReplicatorTransformer(nn.Module):
             embed_dim=embed_dim,
             num_blocks=enrich_blocks,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout, 
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
             learnable_skip=learnable_skip,
         )
         self.fitness_model = core.Transformer(
             embed_dim=embed_dim,
             num_blocks=fitness_blocks,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout,
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
             learnable_skip=learnable_skip,
         )
         self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
@@ -167,7 +167,7 @@ class ReplicatorTransformer(nn.Module):
 class ReplicatorWeightedAttention_NoXEncode(nn.Module):
     def __init__(
             self, data_dim, embed_dim, enrich_blocks, num_heads, 
-            mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip
+            fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip
         ):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
@@ -177,18 +177,18 @@ class ReplicatorWeightedAttention_NoXEncode(nn.Module):
             embed_dim=embed_dim,
             num_blocks=enrich_blocks,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout, 
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
             learnable_skip=learnable_skip,
         )
 
         self.fitness_model = patt.MultiheadPopulationAttention_NotResidual(
             embed_dim=embed_dim,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout,
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
         )
 
         self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed(
@@ -223,7 +223,7 @@ class ReplicatorWeightedAttention_NoXEncode(nn.Module):
 class ReplicatorWeightedAttention(nn.Module):
     def __init__(
             self, data_dim, embed_dim, enrich_blocks, fitness_blocks, 
-            num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip
+            num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip
         ):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
@@ -233,9 +233,9 @@ class ReplicatorWeightedAttention(nn.Module):
             embed_dim=embed_dim,
             num_blocks=enrich_blocks,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout, 
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
             learnable_skip=learnable_skip,
         )
 
@@ -245,9 +245,9 @@ class ReplicatorWeightedAttention(nn.Module):
         fitness_model_head = patt.MultiheadPopulationAttention_NotResidual(
             embed_dim=embed_dim,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout,
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
         )
 
         if fitness_blocks > 1:
@@ -255,16 +255,16 @@ class ReplicatorWeightedAttention(nn.Module):
                     embed_dim=embed_dim,
                     num_blocks=fitness_blocks - 1,
                     num_heads=num_heads,
-                    mlp_dim_factor=mlp_dim_factor,
+                    fcn_dim_factor=fcn_dim_factor,
                     attn_dropout=attn_dropout,
-                    mlp_dropout=mlp_dropout,
+                    fcn_dropout=fcn_dropout,
                     learnable_skip=learnable_skip,
                 )
             self.fitness_model = nn.ModuleList([ode_transformer, fitness_model_head])
         else:
             self.fitness_model = fitness_model_head
 
-        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed(
             fitness_fn=self.fitness_model,
             data_dim=data_dim,
             embed_dim=embed_dim,

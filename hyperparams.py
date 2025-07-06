@@ -6,18 +6,24 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
 
     hpbuilder.add_param("model_name", 
                         # "junk", 
-                        # 'baseline-ConstSoftmax',
-                        # 'baseline-SLPMultSoftmax',
-                        'cNODE1',
-                        # 'cNODE2',
-                        # 'transformSoftmax',
-                        # 'transformShaped-AbundEncoding',
-                        # 'transformRZShaped',
-                        # 'canODE-FitMat',
-                        # 'canODE-attendFit',
-                        # "canODE-FitMat-AbundEncoding", 
-                        # 'cNODE-hourglass',
-                        # 'baseline-cNODE0',
+                        # 'cNODE1', 
+                        # 'EmbeddedSimplexIdentity',
+                        # 'EmbeddedReplicatorIdentity',
+                        # 'Constant',
+                        # 'SimplexConstant',
+                        # 'ReplicatorConstant',
+                        # 'Linear',
+                        # 'SimplexLinear',
+                        # 'ReplicatorLinear',
+                        # 'ShallowMLP',
+                        # 'SimplexShallowMLP',
+                        # 'ReplicatorShallowMLP',
+                        # 'ResidualMLP',
+                        # 'SimplexResidualMLP',
+                        # 'ReplicatorResidualMLP',
+                        # 'SimplexTransformer',
+                        # 'ReplicatorTransformer',
+                        'ReplicatorWeightedAttention',
                         help="model(s) to run")
 
     # data params
@@ -47,7 +53,9 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         category=datacat, help="number of data samples to use, -1 for all")
     hpbuilder.add_param("kfolds", 5, 
                         category=datacat, help="how many data folds, -1 for leave-one-out. If data_validation_samples is <= 0, K-Fold cross-validation will be used. The total samples will be determined by data_subset and divided into folds for training and validation.")
-    hpbuilder.add_param("whichfold", -1, 
+    hpbuilder.add_param("whichfold", 
+                        # -1,
+                        0,  
                         category=datacat, help="which fold to run, -1 for all")
     hpbuilder.add_param("data_validation_samples", 100,
                         category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
@@ -80,10 +88,11 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         category=config_cat)
     
     # experiment params
-    hpbuilder.add_param("epochs", 
+    hpbuilder.add_param("epochs",
+                        2.0,  
                         # 6, 20, 64, 200, 
                         # 64, 
-                        25.0, 
+                        # 25.0, 
                         # 300, 
                         # 200, 
                         help="maximum number of epochs")
@@ -146,7 +155,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder.add_param("noise", 
                         0.0,
                         # 0.01,
-                        0.032,
+                        # 0.032,
                         # 0.1,
                         help="noise level")
     
@@ -179,7 +188,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         help="dropout rate")
     hpbuilder.add_param("num_heads", 16, 
                         help="number of attention heads in transformer-based models")
-    hpbuilder.add_param("fcn_dim_multiplier", 
+    hpbuilder.add_param("fcn_dim_factor", 
                         4.0, 
                         help="dim multiplier for FCN sublayer in transformer blocks, relative to embedding dimension")
     hpbuilder.add_param("attn_dropout", 

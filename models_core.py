@@ -74,8 +74,8 @@ class ResidualMLP(nn.Module):
         """
         super().__init__()
         self.blocks = nn.ModuleList([
-            blocks.ResidualMLPBlock(residual_dim=data_dim, hidden_dim=hidden_dim, dropout=dropout, learnable_skip=learnable_skip)
-            for _ in range(num_blocks)
+            blocks.ResidualMLPBlock(residual_dim=data_dim, hidden_dim=hidden_dim, dropout=dropout, learnable_skip=learnable_skip, no_norm=(i<1))
+            for i in range(num_blocks)
         ])
         
     def forward(self, x):
@@ -99,9 +99,9 @@ class Transformer(nn.Module):
                  embed_dim: int, 
                  num_blocks: int, 
                  num_heads: int, 
-                 mlp_dim_factor: float, 
+                 fcn_dim_factor: float, 
                  attn_dropout: float, 
-                 mlp_dropout: float, 
+                 fcn_dropout: float, 
                  learnable_skip: bool):
         """
         A transformer composed of stacked TransformerBlocks. Each block consists of multihead attention followed by MLP block.
@@ -120,9 +120,9 @@ class Transformer(nn.Module):
             blocks.TransformerBlock(
                 embed_dim=embed_dim,
                 num_heads=num_heads,
-                mlp_dim_factor=mlp_dim_factor,
+                fcn_dim_factor=fcn_dim_factor,
                 attn_dropout=attn_dropout,
-                mlp_dropout=mlp_dropout,
+                fcn_dropout=fcn_dropout,
                 learnable_skip=learnable_skip
             ) for _ in range(num_blocks)
         ])

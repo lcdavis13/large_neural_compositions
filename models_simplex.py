@@ -40,7 +40,7 @@ class SimplexLinear(nn.Module):
     def __init__(self, data_dim):
         super().__init__()
 
-        self.core_model = core.Linear(data_dim, data_dim)
+        self.core_model = core.Linear(data_dim)
         self.simplex_model = simpwrap.SimplexModel(self.core_model)
 
     def forward(self, x):
@@ -57,8 +57,8 @@ class SimplexShallowMLP(nn.Module):
         )
         self.simplex_model = simpwrap.SimplexModel(self.core_model)
     
-    def forward(self, x, ids):
-        return self.simplex_model(x, ids)
+    def forward(self, x):
+        return self.simplex_model(x)
     
     @classmethod
     def init_1d(cls, width, **kwargs):
@@ -83,8 +83,8 @@ class SimplexResidualMLP(nn.Module):
         )
         self.simplex_model = simpwrap.SimplexModel(self.core_model)
     
-    def forward(self, x, ids):
-        return self.simplex_model(x, ids)
+    def forward(self, x):
+        return self.simplex_model(x)
     
     @classmethod
     def init_2d(cls, width, depth, **kwargs):
@@ -98,7 +98,7 @@ class SimplexResidualMLP(nn.Module):
     
 
 class SimplexTransformer(nn.Module):
-    def __init__(self, data_dim, embed_dim, num_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip):
+    def __init__(self, data_dim, embed_dim, num_blocks, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip):
         self.USES_CONDENSED = True
         
         super().__init__()
@@ -107,9 +107,9 @@ class SimplexTransformer(nn.Module):
             embed_dim=embed_dim,
             num_blocks=num_blocks,
             num_heads=num_heads,
-            mlp_dim_factor=mlp_dim_factor,
+            fcn_dim_factor=fcn_dim_factor,
             attn_dropout=attn_dropout,
-            mlp_dropout=mlp_dropout,
+            fcn_dropout=fcn_dropout,
             learnable_skip=learnable_skip
         )
         self.simplex_model = simpwrap.SimplexModel_IdEmbed(

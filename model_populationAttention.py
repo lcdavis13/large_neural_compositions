@@ -1,58 +1,58 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import math
 from model_commonblocks import ResidualMLPBlock
-from model_maskedSoftmax import MaskedSoftmax
+from model_maskedSoftmax import MaskedSoftmax,WeightedSoftmax
 from model_normedLog import normed_log
 import model_skipgates as skips
 
 
 class PopulationAttentionDispersed(nn.Module):
-    def __init__(self, dropout):
+    def __init__(self, dim_qk: int, dropout: float):
         super().__init__()
+        self.scale = dim_qk ** 0.5
         self.dropout = nn.Dropout(dropout)
+        self.wsoftmax = WeightedSoftmax(dim=-2)
 
     def forward(self, Q, K, V, x):
         """
-        Q, K: (..., L, D_q)
-        V:    (..., L, D_v)
-        x:    (..., L)
+        Q, K: (B, H, L, d_k)
+        V: (B, H, L, d_v)
+        x: (B, L)
         Returns:
-            O: (..., L, D_v)
+            O: (B, H, L, d_v)
         """
-        D_k = K.size(-1)
+        B, H, L, _ = K.shape
+        x_shaped = x.unsqueeze(1).unsqueeze(-1)  # (B, 1, L, 1)
 
-        # (..., L, L)
-        S = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(D_k, dtype=Q.dtype, device=Q.device))
+        # Compute attention scores: S = Q @ K^T / sqrt(d_k)
+        S = torch.matmul(Q, K.transpose(-2, -1)) / self.scale  # (B, H, L, L)
 
-        # (..., 1, 1)
-        S_max = S.amax(dim=(-2, -1), keepdim=True)
-        S_shifted = S - S_max
+        # Column-wise weighted softmax. x is not exponentiated to avoid issues with zeroes.
+        A = self.wsoftmax(S, x_shaped)  # (B, H, L, L)
 
-        # (..., L, L)
-        E = torch.exp(S_shifted)
+        # Apply dropout to attention weights
+        A = self.dropout(A)  # This is the standard place to apply dropout in attention mechanisms, although it can cause the attention weights to deviate from the simplex, especially if sparse / high entropy.
 
-        # (..., L, L)
-        numerator = E * x.unsqueeze(-2)
-        denom = (E * x.unsqueeze(-1)).sum(dim=-2)  # (..., L)
-        A = numerator / denom.unsqueeze(-2)        # (..., L, L)
+        # Multiply V by x_j (elementwise): broadcast x to (B, 1, L, 1)
+        V_scaled = x_shaped * V  # (B, H, L, d_v)
 
-        A = self.dropout(A)
-        O = torch.matmul(A, V)  # (..., L, D_v)
+        # Weighted sum: (B, H, L, L) @ (B, H, L, d_v) → (B, H, L, d_v)
+        O = torch.matmul(A, V_scaled)
 
         return O
 
 
 class PopulationAttention(nn.Module):
-    def __init__(self, dropout):
+    def __init__(self, dim_qk: int, dropout):
         super().__init__()
+        self.scale = dim_qk ** 0.5
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, Q, K, V, x):
         # Q, K, V shape: (B, H, L, D)
         d_k = Q.size(-1)
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)  # (B, H, L, L)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale  # (B, H, L, L)
         scores = self.dropout(scores) # Apply dropout in same place as vanilla attention, except there's no softmax before it.
 
         # attn_weights = F.softmax(scores, dim=-1)
@@ -63,7 +63,9 @@ class PopulationAttention(nn.Module):
 
 
 class MultiheadPopulationAttention_NotResidual(nn.Module):
-    def __init__(self, embed_dim, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, dim_qk=None, dim_v=None, dispersion=True):
+    def __init__(self, embed_dim, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, dim_qk=None, dim_v=None, dispersion=True):
+        self.USES_CONDENSED = True
+        self.USES_ODEINT = True
         super().__init__()
 
         self.embed_dim = embed_dim
@@ -85,16 +87,17 @@ class MultiheadPopulationAttention_NotResidual(nn.Module):
         self.v_proj = nn.Linear(embed_dim, dim_v) 
 
         if dispersion:
-            self.attention = PopulationAttentionDispersed(attn_dropout)
+            self.attention = PopulationAttentionDispersed(self.head_qk_dim, attn_dropout)
         else:
-            self.attention = PopulationAttention(attn_dropout)
+            self.attention = PopulationAttention(self.head_qk_dim, attn_dropout)
 
         # MLP
-        self.fcn1 = nn.Linear(dim_v, mlp_dim_factor * dim_v)
-        self.dropout = nn.Dropout(mlp_dropout)
+        hidden_dim = int(fcn_dim_factor * dim_v)
+        self.fcn1 = nn.Linear(dim_v, hidden_dim)
+        self.dropout = nn.Dropout(fcn_dropout)
         self.gelu = nn.GELU()
-        self.fcn2 = nn.Linear(mlp_dim_factor * dim_v, 1)  
-        
+        self.fcn2 = nn.Linear(hidden_dim, 1)
+
 
     def forward(self, x, z):
         B, L, _ = z.size()
@@ -114,6 +117,7 @@ class MultiheadPopulationAttention_NotResidual(nn.Module):
         y = self.dropout(y)
         y = self.gelu(y)
         y = self.fcn2(y)
+        y = y.squeeze(-1)  # Squeeze last dimension to get shape (B, L)
 
         return y
 
@@ -236,6 +240,7 @@ class PopulationTransformer(nn.Module):
         for layer in self.layers:
             h = layer(x, h)
         y = self.final_layer(h)
+        y = y.squeeze(-1)  # Squeeze last dimension to get shape (B, L)
         return y
     
 
