@@ -44,6 +44,42 @@ class PopulationAttentionDispersed(nn.Module):
 
 
 class PopulationAttention(nn.Module):
+    def __init__(self, dim_qk: int, dropout: float):
+        super().__init__()
+        self.scale = dim_qk ** 0.5
+        self.dropout = nn.Dropout(dropout)
+        self.softmax = F.softmax(dim=-1)
+
+    def forward(self, Q, K, V, x):
+        """
+        Q, K: (B, H, L, d_k)
+        V: (B, H, L, d_v)
+        x: (B, L)
+        Returns:
+            O: (B, H, L, d_v)
+        """
+        B, H, L, _ = K.shape
+        x_shaped = x.unsqueeze(1).unsqueeze(-1)  # (B, 1, L, 1)
+
+        # Compute attention scores: S = Q @ K^T / sqrt(d_k)
+        S = torch.matmul(Q, K.transpose(-2, -1)) / self.scale  # (B, H, L, L)
+
+        # vanilla softmax
+        A = self.softmax(S)  # (B, H, L, L)
+
+        # Apply dropout to attention weights
+        A = self.dropout(A)  # This is the standard place to apply dropout in attention mechanisms, although it can cause the attention weights to deviate from the simplex, especially if sparse / high entropy.
+
+        # Multiply V by x_j (elementwise): broadcast x to (B, 1, L, 1)
+        V_scaled = x_shaped * V  # (B, H, L, d_v)
+
+        # Weighted sum: (B, H, L, L) @ (B, H, L, d_v) → (B, H, L, d_v)
+        O = torch.matmul(A, V_scaled)
+
+        return O
+
+
+class PopulationAttention_NoSoftmax(nn.Module):
     def __init__(self, dim_qk: int, dropout):
         super().__init__()
         self.scale = dim_qk ** 0.5
@@ -138,10 +174,10 @@ class MultiheadPopulationAttention(nn.Module):
         self.o_proj = nn.Linear(embed_dim, embed_dim)
 
         if dispersion:
-            self.attention = PopulationAttentionDispersed(attn_dropout)
+            self.attention = PopulationAttentionDispersed(self.head_dim, attn_dropout)
         else:
-            self.attention = PopulationAttention(attn_dropout)
-        
+            self.attention = PopulationAttention(self.head_dim, attn_dropout)
+
     def forward(self, x, z):
         B, L, _ = z.size()
 
@@ -161,7 +197,7 @@ class MultiheadPopulationAttention(nn.Module):
 
 
 class ResidualPopulationAttentionBlock(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout, learnable_skip, dispersion=True):
+    def __init__(self, embed_dim, num_heads, attn_dropout, learnable_skip, dispersion=True):
         """
         Args:
             embed_dim (int): Embedding dimension.
@@ -170,9 +206,9 @@ class ResidualPopulationAttentionBlock(nn.Module):
             learnable_skip (bool): Whether to use a learnable gated skip connection.
             dispersion (bool): Use PopulationAttentionDispersed if True, otherwise use PopulationAttention.
         """
-        super(self).__init__()
+        super().__init__()
         self.layernorm = nn.LayerNorm(embed_dim)
-        self.attention = MultiheadPopulationAttention(embed_dim, num_heads, dropout=dropout, dispersion=dispersion)
+        self.attention = MultiheadPopulationAttention(embed_dim, num_heads, attn_dropout=attn_dropout, dispersion=dispersion)
         if learnable_skip:
             self.skip = skips.GateSkip()
         else:
@@ -180,7 +216,7 @@ class ResidualPopulationAttentionBlock(nn.Module):
 
     def forward(self, x, z):
         h = self.layernorm(z)
-        attn_output, _ = self.attention(h, h, h, x)
+        attn_output = self.attention(x, h)
         h = self.skip(attn_output, z)
         return h
     
@@ -245,31 +281,35 @@ class PopulationTransformer(nn.Module):
     
 
 class IterativePopulationTransformer(nn.Module):
-    def __init__(self, embed_dim, num_subblocks, num_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip, dispersion=True):
+    def __init__(self, embed_dim, num_blocks, pop_block_depth, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip, dispersion=True):
+        self.USES_CONDENSED = True
         """
         A stack of PopulationTransformers, each of which residually updates the population in logspace and then softmaxes it to return to a population.
         """
         super().__init__()
-        self.num_steps = num_blocks
+
+        num_pop_blocks = num_blocks // pop_block_depth
+
+        self.num_steps = num_pop_blocks
         self.pop_transforms = nn.ModuleList([
             PopulationTransformer(
                 embed_dim=embed_dim,
-                num_blocks=num_subblocks,
+                num_blocks=pop_block_depth,
                 num_heads=num_heads,
-                mlp_dim_factor=mlp_dim_factor,
+                mlp_dim_factor=fcn_dim_factor,
                 attn_dropout=attn_dropout,
-                mlp_dropout=mlp_dropout,
+                mlp_dropout=fcn_dropout,
                 learnable_skip=learnable_skip,
                 dispersion=dispersion
-            ) for _ in range(num_blocks)
+            ) for _ in range(num_pop_blocks)
         ])
         if learnable_skip:
             self.skips = nn.ModuleList([
-                skips.GateSkip() for _ in range(num_blocks)
+                skips.GateSkip() for _ in range(num_pop_blocks)
             ])
         else:
             self.skips = nn.ModuleList([
-                skips.StaticSkip() for _ in range(num_blocks)
+                skips.StaticSkip() for _ in range(num_pop_blocks)
             ])
         self.masked_softmax = MaskedSoftmax(dim=-1)
     
@@ -294,6 +334,8 @@ class IterativePopulationTransformer(nn.Module):
 
             # Apply softmax to get linear-space (relative) population abundances
             x = self.masked_softmax(logx, x)
+        
+        return x
 
 
 # Note: pytorch and original AIAYN paper do dropout after the softmax inside the attention module, before multiplying against V. 

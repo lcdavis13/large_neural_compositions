@@ -1,5 +1,5 @@
 from typing import Type
-import models_cNODE1
+import models_cNODE
 import models_core
 import models_replicator
 import models_simplex
@@ -10,7 +10,12 @@ import torch.nn as nn
 
 def get_model_classes():
     models = {
-        'cNODE1': models_cNODE1.cNODE1,
+        'cNODE1': models_cNODE.cNODE1,
+        'cNODE1+1-proper': models_cNODE.glv1NODE,
+        'cNODE1+1-colFrozen': models_cNODE.glv2NODE,
+        'cNODE1+1-noFreeze': models_cNODE.envNODE,
+        'cNODE2': models_cNODE.cNODE2,
+        'cNODE2Improved': models_cNODE.cNODE2_NonLinear_Biased,
 
         # identity
         # Don't include vanilla "identity" since it doesn't need training. Tested separately in the benchmarks.
@@ -34,6 +39,11 @@ def get_model_classes():
         'SimplexShallowMLP': models_simplex.SimplexShallowMLP,
         'ReplicatorShallowMLP': models_replicator.ReplicatorShallowMLP,
 
+        # slightly-less-shallow MLPs
+        'ShallowMLP2': models_core.ShallowMLP2,
+        'SimplexShallowMLP2': models_simplex.SimplexShallowMLP2,
+        'ReplicatorShallowMLP2': models_replicator.ReplicatorShallowMLP2,
+
         # Residual MLPs
         'ResidualMLP': models_core.ResidualMLP,
         'SimplexResidualMLP': models_simplex.SimplexResidualMLP,
@@ -44,9 +54,9 @@ def get_model_classes():
         'SimplexTransformer': models_simplex.SimplexTransformer,
         'ReplicatorTransformer': models_replicator.ReplicatorTransformer,
 
-        # Weighted Attention model
-        # Currently only makes sense as a replicator model
-        'ReplicatorWeightedAttention': models_replicator.ReplicatorWeightedAttention,
+        # Population-Weighted Attention models
+        'ReplicatorPopTransformer': models_replicator.ReplicatorPopTransformer,
+        'SimplexPopTransformer': models_simplex.SimplexPopTransformer,
 
         # Should include old versions of custom models for comparison? transformSoftmax, canODE-FitMat, canODE-attendFit
     }

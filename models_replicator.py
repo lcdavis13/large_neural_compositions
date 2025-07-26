@@ -6,16 +6,18 @@ from introspection import construct
     
 
 class EmbeddedReplicatorIdentity(nn.Module):
-    def __init__(self, data_dim, embed_dim):
+    def __init__(self, data_dim, embed_dim, use_logx, learnable_skip):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
         super().__init__()
 
         self.fitness_model = core.Identity()
         self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
-            fitness_fn=self.fitness_model,
+            core_fitness_fn=self.fitness_model,
             data_dim=data_dim,
             embed_dim=embed_dim,
+            use_logx=use_logx,
+            learnable_skip=learnable_skip
         )
 
     def forward(self, t, x, ids):
@@ -32,39 +34,65 @@ class EmbeddedReplicatorIdentity(nn.Module):
     
 
 class ReplicatorConstant(nn.Module):
-    def __init__(self, data_dim):
+    def __init__(self, data_dim, learnable_skip):
         self.USES_ODEINT = True
         super().__init__()
 
         self.core_model = core.LearnedConstantVector(data_dim)
-        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
+        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model, learnable_skip=learnable_skip)
 
     def forward(self, t, x):
         return self.replicator_model(t, x)
     
 
 class ReplicatorLinear(nn.Module):
-    def __init__(self, data_dim):
+    def __init__(self, data_dim, learnable_skip):
         self.USES_ODEINT = True
         super().__init__()
 
         self.core_model = core.Linear(data_dim)
-        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
+        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model, learnable_skip=learnable_skip)
 
     def forward(self, t, x):
         return self.replicator_model(t, x)
     
 
 class ReplicatorShallowMLP(nn.Module):
-    def __init__(self, data_dim, hidden_dim):
+    def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
         self.USES_ODEINT = True
         super().__init__()
 
         self.core_model = core.ShallowMLP(
             data_dim=data_dim,
-            hidden_dim=hidden_dim
+            hidden_dim=hidden_dim,
+            dropout=dropout
         )
-        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
+        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model, learnable_skip=learnable_skip)
+
+    def forward(self, t, x):
+        return self.replicator_model(t, x)
+    
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
+    
+
+class ReplicatorShallowMLP2(nn.Module):
+    def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
+        self.USES_ODEINT = True
+        super().__init__()
+
+        self.core_model = core.ShallowMLP2(
+            data_dim=data_dim,
+            hidden_dim=hidden_dim,
+            dropout=dropout
+        )
+        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model, learnable_skip=learnable_skip)
 
     def forward(self, t, x):
         return self.replicator_model(t, x)
@@ -91,7 +119,7 @@ class ReplicatorResidualMLP(nn.Module):
             dropout=dropout,
             learnable_skip=learnable_skip
         )
-        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model)
+        self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model, learnable_skip=learnable_skip)
 
     def forward(self, t, x):
         return self.replicator_model(t, x)
@@ -108,20 +136,24 @@ class ReplicatorResidualMLP(nn.Module):
     
 
 class ReplicatorTransformer(nn.Module):
-    def __init__(self, data_dim, embed_dim, enrich_blocks, fitness_blocks, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip):
+    def __init__(self, data_dim, embed_dim, enrich_blocks, fitness_blocks, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip, use_logx): 
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
+ 
         super().__init__()
 
-        self.enrich_model = core.Transformer(
-            embed_dim=embed_dim,
-            num_blocks=enrich_blocks,
-            num_heads=num_heads,
-            fcn_dim_factor=fcn_dim_factor,
-            attn_dropout=attn_dropout, 
-            fcn_dropout=fcn_dropout,
-            learnable_skip=learnable_skip,
-        )
+        if enrich_blocks > 0:
+            self.enrich_model = core.Transformer(
+                embed_dim=embed_dim,
+                num_blocks=enrich_blocks,
+                num_heads=num_heads,
+                fcn_dim_factor=fcn_dim_factor,
+                attn_dropout=attn_dropout, 
+                fcn_dropout=fcn_dropout,
+                learnable_skip=learnable_skip,
+            )
+        else:
+            self.enrich_model = None
         self.fitness_model = core.Transformer(
             embed_dim=embed_dim,
             num_blocks=fitness_blocks,
@@ -132,10 +164,12 @@ class ReplicatorTransformer(nn.Module):
             learnable_skip=learnable_skip,
         )
         self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
-            fitness_fn=self.fitness_model,
+            core_fitness_fn=self.fitness_model,
             data_dim=data_dim,
             embed_dim=embed_dim,
-            enrich_fn=self.enrich_model
+            enrich_fn=self.enrich_model, 
+            use_logx=use_logx, 
+            learnable_skip=learnable_skip
         )
 
     def forward(self, t, x, ids):
@@ -173,15 +207,18 @@ class ReplicatorWeightedAttention_NoXEncode(nn.Module):
         self.USES_ODEINT = True
         super().__init__()
 
-        self.enrich_model = core.Transformer(
-            embed_dim=embed_dim,
-            num_blocks=enrich_blocks,
-            num_heads=num_heads,
-            fcn_dim_factor=fcn_dim_factor,
-            attn_dropout=attn_dropout, 
-            fcn_dropout=fcn_dropout,
-            learnable_skip=learnable_skip,
-        )
+        if enrich_blocks > 0:
+            self.enrich_model = core.Transformer(
+                embed_dim=embed_dim,
+                num_blocks=enrich_blocks,
+                num_heads=num_heads,
+                fcn_dim_factor=fcn_dim_factor,
+                attn_dropout=attn_dropout, 
+                fcn_dropout=fcn_dropout,
+                learnable_skip=learnable_skip,
+            )
+        else:
+            self.enrich_model = None
 
         self.fitness_model = patt.MultiheadPopulationAttention_NotResidual(
             embed_dim=embed_dim,
@@ -195,7 +232,8 @@ class ReplicatorWeightedAttention_NoXEncode(nn.Module):
             fitness_fn=self.fitness_model,
             data_dim=data_dim,
             embed_dim=embed_dim,
-            enrich_fn=self.enrich_model
+            enrich_fn=self.enrich_model,
+            learnable_skip=learnable_skip,
         )
 
     def forward(self, t, x, ids):
@@ -220,7 +258,7 @@ class ReplicatorWeightedAttention_NoXEncode(nn.Module):
         return construct(cls, kwargs, override), override
     
 
-class ReplicatorWeightedAttention(nn.Module):
+class ReplicatorPopTransformer(nn.Module):
     def __init__(
             self, data_dim, embed_dim, enrich_blocks, fitness_blocks, 
             num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip
@@ -229,15 +267,18 @@ class ReplicatorWeightedAttention(nn.Module):
         self.USES_ODEINT = True
         super().__init__()
 
-        self.enrich_model = core.Transformer(
-            embed_dim=embed_dim,
-            num_blocks=enrich_blocks,
-            num_heads=num_heads,
-            fcn_dim_factor=fcn_dim_factor,
-            attn_dropout=attn_dropout, 
-            fcn_dropout=fcn_dropout,
-            learnable_skip=learnable_skip,
-        )
+        if enrich_blocks > 0:
+            self.enrich_model = core.Transformer(
+                embed_dim=embed_dim,
+                num_blocks=enrich_blocks,
+                num_heads=num_heads,
+                fcn_dim_factor=fcn_dim_factor,
+                attn_dropout=attn_dropout, 
+                fcn_dropout=fcn_dropout,
+                learnable_skip=learnable_skip,
+            )
+        else:
+            self.enrich_model = None
 
         # Fitness model is a stack of Transformer blocks (different from enrichment blocks b/c the abundance encodings are added to the embeddings) 
         # with Weighted attention block at the end. Since this isn't useful for non-replicator models, it isn't defined externally like the other models.
@@ -268,7 +309,8 @@ class ReplicatorWeightedAttention(nn.Module):
             fitness_fn=self.fitness_model,
             data_dim=data_dim,
             embed_dim=embed_dim,
-            enrich_fn=self.enrich_model
+            enrich_fn=self.enrich_model,
+            learnable_skip=learnable_skip,
         )
 
     def forward(self, t, x, ids):

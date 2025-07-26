@@ -5,8 +5,10 @@ import os
 try:
     if os.getenv("SOLVER") == "torchdiffeq":
         from torchdiffeq import odeint as torchdiffeq_odeint
+        import torch
     elif os.getenv("SOLVER") == "torchdiffeq_memsafe":
         from torchdiffeq import odeint_adjoint as torchdiffeq_odeint
+        import torch
     elif os.getenv("SOLVER") in ["torchode", "torchode_memsafe"]:
         import torchode as to
     elif os.getenv("SOLVER") == "trapezoid":
@@ -17,7 +19,7 @@ except ImportError as e:
     raise ImportError(f"Error importing specified solver package: {e}")
 
 
-def odeint(func, y0, t):
+def odeint(func, y0, t, adjoint_params=()):
     """
     Dynamically selects an ODE solver based on the SOLVER environment variable, and solves the fixed point ODE.
 
@@ -26,9 +28,19 @@ def odeint(func, y0, t):
     
     solver = os.getenv("SOLVER")
     
-    if solver == "torchdiffeq" or solver == "torchdiffeq_memsafe":
+    if solver == "torchdiffeq":
         # Using torchdiffeq's odeint or odeint_adjoint
+        # convert t to tensor
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t, dtype=y0.dtype, device=y0.device)
         return torchdiffeq_odeint(func, y0, t)
+    
+    elif solver == "torchdiffeq_memsafe":
+        # Using torchdiffeq's odeint or odeint_adjoint
+        # convert t to tensor
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t, dtype=y0.dtype, device=y0.device)
+        return torchdiffeq_odeint(func, y0, t, adjoint_params=adjoint_params)
     
     elif solver == "torchode" or solver == "torchode_memsafe":
         # Attempting to solve a bug where after hundreds of epochs it decides to not track gradients anymore

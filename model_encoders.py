@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+from model_normedLog import normed_log
     
 
 class IdEmbedder(nn.Module):
@@ -15,7 +16,7 @@ class IdEmbedder(nn.Module):
     
 
 class AbundanceEncoder_LearnedFourier(nn.Module):
-    def __init__(self, encode_dim: int, num_frequencies: int = None):
+    def __init__(self, encode_dim: int, use_log: bool, num_frequencies: int = None):
         """
         encode_dim: Output encoding dimension
         num_frequencies: Number of Fourier feature pairs to extract. Defaults to encode_dim // 2
@@ -24,6 +25,7 @@ class AbundanceEncoder_LearnedFourier(nn.Module):
         super().__init__()
         self.encode_dim = encode_dim
         self.num_frequencies = num_frequencies if num_frequencies is not None else encode_dim // 2
+        self.use_log = use_log
 
         # Initialize W_r ∈ R^{num_frequencies × 1} with exponentially increasing frequencies
         initial_frequencies = torch.arange(self.num_frequencies).unsqueeze(-1)  # Shape: [num_frequencies, 1]
@@ -40,6 +42,9 @@ class AbundanceEncoder_LearnedFourier(nn.Module):
         x: Tensor of shape [*, 1] or [*] where each element is a relative abundance value.
         Returns: Tensor of shape [*, encode_dim]
         """
+        if self.use_log:
+            x = normed_log(x)
+
         if x.ndim == 0:
             x = x.unsqueeze(0)
         if x.size(-1) != 1:

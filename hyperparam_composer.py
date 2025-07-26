@@ -6,6 +6,8 @@ from typing import Any, List, Dict, Optional
 from dotsy import dicy
 import random
 
+DESCRIPTION_PARAM_MAX = 10
+
 def str2bool(value):
     if isinstance(value, bool):
         return value
@@ -197,13 +199,30 @@ class HyperparameterComposer:
             for name, (raw_value, value_type) in random_param_flags.items():
                 combination[name] = parse_random_value(raw_value, value_type)
 
-            # Add configid
-            configid_key = f"{category}_configid" if category else "configid"
-            combination[configid_key] = idx
-
-            combination = dicy(combination)  # Convert to dotsy.dicy object
-
+            combination = dicy(combination)
             combinations.append(combination)
+
+        # Identify varying parameters for descriptions
+        varying_params = []
+        for name, values in fixed_param_lists.items():
+            if name in random_param_flags:
+                varying_params.append(name)
+            elif len(set(values)) > 1:
+                varying_params.append(name)
+
+        use_descriptive_config = len(varying_params) <= DESCRIPTION_PARAM_MAX
+
+        for idx, combo in enumerate(combinations):
+            config_entries = [f"{name}:{combo[name]}" for name in varying_params]
+            config_str = ", ".join(config_entries)
+
+            configid_key = f"{category}_configid" if category else "configid"
+            config_key = f"{category}_config" if category else "config"
+
+            # Add descriptive config or fallback to configid
+            combo[config_key] = config_str if use_descriptive_config else str(idx)
+            # Now add the configid at the end
+            combo[configid_key] = idx
 
         return combinations
 
@@ -255,6 +274,7 @@ class HyperparameterComposer:
         # If outermost category, we want to use all CSV rows immediately (this is the only time it will be called)
         if outermost:
             indices = list(range(len(self.csv_data)))
+            
         # Otherwise, we only want to grab the current row from CSV.
         else:
             # figure out what the innermost category is

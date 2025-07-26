@@ -2,15 +2,17 @@ import torch.nn as nn
 from introspection import construct
 import models_core as core
 import model_wrappers_simplex as simpwrap
+import model_populationAttention as patt
+import model_skipgates as skips
 
 
 class EmbeddedSimplexIdentity(nn.Module):
-    def __init__(self, data_dim, embed_dim):
+    def __init__(self, data_dim, embed_dim, learnable_skip):
         self.USES_CONDENSED = True
         super().__init__()
 
         self.core_model = core.Identity()
-        self.simplex_model = simpwrap.SimplexModel_IdEmbed(self.core_model, data_dim, embed_dim)
+        self.simplex_model = simpwrap.SimplexModel_IdEmbed(self.core_model, data_dim, embed_dim, learnable_skip)
     
     def forward(self, x, ids):
         return self.simplex_model(x, ids)
@@ -37,25 +39,50 @@ class SimplexConstant(nn.Module):
     
     
 class SimplexLinear(nn.Module):
-    def __init__(self, data_dim):
+    def __init__(self, data_dim, learnable_skip):
         super().__init__()
 
         self.core_model = core.Linear(data_dim)
-        self.simplex_model = simpwrap.SimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model, learnable_skip)
 
     def forward(self, x):
         return self.simplex_model(x)
     
 
 class SimplexShallowMLP(nn.Module):
-    def __init__(self, data_dim, hidden_dim):
+    def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
         super().__init__()
 
         self.core_model = core.ShallowMLP(
             data_dim=data_dim,
-            hidden_dim=hidden_dim
+            hidden_dim=hidden_dim,
+            dropout=dropout
         )
-        self.simplex_model = simpwrap.SimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model, learnable_skip)
+    
+    def forward(self, x):
+        return self.simplex_model(x)
+    
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
+    
+
+class SimplexShallowMLP2(nn.Module):
+    def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
+        super().__init__()
+
+        self.core_model = core.ShallowMLP2(
+            data_dim=data_dim,
+            hidden_dim=hidden_dim,
+            dropout=dropout
+        )
+        self.simplex_model = simpwrap.SimplexModel(self.core_model, learnable_skip)
     
     def forward(self, x):
         return self.simplex_model(x)
@@ -81,7 +108,7 @@ class SimplexResidualMLP(nn.Module):
             dropout=dropout,
             learnable_skip=learnable_skip
         )
-        self.simplex_model = simpwrap.SimplexModel(self.core_model)
+        self.simplex_model = simpwrap.SimplexModel(self.core_model, learnable_skip)
     
     def forward(self, x):
         return self.simplex_model(x)
@@ -115,7 +142,8 @@ class SimplexTransformer(nn.Module):
         self.simplex_model = simpwrap.SimplexModel_IdEmbed(
             self.core_model, 
             data_dim, 
-            embed_dim
+            embed_dim, 
+            learnable_skip
         )
     
     def forward(self, x, ids):
@@ -140,3 +168,27 @@ class SimplexTransformer(nn.Module):
         return construct(cls, kwargs, override), override
     
         
+class SimplexPopTransformer(nn.Module):
+    def __init__(self, data_dim, embed_dim, num_blocks, pop_block_depth, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip):
+        self.USES_CONDENSED = True
+        
+        super().__init__()
+
+        self.core_model = patt.IterativePopulationTransformer(
+            embed_dim=embed_dim,
+            num_blocks=num_blocks,
+            pop_block_depth=pop_block_depth,
+            num_heads=num_heads,
+            fcn_dim_factor=fcn_dim_factor,
+            attn_dropout=attn_dropout,
+            fcn_dropout=fcn_dropout,
+            learnable_skip=learnable_skip
+        )
+        self.simplex_model = simpwrap.SimplexModel_IdEmbed_NoDecode(
+            self.core_model, 
+            data_dim, 
+            embed_dim
+        )
+
+    def forward(self, x, ids):
+        return self.simplex_model(x, ids)

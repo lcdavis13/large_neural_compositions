@@ -17,6 +17,9 @@ import loss_function
 import stream_plot as plotstream
 
 
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+
 def override_dict(target_dict, override_dict):
     for key in target_dict:
         if key in override_dict:
@@ -45,6 +48,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cpu')  # force CPU for debugging
     print(device)
 
     hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)

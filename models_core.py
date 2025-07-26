@@ -33,16 +33,48 @@ class LearnedConstantVector(nn.Module):
 
 class ShallowMLP(nn.Module):
     """A simple single-hidden-layer MLP with GELU activation. None of the fancy features of the comparable ResidualMLPBlock."""
-    def __init__(self, data_dim: int, hidden_dim: int):
+    def __init__(self, data_dim: int, hidden_dim: int, dropout: float):
         super().__init__()
         self.fc1 = nn.Linear(data_dim, hidden_dim)
         self.gelu = nn.GELU()
         self.fc2 = nn.Linear(hidden_dim, data_dim)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         x = self.fc1(x)
         x = self.gelu(x)
+        x = self.dropout(x)
         x = self.fc2(x)
+        return x
+    
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "hidden_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
+
+
+class ShallowMLP2(nn.Module):
+    """A simple single-hidden-layer MLP with GELU activation. None of the fancy features of the comparable ResidualMLPBlock."""
+    def __init__(self, data_dim: int, hidden_dim: int, dropout: float):
+        super().__init__()
+        self.fc1 = nn.Linear(data_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, data_dim)
+        self.gelu = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.gelu(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.gelu(x)
+        x = self.dropout(x)
+        x = self.fc3(x)
         return x
     
     @classmethod

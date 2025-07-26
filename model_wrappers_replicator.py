@@ -6,10 +6,13 @@ from ode_solver import odeint
 
 
 class ODEFunc_Replicator_CustomFitness(nn.Module):
-    def __init__(self, fitness_fn):
+    def __init__(self, fitness_fn, learnable_skip):
         super().__init__()
 
-        self.gate = skips.ZeroGate()
+        if learnable_skip:
+            self.gate = skips.ZeroGate()
+        else:
+            self.gate = nn.Identity()
         self.fn = fitness_fn
     
     def forward(self, t, x):
@@ -28,15 +31,19 @@ class ODEFunc_Replicator_CustomFitness(nn.Module):
 
 
 class ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
-    def __init__(self, fitness_fn, embed_dim):
+    def __init__(self, fitness_fn, embed_dim, use_logx, learnable_skip):
         super().__init__()
         
-        self.encode = encoders.AbundanceEncoder_LearnedFourier(embed_dim)
+        self.encode = encoders.AbundanceEncoder_LearnedFourier(embed_dim, use_logx)
 
         self.fn = fitness_fn
 
         self.decode = encoders.Decoder(embed_dim)
-        self.gate = skips.ZeroGate()
+        
+        if learnable_skip:
+            self.gate = skips.ZeroGate()
+        else:
+            self.gate = nn.Identity()
     
     def forward(self, t, x, embeddings):
         # Preprocessing: encode abundances, add to embeddings
@@ -58,24 +65,22 @@ class ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
 
 
 class ODEFunc_Replicator_CustomFitness_IdEmbed(nn.Module):
-    def __init__(self, fitness_fn):
+    def __init__(self, fitness_fn, learnable_skip):
         super().__init__()
 
         self.fn = fitness_fn
 
-        self.gate = skips.ZeroGate()
+        if learnable_skip:
+            self.gate = skips.ZeroGate()
+        else:
+            self.gate = nn.Identity()
     
     def forward(self, t, x, embeddings):
-        print(x.shape)
-        print(embeddings.shape)
-        print(t.shape)
 
         # eval fitness function, passing embeddings for custom handling
         fitness = self.fn(x, embeddings)
         
         # Replicator dynamics
-        print(x.shape)
-        print(fitness.shape)
         xT_fx = torch.sum(x * fitness, dim=-1).unsqueeze(1)  # B x 1 (batched dot product)
         diff = fitness - xT_fx  # B x N
         dxdt = torch.mul(x, diff)  # B x N
@@ -90,12 +95,12 @@ class Replicator_CustomFitness(nn.Module):
     """
     Replicator dynamics with a custom fitness function.
     """
-    def __init__(self, fitness_fn):
+    def __init__(self, fitness_fn, learnable_skip):
         super().__init__()
 
         self.USES_ODEINT = True
 
-        self.ode_func = ODEFunc_Replicator_CustomFitness(fitness_fn)
+        self.ode_func = ODEFunc_Replicator_CustomFitness(fitness_fn, learnable_skip)
     
     def forward(self, t, x):
         y = odeint(self.ode_func, x, t)
@@ -108,7 +113,7 @@ class Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
     "Fitness" function is expected to return the same shape as input, and will be linearly decoded to produce fitnesses.
     An optional enrichment function can be applied to the embeddings before passing them to the fitness function (e.g., a transformer to encode possible OTU interactions before abundance encodings are added).
     """
-    def __init__(self, fitness_fn, data_dim, embed_dim, enrich_fn=None):
+    def __init__(self, core_fitness_fn, data_dim, embed_dim, learnable_skip, use_logx, enrich_fn=None):
         super().__init__()
 
         self.USES_ODEINT = True
@@ -117,7 +122,7 @@ class Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
         self.embed = encoders.IdEmbedder(data_dim, embed_dim)
         self.enrich_fn = enrich_fn
 
-        self.ode_func = ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(fitness_fn, embed_dim)
+        self.ode_func = ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(core_fitness_fn, embed_dim, use_logx=use_logx, learnable_skip=learnable_skip)
     
     def forward(self, t, x, ids):
         # preprocess embeddings
@@ -126,7 +131,8 @@ class Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
             embeddings = self.enrich_fn(embeddings)
 
         # ODE
-        y = odeint(lambda t,x: self.ode_func(t,x,embeddings), x, t)
+        # y = odeint(lambda t,x: self.ode_func(t,x,embeddings), x, t)
+        y = odeint(lambda t,x: self.ode_func(t,x,embeddings), x, t, adjoint_params=(embeddings,))
         
         return y
     
@@ -137,7 +143,7 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
     Unlike other model wrappers, the fitness function is expected to return the final fitnesses directly to allow custom architectures to produce the fitness.
     An optional enrichment function can be applied to the embeddings before passing them to the fitness function (e.g., a transformer to encode possible OTU interactions before abundance encodings are added).
     """
-    def __init__(self, fitness_fn, data_dim, embed_dim, enrich_fn=None):
+    def __init__(self, fitness_fn, data_dim, embed_dim, learnable_skip, enrich_fn=None):
         super().__init__()
 
         self.USES_ODEINT = True
@@ -146,7 +152,7 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
         self.embed = encoders.IdEmbedder(data_dim, embed_dim)
         self.enrich_fn = enrich_fn
 
-        self.ode_func = ODEFunc_Replicator_CustomFitness_IdEmbed(fitness_fn)
+        self.ode_func = ODEFunc_Replicator_CustomFitness_IdEmbed(fitness_fn, learnable_skip)
     
     def forward(self, t, x, ids):
         # preprocess embeddings

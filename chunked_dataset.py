@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset
 import pandas as pd
+import glob
 
 DK_BINARY = "binary"
 DK_IDS = "ids-sparse"
@@ -63,21 +64,26 @@ class ChunkedCSVDataset(IterableDataset):
         return dtypes
 
     def _is_chunk_file(self, filename, ftype):
-        if not (filename.startswith(ftype + '_') and filename.endswith('.csv')):
+        basename = os.path.basename(filename)
+        if not (basename.startswith(ftype.split('/')[-1] + '_') and basename.endswith('.csv')):
             return False
-        suffix = filename[len(ftype) + 1 : -4]  # remove prefix and '.csv'
+        suffix = basename[len(ftype.split('/')[-1]) + 1 : -4]
         return suffix.isdigit()
+
+    
 
     def _organize_chunks(self):
         chunk_map = {}
         for key, ftype in self.file_types.items():
-            files = [
-                f for f in os.listdir(self.data_dir)
-                if self._is_chunk_file(f, ftype)
-            ]
-            files = sorted(files, key=lambda f: int(f.split('_')[-1].split('.')[0]))
-            chunk_map[key] = [os.path.join(self.data_dir, f) for f in files]
+            files = []
+            for root, _, filenames in os.walk(self.data_dir):
+                for f in filenames:
+                    if self._is_chunk_file(f, ftype):
+                        files.append(os.path.join(root, f))
+            files = sorted(files, key=lambda f: int(os.path.basename(f).split('_')[-1].split('.')[0]))
+            chunk_map[key] = files
         return chunk_map
+
 
     def _get_chunk_sizes(self):
         ref_type = self.file_types[self.ref_key]
@@ -241,10 +247,16 @@ class TestCSVDataset(IterableDataset):
         self.file_types = file_types
         self.batch_size = batch_size
 
-        self.dataframes = {
-            key: pd.read_csv(os.path.join(data_dir, f"{ftype}_test.csv"), header=None)
-            for key, ftype in file_types.items()
-        }
+        self.dataframes = {}
+        for key, ftype in file_types.items():
+            pattern = os.path.join(self.data_dir, "**", f"{ftype}_test.csv")
+            matches = glob.glob(pattern, recursive=True)
+            if not matches:
+                raise FileNotFoundError(f"Test file for '{key}' with pattern '{pattern}' not found.")
+            if len(matches) > 1:
+                raise ValueError(f"Multiple test files found for '{key}': {matches}")
+            self.dataframes[key] = pd.read_csv(matches[0], header=None)
+
 
         lengths = [len(df) for df in self.dataframes.values()]
         if not all(length == lengths[0] for length in lengths):
