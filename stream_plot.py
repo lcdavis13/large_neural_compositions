@@ -478,7 +478,7 @@ def plot_single(title, xlabel, ylabel, line_label, x_value, y_value, add_point=F
     plot(title, xlabel, ylabel, [line_label], x_value, [y_value], add_point=add_point, x_log=x_log, y_log=y_log)
 
 
-def plot_loss(title, label_prefix, x, train_loss=None, validation_loss=None, xlabel="Epoch", ylabel="Loss", add_point=False):
+def plot_loss(title, label_prefix, x, train_loss=None, validation_loss=None, xlabel="Epoch", ylabel="Loss", add_point=False, x_log=False, y_log=False):
     """
     Helper to plot training and validation loss curves with consistent styling.
 
@@ -498,8 +498,8 @@ def plot_loss(title, label_prefix, x, train_loss=None, validation_loss=None, xla
         'title': title,
         'xlabel': xlabel,
         'ylabel': ylabel,
-        'x_log': False,
-        'y_log': False,
+        'x_log': x_log,
+        'y_log': y_log,
         'save_on_exit': True,
     }
 

@@ -6,33 +6,33 @@ import traceback
 import numpy as np
 import pandas as pd
 import chunked_dataset
-import epoch_managers
+from introspection import construct
 import lr_schedule
-from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 import data
 import torch
-import models_baseline
+import models
 import models_fitted
 import stream
-from optimum import Optimum, summarize, unrolloptims, unrolloptims_dict
+from optimum import Optimum, unrolloptims_dict
 import stream_plot as plotstream
 import time
-
-
-import copy
-import time
-
-import torch
 
 
 import tracemalloc
 tracemalloc.start()
 
 
-def eval_model(model, x, timesteps, ids):
+def eval_model(model, x, timesteps, ids, max_dropped_timesteps=0):
     # evaluates models whether they require ODE timesteps or not
     requires_timesteps = getattr(model, 'USES_ODEINT', False)
     requires_condensed = getattr(model, 'USES_CONDENSED', False)
+
+    # randomly drop some final timesteps if allowed
+    if max_dropped_timesteps > 0 and requires_timesteps:
+        #randomly select number between one and max_dropped_timesteps
+        early_stop = np.random.randint(1, max_dropped_timesteps+1)
+        timesteps = timesteps[:-early_stop]
+
     
     if requires_timesteps and timesteps is not None:
         # Call models that require the timesteps argument
@@ -114,8 +114,8 @@ def is_finite_number(number):
 
 def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, mini_epoch_size, full_epoch_size, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
                 outputs_per_mini_epoch, 
-                prev_examples, prev_updates, fold, epoch_num, mini_epoch_num, model_config, dataname, loss_fn, device,
-                filepath_out_incremental, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
+                prev_examples, prev_updates, fold, epoch_num, mini_epoch_num, config_label, dataname, loss_fn, device,
+                filepath_out_incremental, number_converged_timesteps, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
     model.train()
     
     total_loss = 0
@@ -168,13 +168,16 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
         # mb_examples = z.shape[-2]
         mb_examples = x.size(0)
         
-        y_pred = eval_model(model, x, t, ids)
-        if supervise_steps:
-            y_pred = y_pred[1:]
-            y_true = z[1:]  # TODO: Fix: implement supervised interpolation with new data source
-        else:
-            y_pred = y_pred[-1:]
-            y_true = y.unsqueeze(0)  # TODO: may not need this unsqueeze if we stop supporting supervised interpolation
+        y_pred = eval_model(model, x, t, ids, max_dropped_timesteps=0) #number_converged_timesteps)
+        # if supervise_steps:
+        #     y_pred = y_pred[1:]
+        #     y_true = z[1:]  # TODO: Fix: implement supervised interpolation with new data source
+        # else:
+        #     y_pred = y_pred[-1:]
+        #     y_true = y.unsqueeze(0)  # TODO: may not need this unsqueeze if we stop supporting supervised interpolation
+        y_pred = y_pred[-number_converged_timesteps:]
+        y_true = y.unsqueeze(0).expand(number_converged_timesteps, -1, -1)
+        # print(f"y_pred shape: {y_pred.shape}, y_true shape: {y_true.shape}")
         y_pred = y_pred.to(device)
 
         loss = loss_fn(y_pred, y_true)
@@ -212,13 +215,13 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
                                   "Learning Rate", scheduler.get_last_lr(),
                                   )
             if lr_plot:
-                plotstream.plot_single(lr_plot, "mini-epochs", "LR", f"{model_config} fold {fold}",
+                plotstream.plot_single(lr_plot, "mini-epochs", "LR", f"{config_label} fold {fold}",
                                        mini_epoch_num + mb / minibatches, scheduler.get_last_lr(), False, y_log=False)
             if loss_plot:
-                plotstream.plot_loss(loss_plot, f"{model_config} fold {fold}", mini_epoch_num + mb / minibatches,
+                plotstream.plot_loss(loss_plot, f"{config_label} fold {fold}", mini_epoch_num + mb / minibatches,
                                      stream_loss / stream_examples, None, add_point=False, xlabel='Update Steps', ylabel='Bray-Curtis Loss')
             if lr_loss_plot:
-                plotstream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{model_config} fold {fold}",
+                plotstream.plot_single(lr_loss_plot, "log( Learning Rate )", "Loss", f"{config_label} fold {fold}",
                                        scheduler.get_last_lr(), stream_loss / stream_examples, False, x_log=True)
             stream_loss = 0
             prev_time = end_time
@@ -255,8 +258,8 @@ def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
 
 
 def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
-               model_name, model_config, dataname, fold, loss_fn, score_fns, device, mini_epoch_size, full_epoch_size, outputs_per_epoch,
-               preeval_training_set, reeval_train_epoch, reeval_train_final, jobstring, use_best_model, verbosity=1):
+               model_name, model_config, config_label, dataname, fold, loss_fn, score_fns, device, mini_epoch_size, full_epoch_size, outputs_per_epoch,
+               preeval_training_set, reeval_train_epoch, reeval_train_final, jobstring, use_best_model, export_cnode, number_converged_timesteps, verbosity=1):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
     epoch = 0
@@ -287,7 +290,10 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 
     val_and_trn_scores = flatten_dict({"val": val_scores, "trn": trn_scores})
 
-    gpu_memory_reserved = torch.cuda.memory_reserved(device)
+    if device.type == 'cuda':
+        gpu_memory_reserved = torch.cuda.memory_reserved(device)
+    else:
+        gpu_memory_reserved = 0
     _, cpuRam = tracemalloc.get_traced_memory()
     stream.stream_results(filepath_out_epoch, verbosity > 0, verbosity > 0, verbosity > -1,
                           "fold", fold,
@@ -302,7 +308,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                           "Peak RAM (GB)", cpuRam  / (1024 ** 3),
                           prefix="================PRE-VALIDATION===============\n",
                           suffix="\n=============================================\n")
-    plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", 0, trn_scores["loss"], val_scores["loss"], add_point=False)
+    plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", 0, trn_scores["loss"], val_scores["loss"], add_point=False, y_log=True)
     # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", 0, score_trn, score_val, add_point=False)
     plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
     # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
@@ -345,8 +351,8 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
             model=model, requires_condensed=requires_condensed, epoch_data_iterator=epoch_data_iterator, data_train=data_train, mini_epoch_size=mini_epoch_size, full_epoch_size=full_epoch_size, minibatch_examples=minibatch_examples,
             accumulated_minibatches=accumulated_minibatches, noise=noise, interpolate=interpolate, interpolate_noise=interpolate_noise, optimizer=optimizer, scheduler=scheduler, scaler=scaler, t=t,
             outputs_per_mini_epoch=outputs_per_epoch, prev_examples=train_examples_seen, prev_updates=update_steps, 
-            fold=fold, epoch_num=epoch, mini_epoch_num=manager.epoch, model_config=model_config, dataname=dataname, loss_fn=loss_fn, device=device, filepath_out_incremental=filepath_out_incremental,
-            lr_plot=f"Learning Rate {dataname}", verbosity=verbosity - 1
+            fold=fold, epoch_num=epoch, mini_epoch_num=manager.epoch, config_label=config_label, dataname=dataname, loss_fn=loss_fn, device=device, filepath_out_incremental=filepath_out_incremental,
+            lr_plot=f"Learning Rate {dataname}", verbosity=verbosity - 1, number_converged_timesteps=number_converged_timesteps
         )
         # if reptile_rate > 0.0:
         #     # Meta-update logic
@@ -381,7 +387,10 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         
         current_time = time.time()
         elapsed_time = current_time - start_time
-        gpu_memory_reserved = torch.cuda.memory_reserved(device)
+        if device.type == 'cuda':
+            gpu_memory_reserved = torch.cuda.memory_reserved(device)
+        else:
+            gpu_memory_reserved = 0
         _, cpuRam = tracemalloc.get_traced_memory()
         
         # TODO: replace this quick and dirty dict packing. They should have always been in a dict.
@@ -391,7 +400,10 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         dict.update(val_and_trn_scores)
         # track various optima
         model_path = f'results/models/{model_config}_{dataname}_fold{fold}_job{jobstring}.pt'
-        val_opt.track_best(dict, model=model, model_path=model_path)
+        if use_best_model:
+            val_opt.track_best(dict, model=model, model_path=model_path)
+        else:
+            val_opt.track_best(dict)
         trn_opt.track_best(dict)
         
         # training_curve.append({"fold": fold, "epoch":epoch, "mini_epoch": manager.epoch, "trn_loss": l_trn, "val_loss": l_val, "time": elapsed_time})
@@ -417,7 +429,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                               suffix="\n=============================================\n")
         
         plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, trn_scores["loss"], val_scores["loss"],
-                             add_point=add_point, xlabel='Epoch' if mini_epoch_size <= 0 else 'Update Steps', ylabel='Bray-Curtis Loss')
+                             add_point=add_point, xlabel='Epoch' if mini_epoch_size <= 0 else 'Update Steps', ylabel='Bray-Curtis Loss', y_log=True)
         # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", manager.epoch, score_trn, score_val, add_point=add_point)
         plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
         # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
@@ -432,6 +444,19 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
             if data_test or reeval_train_final:
                 if use_best_model:
                     model.load_state_dict(torch.load(model_path, weights_only=True))
+                if export_cnode and model_name == "cNODE1":
+                    print("Exporting trained cNODE parameters")
+                    weight = model.func.fcc1.weight.detach().cpu().numpy()
+                    bias = model.func.fcc1.bias
+                    if bias is not None:
+                        bias = bias.detach().cpu().numpy()
+                    else:
+                        bias = np.zeros(weight.shape[0])
+                    f = f'results/models/{model_config}_{dataname}_fold{fold}_job{jobstring}_cnode_weights.csv'
+                    f2 = f'results/models/{model_config}_{dataname}_fold{fold}_job{jobstring}_cnode_bias.csv'
+                    print(f"Exporting cNODE weights to {f} and bias to {f2}")
+                    pd.DataFrame(weight).to_csv(f, index=False, header=False)
+                    pd.DataFrame(bias).to_csv(f2, index=False, header=False)
                 if reeval_train_final:
                     print("Re-evaluating final training score")
                     trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
@@ -454,7 +479,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 def train_model(data_train, data_valid, data_test,
                 cp, dp, hp, 
                 fold_num, 
-                model_constr, epoch_manager_constr, model_args, 
+                model_class, epoch_manager_constr, model_args, 
                 scaler, device, 
                 timesteps, loss_fn, score_fns,
                 jobstring, verbosity=1):
@@ -488,7 +513,7 @@ def train_model(data_train, data_valid, data_test,
     # LR_start_factor = 1.0  # constantLR
     LR_start_factor = 0.0 # warm up
 
-    model = model_constr(model_args).to(device)
+    model = construct(model_class, model_args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=hp.lr * LR_start_factor, weight_decay=hp.wd)
 
     manager = epoch_manager_constr(model_args)
@@ -517,13 +542,15 @@ def train_model(data_train, data_valid, data_test,
     final_dict, val_opt, trn_opt = run_epochs(
         model=model, requires_condensed=requires_condensed, optimizer=optimizer, scheduler=scheduler, manager=manager, minibatch_examples=dp.minibatch_examples, accumulated_minibatches=hp.accumulated_minibatches, 
         noise=hp.noise, interpolate=hp.interpolate, interpolate_noise=hp.interpolate_noise, scaler=scaler, data_train=data_train, data_valid=data_valid, data_test=data_test,
-        t=timesteps, model_name=hp.model_name, model_config=hp.model_config, dataname=dp.y_dataset, fold=fold_num, loss_fn=loss_fn, score_fns=score_fns,
+        t=timesteps, model_name=hp.model_name, model_config=hp.model_config, config_label=hp.config_label, dataname=dp.y_dataset, fold=fold_num, loss_fn=loss_fn, score_fns=score_fns,
         device=device, mini_epoch_size=hp.mini_epoch_size, full_epoch_size=dp.total_train_samples, 
         outputs_per_epoch=10, verbosity=verbosity - 1,
         # reptile_rate=reptile_rewind,
         preeval_training_set=hp.preeval_training_set, reeval_train_epoch=hp.reeval_training_set_epoch, reeval_train_final=hp.reeval_training_set_final,
         jobstring=jobstring, 
-        use_best_model=hp.use_best_model
+        use_best_model=hp.use_best_model, 
+        export_cnode=hp.export_cnode, 
+        number_converged_timesteps=hp.number_converged_timesteps, 
     )
     
 
@@ -704,7 +731,7 @@ class DummyGradScaler:
 
 
 
-def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns):
+def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns):
     # things that are needed for reporting an exception, so they go before the try block
     jobid_substring = int(cp.jobid.split('_')[0])
     jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
@@ -730,7 +757,8 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         hp.data_dim = dense_columns
         hp.sparse_data_dim = sparse_columns
         # hp.WD = hp.lr * hp.wd_factor
-        hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+        # hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
+        hp.config_label = f"{hp.model_name}: {hp.config}"
         hp.model_config = f"{hp.model_name} hp-{cp.config_configid}-{dp.data_configid}-{hp.configid}"
 
         # conditionally adjust epochs to compensate for subset size
@@ -743,9 +771,9 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         else:
             hp.adjusted_epochs = hp.epochs
 
-        assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
+        # assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
         
-        model_constr = models[hp.model_name]
+        model_class = model_classes[hp.model_name]
         epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
         
         if device.type == "cuda":
@@ -766,9 +794,13 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
         # seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
         # print(f"Seed: {seed}")
         
-        # test construction and print parameter count
+        # Test construction. If using parameter_target, this will find a model configuration with approximately correct parameter count and return the specific config hyperparameters.
         print(f"\nModel construction test for: {hp.model_config}")
-        model = model_constr(hp)
+        model, config_overrides = models.construct_model_parameterized(model_class, hp.parameter_target, hp.width_depth_tradeoff, hp)
+        if config_overrides:
+            print(f"Model configuration overrides: {config_overrides}")
+            hp.update(config_overrides) 
+            # NOTE: This mutates hp in the calling context. Currently that's fine because we only send hp to this function and then construct a new hp on each step through the loop, but if things change, that could be problematic.
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
         
@@ -801,7 +833,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, models, epoch_mngr
             data_train=data_train, data_valid=data_valid, data_test=data_test, 
             fold_num=fold_num, 
             cp=cp, dp=dp, hp=hp, 
-            model_constr=model_constr, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
+            model_class=model_class, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
             scaler=scaler, device=device, 
             timesteps=timesteps, loss_fn=loss_fn, score_fns=score_fns,
             jobstring=jobstring, verbosity=verbosity
@@ -977,12 +1009,12 @@ def process_data_params(dp):
     base_filepath = f"data/{dp.x_dataset}/"
 
     filenames = {
-        chunked_dataset.DK_BINARY: f"{dp.x_dataset}_binary",
-        chunked_dataset.DK_IDS: f"{dp.x_dataset}_ids-sparse",
-        chunked_dataset.DK_X: f"{dp.x_dataset}_x0", 
-        chunked_dataset.DK_XSPARSE: f"{dp.x_dataset}_x0-sparse",
-        chunked_dataset.DK_Y: f"{dp.y_dataset}_y",
-        chunked_dataset.DK_YSPARSE: f"{dp.y_dataset}_y-sparse",
+        chunked_dataset.DK_BINARY: f"_binary",
+        chunked_dataset.DK_IDS: f"ids-sparse",
+        chunked_dataset.DK_X: f"x0", 
+        chunked_dataset.DK_XSPARSE: f"x0-sparse",
+        chunked_dataset.DK_Y: f"{dp.y_dataset}/{dp.y_dataset}_y",
+        chunked_dataset.DK_YSPARSE: f"{dp.y_dataset}/{dp.y_dataset}_y-sparse",
     }
 
     data_folded, dp.total_train_samples, dp.data_fraction, dense_columns, sparse_columns = chunked_dataset.load_folded_datasets(

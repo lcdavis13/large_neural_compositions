@@ -17,6 +17,9 @@ import loss_function
 import stream_plot as plotstream
 
 
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+
 def override_dict(target_dict, override_dict):
     for key in target_dict:
         if key in override_dict:
@@ -45,11 +48,12 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
     # device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cpu')  # force CPU for debugging
     print(device)
 
     hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
-    model_constructors = models.get_model_constructors()
+    model_classes = models.get_model_classes()
 
     epoch_mngr_constructors = epoch_managers.get_epoch_manager_constructors()
 
@@ -75,7 +79,7 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
             for hp in hpbuilder.parse_and_generate_combinations():
                 override_dict(hp, overrides)
 
-                expt.run_experiment(cp=cp, dp=dp, hp=hp, data_folded=data_folded, testdata=testdata, device=device, models=model_constructors, epoch_mngr_constructors=epoch_mngr_constructors, loss_fn=loss_fn, score_fns=score_fns, benchmark_losses=benchmark_losses, dense_columns=dense_columns, sparse_columns=sparse_columns)
+                expt.run_experiment(cp=cp, dp=dp, hp=hp, data_folded=data_folded, testdata=testdata, device=device, model_classes=model_classes, epoch_mngr_constructors=epoch_mngr_constructors, loss_fn=loss_fn, score_fns=score_fns, benchmark_losses=benchmark_losses, dense_columns=dense_columns, sparse_columns=sparse_columns)
 
 
     print("\n\nDONE")
@@ -85,6 +89,8 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 # main
 if __name__ == "__main__":
     hyperparam_csv = None
-    overrides = {}
+    overrides = {
+        "plots_wait_for_exit": True, 
+    }
     
     run_experiments(cli_args=sys.argv[1:], hyperparam_csv=hyperparam_csv, overrides=overrides) # capture command line arguments, needs to be done explicitly so that when run_experiments is called from other contexts, CLI args aren't accidentally intercepted 
