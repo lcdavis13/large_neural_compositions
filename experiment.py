@@ -33,20 +33,20 @@ def eval_model(model, x, timesteps, ids, max_dropped_timesteps=0):
         early_stop = np.random.randint(1, max_dropped_timesteps+1)
         timesteps = timesteps[:-early_stop]
 
-    
     if requires_timesteps and timesteps is not None:
-        # Call models that require the timesteps argument
+        # Call models that require the timesteps argument and return dydt in addition to y
         if requires_condensed:
             y_steps = model(timesteps, x, ids)
         else:
             y_steps = model(timesteps, x)
     else:
         # Call models that do not require the timesteps argument
+        dydt = None
         if requires_condensed:
             y = model(x, ids) 
         else:
             y = model(x)
-        y_steps = y.unsqueeze(0)
+        y_steps = [[y, None]]
     
     return y_steps
 
@@ -55,13 +55,13 @@ def ceildiv(a, b):
     return -(a // -b)
 
 
-def validate_epoch(model, requires_condensed, data, t, loss_fn, score_fns, device):
+def validate_epoch(model, requires_condensed, data, t, hp, loss_fn, score_fns, device):
     model.eval()
 
-    score_fns_2 = score_fns.copy()
-    score_fns_2["loss"] = loss_fn
+    # score_fns_2 = score_fns.copy()
+    # score_fns_2["loss"] = loss_fn
 
-    totals = {name: 0.0 for name in score_fns_2}
+    totals = {name: 0.0 for name in score_fns}
     total_samples = 0
 
     for mb in data:
@@ -79,11 +79,12 @@ def validate_epoch(model, requires_condensed, data, t, loss_fn, score_fns, devic
         total_samples += mb_examples
 
         with torch.no_grad():
-            y_pred = eval_model(model, x, t, ids)[-1]
+            y_pred, dydt = eval_model(model, x, t, ids)[-1]
             y_pred = y_pred.to(device)
+            dydt = dydt.to(device) if dydt is not None else None
 
-            for name, fn in score_fns_2.items():
-                val = fn(y_pred, y)
+            for name, fn in score_fns.items():
+                val = fn(y_pred, y, hp=hp, dydt=dydt)
                 totals[name] += val.item() * mb_examples
 
     avg_scores = {name: total / total_samples for name, total in totals.items()}
@@ -91,8 +92,8 @@ def validate_epoch(model, requires_condensed, data, t, loss_fn, score_fns, devic
 
 
 
-def run_test(model, requires_condensed, model_name, model_config, epoch, mini_epoch, data_test, t, fold, loss_fn, score_fns, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time, train_score=-1.0, val_score=-1.0):
-    test_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_test, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
+def run_test(model, requires_condensed, hp, model_name, model_config, epoch, mini_epoch, data_test, t, fold, loss_fn, score_fns, device, filepath_out_test, gpu_memory_reserved, cpuRam, elapsed_time, train_score=-1.0, val_score=-1.0):
+    test_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_test, t=t, hp=hp, loss_fn=loss_fn, score_fns=score_fns, device=device)
     stream.stream_results(filepath_out_test, True, True, True,
                             "model_name", model_name,
                             "model_config", model_config,
@@ -112,7 +113,7 @@ def run_test(model, requires_condensed, model_name, model_config, epoch, mini_ep
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
-def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, mini_epoch_size, full_epoch_size, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, scaler, t,
+def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, hp, mini_epoch_size, full_epoch_size, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, wd_scheduler, scaler, t,
                 outputs_per_mini_epoch, 
                 prev_examples, prev_updates, fold, epoch_num, mini_epoch_num, config_label, dataname, loss_fn, device,
                 filepath_out_incremental, number_converged_timesteps, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
@@ -168,19 +169,22 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
         # mb_examples = z.shape[-2]
         mb_examples = x.size(0)
         
-        y_pred = eval_model(model, x, t, ids, max_dropped_timesteps=0) #number_converged_timesteps)
+        y_pred, dydt = eval_model(model, x, t, ids, max_dropped_timesteps=0)[-1] 
+        #number_converged_timesteps)
         # if supervise_steps:
         #     y_pred = y_pred[1:]
         #     y_true = z[1:]  # TODO: Fix: implement supervised interpolation with new data source
         # else:
         #     y_pred = y_pred[-1:]
         #     y_true = y.unsqueeze(0)  # TODO: may not need this unsqueeze if we stop supporting supervised interpolation
-        y_pred = y_pred[-number_converged_timesteps:]
-        y_true = y.unsqueeze(0).expand(number_converged_timesteps, -1, -1)
+        # y_pred = y_preds[-number_converged_timesteps:]
+        # y_true = y.unsqueeze(0).expand(number_converged_timesteps, -1, -1)
+        y_true = y
         # print(f"y_pred shape: {y_pred.shape}, y_true shape: {y_true.shape}")
         y_pred = y_pred.to(device)
+        dydt = dydt.to(device) if dydt is not None else None
 
-        loss = loss_fn(y_pred, y_true)
+        loss = loss_fn(y_pred, y_true, hp=hp, dydt=dydt)
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches  # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
         
@@ -213,6 +217,7 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
                                   "Avg Loss", stream_loss / stream_examples,
                                   "Examples per second", examples_per_second,
                                   "Learning Rate", scheduler.get_last_lr(),
+                                  "Weight Decay", wd_scheduler.get_last_wd(),
                                   )
             if lr_plot:
                 plotstream.plot_single(lr_plot, "mini-epochs", "LR", f"{config_label} fold {fold}",
@@ -231,6 +236,7 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
             scaler.step(optimizer)
             scaler.update()
             scheduler.batch_step()  # TODO: Add accum_loss metric in case I ever want to do ReduceLROnPlateau with batch_step mode
+            wd_scheduler.batch_step()
             optimizer.zero_grad()
         
         # del x, y
@@ -257,9 +263,9 @@ def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
     model.load_state_dict(averaged_params)
 
 
-def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
+def run_epochs(model, requires_condensed, optimizer, scheduler, wd_scheduler, manager, hp, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
                model_name, model_config, config_label, dataname, fold, loss_fn, score_fns, device, mini_epoch_size, full_epoch_size, outputs_per_epoch,
-               preeval_training_set, reeval_train_epoch, reeval_train_final, jobstring, use_best_model, export_cnode, number_converged_timesteps, verbosity=1):
+               preeval_training_set, reeval_train_epoch, reeval_train_final, jobstring, use_best_model, export_cnode, number_converged_timesteps, verbosity=1, plot_all_scores=True):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
 
     epoch = 0
@@ -281,10 +287,10 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
     
     # initial validation benchmark
     print("Evaluating initial validation score")
-    val_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_valid, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
+    val_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_valid, t=t, hp=hp, loss_fn=loss_fn, score_fns=score_fns, device=device)
     if preeval_training_set:
         print("Evaluating initial training score")
-        trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
+        trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, hp=hp, loss_fn=loss_fn, score_fns=score_fns, device=device)
     else:
         trn_scores = empty_scores
 
@@ -308,7 +314,12 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                           "Peak RAM (GB)", cpuRam  / (1024 ** 3),
                           prefix="================PRE-VALIDATION===============\n",
                           suffix="\n=============================================\n")
-    plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", 0, trn_scores["loss"], val_scores["loss"], add_point=False, y_log=True)
+    
+    if plot_all_scores:
+        for score_name in score_fns:
+            plotstream.plot_loss(f"{score_name} on dataset {dataname}", f"{model_config} fold {fold}", 0, trn_scores[score_name], val_scores[score_name], add_point=False, y_log=True)
+    else:
+        plotstream.plot_loss(f"Loss on dataset {dataname}", f"{model_config} fold {fold}", 0, trn_scores["loss"], val_scores["loss"], add_point=False, y_log=True)
     # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", 0, score_trn, score_val, add_point=False)
     plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
     # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
@@ -348,8 +359,8 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
 
     while True:
         trn_loss, train_examples_seen, update_steps, epoch, epoch_data_iterator = train_mini_epoch(
-            model=model, requires_condensed=requires_condensed, epoch_data_iterator=epoch_data_iterator, data_train=data_train, mini_epoch_size=mini_epoch_size, full_epoch_size=full_epoch_size, minibatch_examples=minibatch_examples,
-            accumulated_minibatches=accumulated_minibatches, noise=noise, interpolate=interpolate, interpolate_noise=interpolate_noise, optimizer=optimizer, scheduler=scheduler, scaler=scaler, t=t,
+            model=model, requires_condensed=requires_condensed, epoch_data_iterator=epoch_data_iterator, data_train=data_train, hp=hp, mini_epoch_size=mini_epoch_size, full_epoch_size=full_epoch_size, minibatch_examples=minibatch_examples,
+            accumulated_minibatches=accumulated_minibatches, noise=noise, interpolate=interpolate, interpolate_noise=interpolate_noise, optimizer=optimizer, scheduler=scheduler, wd_scheduler=wd_scheduler, scaler=scaler, t=t,
             outputs_per_mini_epoch=outputs_per_epoch, prev_examples=train_examples_seen, prev_updates=update_steps, 
             fold=fold, epoch_num=epoch, mini_epoch_num=manager.epoch, config_label=config_label, dataname=dataname, loss_fn=loss_fn, device=device, filepath_out_incremental=filepath_out_incremental,
             lr_plot=f"Learning Rate {dataname}", verbosity=verbosity - 1, number_converged_timesteps=number_converged_timesteps
@@ -368,11 +379,11 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         #         # Synchronize the inner model with the updated meta-model weights
         #         model.load_state_dict(meta_model.state_dict())
         
-        val_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_valid, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
+        val_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_valid, t=t, hp=hp, loss_fn=loss_fn, score_fns=score_fns, device=device)
         
         if reeval_train_epoch:
             # print("Re-evaluating training score")
-            trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
+            trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, hp=hp, loss_fn=loss_fn, score_fns=score_fns, device=device)
         else:
             trn_scores = empty_scores
             trn_scores["loss"] = trn_loss
@@ -381,6 +392,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
         
         # Update learning rate based on loss
         scheduler.epoch_step()  #(l_trn)
+        wd_scheduler.epoch_step()
         new_lr = scheduler.get_last_lr()
         lr_changed = not np.isclose(new_lr, old_lr)
         add_point = lr_changed and isinstance(scheduler.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
@@ -428,8 +440,13 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                               prefix="==================VALIDATION=================\n",
                               suffix="\n=============================================\n")
         
-        plotstream.plot_loss(f"Loss {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, trn_scores["loss"], val_scores["loss"],
-                             add_point=add_point, xlabel='Epoch' if mini_epoch_size <= 0 else 'Update Steps', ylabel='Bray-Curtis Loss', y_log=True)
+        if plot_all_scores:
+            for score_name in score_fns:
+                plotstream.plot_loss(f"{score_name} on dataset {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, trn_scores[score_name], val_scores[score_name],
+                                    add_point=add_point, xlabel='Epoch' if mini_epoch_size <= 0 else 'Update Steps', ylabel=score_name, y_log=True)
+        else:
+            plotstream.plot_loss(f"Loss on dataset {dataname}", f"{model_config} fold {fold}", manager.epoch if mini_epoch_size <= 0 else update_steps, trn_scores["loss"], val_scores["loss"],
+                                add_point=add_point, xlabel='Epoch' if mini_epoch_size <= 0 else 'Update Steps', ylabel='Bray-Curtis Loss', y_log=True)
         # plotstream.plot_loss(f"score {dataname}", f"{model_config} fold {fold}", manager.epoch, score_trn, score_val, add_point=add_point)
         plotstream.plot(f"stopmetric {dataname}", "mini-epoch", "metric", [f"metric {model_config} fold {fold}", f"threshold {model_config} fold {fold}"], manager.epoch, [manager.get_metric(), manager.get_threshold()], add_point=False)
         # plotstream.plot(f"Validation Loss EMA {dataname}", "mini-epoch", "metric", [f"val_EMA {model_config} fold {fold}"], manager.epoch, [manager.get_supplemental()["val_EMA"]], add_point=False) # Commented because constant epoch manager doesn't have an EMA
@@ -459,11 +476,11 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, manager, minibat
                     pd.DataFrame(bias).to_csv(f2, index=False, header=False)
                 if reeval_train_final:
                     print("Re-evaluating final training score")
-                    trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, loss_fn=loss_fn, score_fns=score_fns, device=device)
-                    print(f"Final Training Score: {trn_scores["score"]}, Final Validation Score: {val_scores["score"]}")
+                    trn_scores = validate_epoch(model=model, requires_condensed=requires_condensed, data=data_train, t=t, hp=hp, loss_fn=loss_fn, score_fns=score_fns, device=device)
+                    print(f"Final Training Loss: {trn_scores["loss"]}, Final Validation Loss: {val_scores["loss"]}")
                 if data_test:
                     print("Running test")
-                    test_scores = run_test(model=model, requires_condensed=requires_condensed, model_name=model_name, model_config=model_config, epoch=val_opt.epoch, mini_epoch=val_opt.mini_epoch, data_test=data_test, t=t, fold=fold, loss_fn=loss_fn, score_fns=score_fns, device=device, filepath_out_test=filepath_out_test, gpu_memory_reserved=gpu_memory_reserved, cpuRam=cpuRam, elapsed_time=elapsed_time, train_score=trn_scores["score"], val_score=val_scores["score"])
+                    test_scores = run_test(model=model, requires_condensed=requires_condensed, hp=hp, model_name=model_name, model_config=model_config, epoch=val_opt.epoch, mini_epoch=val_opt.mini_epoch, data_test=data_test, t=t, fold=fold, loss_fn=loss_fn, score_fns=score_fns, device=device, filepath_out_test=filepath_out_test, gpu_memory_reserved=gpu_memory_reserved, cpuRam=cpuRam, elapsed_time=elapsed_time, train_score=trn_scores["loss"], val_score=val_scores["loss"])
             break
     
     all_scores = flatten_dict({"val": val_scores, "trn": trn_scores, "test": test_scores})
@@ -514,7 +531,8 @@ def train_model(data_train, data_valid, data_test,
     LR_start_factor = 0.0 # warm up
 
     model = construct(model_class, model_args).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=hp.lr * LR_start_factor, weight_decay=hp.wd)
+    start_wd = hp.wd if hp.wd_during_warmup else 0.0
+    optimizer = torch.optim.AdamW(model.parameters(), lr=hp.lr * LR_start_factor, weight_decay=start_wd)
 
     manager = epoch_manager_constr(model_args)
     # optimizer = torch.optim.SGD(model.parameters(), lr=LR*LR_start_factor, weight_decay=weight_decay)
@@ -536,11 +554,17 @@ def train_model(data_train, data_valid, data_test,
     #     final_div_factor=1.0/(LR_start_factor*0.1), three_phase=True, pct_start=0.4, anneal_strategy='cos')
     base_scheduler = lr_schedule.DirectToZero(optimizer, peak_lr=hp.lr, update_steps=update_steps, warmup_proportion=0.1)
     scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=hp.lr * LR_start_factor)
-    
+
+    if hp.wd_during_warmup:
+        base_wd_scheduler = lr_schedule.WDConstant(optimizer, wd=hp.wd)
+    else:
+        base_wd_scheduler = lr_schedule.WDZeroWarmup(optimizer, wd=hp.wd, update_steps=update_steps, warmup_proportion=0.1)
+    wd_scheduler = lr_schedule.WDScheduler(base_wd_scheduler)
+
     print(f"Fold {fold_num + 1}/{dp.kfolds}")
     
     final_dict, val_opt, trn_opt = run_epochs(
-        model=model, requires_condensed=requires_condensed, optimizer=optimizer, scheduler=scheduler, manager=manager, minibatch_examples=dp.minibatch_examples, accumulated_minibatches=hp.accumulated_minibatches, 
+        model=model, requires_condensed=requires_condensed, optimizer=optimizer, scheduler=scheduler, wd_scheduler=wd_scheduler, manager=manager, hp=hp, minibatch_examples=dp.minibatch_examples, accumulated_minibatches=hp.accumulated_minibatches,
         noise=hp.noise, interpolate=hp.interpolate, interpolate_noise=hp.interpolate_noise, scaler=scaler, data_train=data_train, data_valid=data_valid, data_test=data_test,
         t=timesteps, model_name=hp.model_name, model_config=hp.model_config, config_label=hp.config_label, dataname=dp.y_dataset, fold=fold_num, loss_fn=loss_fn, score_fns=score_fns,
         device=device, mini_epoch_size=hp.mini_epoch_size, full_epoch_size=dp.total_train_samples, 
@@ -731,7 +755,7 @@ class DummyGradScaler:
 
 
 
-def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns):
+def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns, plot_all_scores=True):
     # things that are needed for reporting an exception, so they go before the try block
     jobid_substring = int(cp.jobid.split('_')[0])
     jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
@@ -739,19 +763,14 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epo
     filepath_out_fold = f'results/folds/{dp.y_dataset}{jobstring}_folds.csv'
     filepath_out_hyperparams = f'results/hp/{dp.y_dataset}{jobstring}_hyperparams.csv'
     num_params = -1
-    # optdict = {"epoch": -1, "mini_epoch": -1, "trn_loss": -1.0, "trn_score": -1.0, "val_loss": -1.0,
-    #         "val_score": -1.0, "lr": -1.0, "time": -1.0, "gpu_memory": -1.0,
-    #         "metric": -1.0, "stop_metric": -1.0, "stop_threshold": -1.0}
-    # val_loss_optims = [Optimum('val_loss', 'min', dict=optdict)]
-    # trn_loss_optims = [Optimum('trn_loss', 'min', dict=optdict)]
-    # val_score_optims = [Optimum('val_score', 'min', dict=optdict)]
-    # trn_score_optims = [Optimum('trn_score', 'min', dict=optdict)]
-    # final_optims = [Optimum(metric=None, dict=optdict)]
 
     # if True:
     try:
-        
-        plotstream.plot_horizontal_lines(f"Loss {dp.y_dataset}", benchmark_losses)
+        if plot_all_scores:
+            for score_name in score_fns:
+                plotstream.plot_horizontal_lines(f"{score_name} on dataset {dp.y_dataset}", benchmark_losses[score_name])
+        else:
+            plotstream.plot_horizontal_lines(f"loss on dataset {dp.y_dataset}", benchmark_losses)
 
         # computed hyperparams
         hp.data_dim = dense_columns
@@ -788,12 +807,6 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epo
         # ode_stepsize = ode_timemax / hp.ode_timesteps
         # timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
         
-        # TODO: Experiment dictionary. Model, data set, hyperparam override(s).
-        # Model dictionary. Hyperparam override(s)
-        
-        # seed = int(time.time())  # currently only used to set the data shuffle seed in find_LR
-        # print(f"Seed: {seed}")
-        
         # Test construction. If using parameter_target, this will find a model configuration with approximately correct parameter count and return the specific config hyperparameters.
         print(f"\nModel construction test for: {hp.model_config}")
         model, config_overrides = models.construct_model_parameterized(model_class, hp.parameter_target, hp.width_depth_tradeoff, hp)
@@ -803,14 +816,6 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epo
             # NOTE: This mutates hp in the calling context. Currently that's fine because we only send hp to this function and then construct a new hp on each step through the loop, but if things change, that could be problematic.
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in model: {num_params}")
-        
-        # find optimal LR
-        # hp.WD, hp.lr = hyperparameter_search_with_LRfinder(
-        #     model_constr, hp, model_name, scaler, data_folded, hp.minibatch_examples, hp.accumulated_minibatches,
-        #     device, 3, 3, dataname, timesteps, loss_fn, score_fn, distr_error_fn, verbosity=1, seed=seed)
-        # print(f"LR:{hp.lr}, WD:{hp.WD}")
-        
-        # hp = ui.ask(hp, keys=["LR", "WD"])
         
         # print hyperparams
         for key, value in hp.items():
@@ -901,7 +906,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epo
         
         # # write folds to log file
         # for i in range(len(val_loss_optims)):
-        #     stream.stream_scores(filepath_out_expt, True, True, True,
+        #     stream.stream_scores(filepath_out_expt, True, True, True,.
         #                         "optimal early stop val_loss", best_epoch_metrics["val_loss"],
         #                         "optimal early stop epoch", best_epoch_metrics["epoch"],
         #                         "optimal early stop mini-epoch", best_epoch_metrics["mini_epoch"],
@@ -945,7 +950,7 @@ def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epo
         traceback.print_exc()
 
 
-def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns):
+def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot_all_scores=True):
     
     benchmark_losses = {}
 
@@ -986,14 +991,25 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns):
                         "config_configid": cp.config_configid, 
                         "dataset_configid": dp.data_configid
                     },
-                    required_scores=["train_score", "train_mse"]
+                    required_scores=["train_loss", "train_mse"]
                 )
-        benchmark_losses = {
-                    "identity": mean_id_scores["mean_valid_score"],
-                    "Linear Regression (Moore-Penrose) - Trn": mean_lin_scores["mean_train_score"],
-                    "Linear Regression (Moore-Penrose) - Val": mean_lin_scores["mean_valid_score"],
-                    # "LinReg_test": mean_lin_scores["mean_test_score"],
+        print(mean_id_scores)
+        print(mean_lin_scores)
+        if plot_all_scores:
+            for score_name in score_fns:
+                # plotstream.plot_loss(f"{score_name} on dataset {dataname}", f"{model_config} fold {fold}", 0, trn_scores[score_name], val_scores[score_name], add_point=False, y_log=True)
+                benchmark_losses[score_name] = {
+                        "identity": mean_id_scores[f"mean_valid_{score_name}"],
+                        "Linear Regression (Moore-Penrose) - Trn": mean_lin_scores[f"mean_train_{score_name}"],
+                        "Linear Regression (Moore-Penrose) - Val": mean_lin_scores[f"mean_valid_{score_name}"],
                 }
+        else:
+            benchmark_losses = {
+                        "identity": mean_id_scores["mean_valid_loss"],
+                        "Linear Regression (Moore-Penrose) - Trn": mean_lin_scores["mean_train_loss"],
+                        "Linear Regression (Moore-Penrose) - Val": mean_lin_scores["mean_valid_loss"],
+                        # "LinReg_test": mean_lin_scores["mean_test_loss"],
+                    }
         
     return benchmark_losses
 

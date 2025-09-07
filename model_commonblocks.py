@@ -1,5 +1,6 @@
 import torch.nn as nn
 import model_skipgates as skips
+import model_linearKH as lin
 
 
 class ResidualMLPBlock(nn.Module):
@@ -17,10 +18,10 @@ class ResidualMLPBlock(nn.Module):
             self.layernorm = nn.Identity()
         else:
             self.layernorm = nn.LayerNorm(residual_dim)
-        self.fc1 = nn.Linear(residual_dim, hidden_dim)
+        self.fc1 = lin.LinearKH(residual_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.gelu = nn.GELU()
-        self.fc2 = nn.Linear(hidden_dim, residual_dim)
+        self.fc2 = lin.LinearKH(hidden_dim, residual_dim)
         if learnable_skip:
             self.skip = skips.GateSkip()
         else:

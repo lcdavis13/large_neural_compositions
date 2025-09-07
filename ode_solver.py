@@ -2,6 +2,8 @@
 
 import os
 
+# NOTE: As of adding dydt return to the trapezoid_odeint, none of the other solvers are currently correct (they do not return dydt yet)
+
 try:
     if os.getenv("SOLVER") == "torchdiffeq":
         from torchdiffeq import odeint as torchdiffeq_odeint

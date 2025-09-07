@@ -5,6 +5,7 @@ from model_commonblocks import ResidualMLPBlock
 from model_maskedSoftmax import MaskedSoftmax,WeightedSoftmax
 from model_normedLog import normed_log
 import model_skipgates as skips
+import model_linearKH as lin
 
 
 class PopulationAttentionDispersed(nn.Module):
@@ -118,9 +119,9 @@ class MultiheadPopulationAttention_NotResidual(nn.Module):
         self.head_qk_dim = dim_qk // num_heads
         self.head_v_dim = dim_v // num_heads
 
-        self.q_proj = nn.Linear(embed_dim, dim_qk)
-        self.k_proj = nn.Linear(embed_dim, dim_qk)
-        self.v_proj = nn.Linear(embed_dim, dim_v) 
+        self.q_proj = lin.LinearKH(embed_dim, dim_qk)
+        self.k_proj = lin.LinearKH(embed_dim, dim_qk)
+        self.v_proj = lin.LinearKH(embed_dim, dim_v) 
 
         if dispersion:
             self.attention = PopulationAttentionDispersed(self.head_qk_dim, attn_dropout)
@@ -129,10 +130,10 @@ class MultiheadPopulationAttention_NotResidual(nn.Module):
 
         # MLP
         hidden_dim = int(fcn_dim_factor * dim_v)
-        self.fcn1 = nn.Linear(dim_v, hidden_dim)
+        self.fcn1 = lin.LinearKH(dim_v, hidden_dim)
         self.dropout = nn.Dropout(fcn_dropout)
         self.gelu = nn.GELU()
-        self.fcn2 = nn.Linear(hidden_dim, 1)
+        self.fcn2 = lin.LinearKH(hidden_dim, 1)
 
 
     def forward(self, x, z):
@@ -168,10 +169,10 @@ class MultiheadPopulationAttention(nn.Module):
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
         self.head_dim = embed_dim // num_heads
 
-        self.q_proj = nn.Linear(embed_dim, embed_dim)
-        self.k_proj = nn.Linear(embed_dim, embed_dim)
-        self.v_proj = nn.Linear(embed_dim, embed_dim) 
-        self.o_proj = nn.Linear(embed_dim, embed_dim)
+        self.q_proj = lin.LinearKH(embed_dim, embed_dim)
+        self.k_proj = lin.LinearKH(embed_dim, embed_dim)
+        self.v_proj = lin.LinearKH(embed_dim, embed_dim) 
+        self.o_proj = lin.LinearKH(embed_dim, embed_dim)
 
         if dispersion:
             self.attention = PopulationAttentionDispersed(self.head_dim, attn_dropout)
@@ -234,7 +235,7 @@ class PopulationTransformerBlock(nn.Module):
         """
         super().__init__()
         self.attention = ResidualPopulationAttentionBlock(embed_dim, num_heads, attn_dropout, learnable_skip, dispersion=dispersion)
-        self.mlp = ResidualMLPBlock(embed_dim, int(embed_dim * mlp_dim_factor), mlp_dropout, learnable_skip)
+        self.mlp = ResidualMLPBlock(embed_dim, int(embed_dim * mlp_dim_factor), mlp_dropout, learnable_skip, no_norm=False)
 
     def forward(self, x, z):
         h = self.attention(x, z)
@@ -243,7 +244,7 @@ class PopulationTransformerBlock(nn.Module):
     
 
 class PopulationTransformer(nn.Module):
-    def __init__(self, embed_dim, num_blocks, num_heads, mlp_dim_factor, attn_dropout, mlp_dropout, learnable_skip, dispersion=True):
+    def __init__(self, embed_dim, num_blocks, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip, dispersion=True):
         """
         A transformer composed of stacked PopulationTransformerBlocks. Each block consists of multihead attention followed by MLP block.
 
@@ -262,14 +263,14 @@ class PopulationTransformer(nn.Module):
             PopulationTransformerBlock(
                 embed_dim=embed_dim,
                 num_heads=num_heads,
-                mlp_dim_factor=mlp_dim_factor,
+                mlp_dim_factor=fcn_dim_factor,
                 attn_dropout=attn_dropout,
-                mlp_dropout=mlp_dropout,
+                mlp_dropout=fcn_dropout,
                 learnable_skip=learnable_skip,
                 dispersion=dispersion
             ) for _ in range(num_blocks)
         ])
-        self.final_layer = nn.Linear(embed_dim, 1) # Final layer to project to output dimension
+        self.final_layer = lin.LinearKH(embed_dim, 1) # Final layer to project to output dimension
 
     def forward(self, x, z):
         h = z
@@ -296,9 +297,9 @@ class IterativePopulationTransformer(nn.Module):
                 embed_dim=embed_dim,
                 num_blocks=pop_block_depth,
                 num_heads=num_heads,
-                mlp_dim_factor=fcn_dim_factor,
+                fcn_dim_factor=fcn_dim_factor,
                 attn_dropout=attn_dropout,
-                mlp_dropout=fcn_dropout,
+                fcn_dropout=fcn_dropout,
                 learnable_skip=learnable_skip,
                 dispersion=dispersion
             ) for _ in range(num_pop_blocks)

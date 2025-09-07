@@ -161,7 +161,7 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
             embeddings = self.enrich_fn(embeddings)
 
         # ODE
-        y = odeint(lambda t,x: self.ode_func(t,x,embeddings), x, t)
+        y = odeint(lambda t,x: self.ode_func(t,x,embeddings), x, t, adjoint_params=(embeddings,))
         
         return y
     

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from introspection import construct
 import model_commonblocks as blocks
+import model_linearKH as lin
 
 
 class Identity(nn.Module):
@@ -15,7 +16,7 @@ class Identity(nn.Module):
 class Linear(nn.Module):
     def __init__(self, data_dim: int):
         super().__init__()
-        self.linear = nn.Linear(data_dim, data_dim)
+        self.linear = lin.LinearKH(data_dim, data_dim)
 
     def forward(self, x):
         return self.linear(x)
@@ -31,19 +32,17 @@ class LearnedConstantVector(nn.Module):
         return self.constant.unsqueeze(0).expand(x.size(0), -1)
 
 
-class ShallowMLP(nn.Module):
-    """A simple single-hidden-layer MLP with GELU activation. None of the fancy features of the comparable ResidualMLPBlock."""
-    def __init__(self, data_dim: int, hidden_dim: int, dropout: float):
+class SLP(nn.Module):
+    """A simple single-hidden-layer perceptron with GELU activation."""
+    def __init__(self, data_dim: int, hidden_dim: int):
         super().__init__()
-        self.fc1 = nn.Linear(data_dim, hidden_dim)
+        self.fc1 = lin.LinearKH(data_dim, hidden_dim)
         self.gelu = nn.GELU()
-        self.fc2 = nn.Linear(hidden_dim, data_dim)
-        self.dropout = nn.Dropout(dropout)
+        self.fc2 = lin.LinearKH(hidden_dim, data_dim)
 
     def forward(self, x):
         x = self.fc1(x)
         x = self.gelu(x)
-        x = self.dropout(x)
         x = self.fc2(x)
         return x
     
@@ -57,13 +56,13 @@ class ShallowMLP(nn.Module):
         return construct(cls, kwargs, override), override
 
 
-class ShallowMLP2(nn.Module):
-    """A simple single-hidden-layer MLP with GELU activation. None of the fancy features of the comparable ResidualMLPBlock."""
+class BasicMLP(nn.Module):
+    """A simple two-hidden-layer MLP with GELU activation and dropout."""
     def __init__(self, data_dim: int, hidden_dim: int, dropout: float):
         super().__init__()
-        self.fc1 = nn.Linear(data_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, data_dim)
+        self.fc1 = lin.LinearKH(data_dim, hidden_dim)
+        self.fc2 = lin.LinearKH(hidden_dim, hidden_dim)
+        self.fc3 = lin.LinearKH(hidden_dim, data_dim)
         self.gelu = nn.GELU()
         self.dropout = nn.Dropout(dropout)
 
@@ -109,7 +108,7 @@ class ResidualMLP(nn.Module):
             blocks.ResidualMLPBlock(residual_dim=data_dim, hidden_dim=hidden_dim, dropout=dropout, learnable_skip=learnable_skip, no_norm=(i<1))
             for i in range(num_blocks)
         ])
-        
+    
     def forward(self, x):
         for block in self.blocks:
             x = block(x)

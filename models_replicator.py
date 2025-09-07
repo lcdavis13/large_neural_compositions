@@ -5,7 +5,35 @@ import model_populationAttention as patt
 from introspection import construct
     
 
-class EmbeddedReplicatorIdentity(nn.Module):
+class ReplicatorEmbeddedEncodedIdentity(nn.Module):
+    def __init__(self, data_dim, embed_dim, use_logx, learnable_skip):
+        self.USES_CONDENSED = True
+        self.USES_ODEINT = True
+        super().__init__()
+
+        self.fitness_model = core.Identity()
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed_XEncode(
+            core_fitness_fn=self.fitness_model,
+            data_dim=data_dim,
+            embed_dim=embed_dim,
+            use_logx=use_logx,
+            learnable_skip=learnable_skip
+        )
+
+    def forward(self, t, x, ids):
+        return self.replicator_model(t, x, ids)
+    
+    @classmethod
+    def init_1d(cls, width, **kwargs):
+
+        override = {
+            "embed_dim": width,
+        }
+
+        return construct(cls, kwargs, override), override
+    
+
+class EmbeddedEncodedReplicatorIdentity(nn.Module):
     def __init__(self, data_dim, embed_dim, use_logx, learnable_skip):
         self.USES_CONDENSED = True
         self.USES_ODEINT = True
@@ -57,15 +85,14 @@ class ReplicatorLinear(nn.Module):
         return self.replicator_model(t, x)
     
 
-class ReplicatorShallowMLP(nn.Module):
-    def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
+class ReplicatorSLP(nn.Module):
+    def __init__(self, data_dim, hidden_dim, learnable_skip):
         self.USES_ODEINT = True
         super().__init__()
 
-        self.core_model = core.ShallowMLP(
+        self.core_model = core.SLP(
             data_dim=data_dim,
             hidden_dim=hidden_dim,
-            dropout=dropout
         )
         self.replicator_model = repwrap.Replicator_CustomFitness(fitness_fn=self.core_model, learnable_skip=learnable_skip)
 
@@ -82,12 +109,12 @@ class ReplicatorShallowMLP(nn.Module):
         return construct(cls, kwargs, override), override
     
 
-class ReplicatorShallowMLP2(nn.Module):
+class ReplicatorBasicMLP(nn.Module):
     def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
         self.USES_ODEINT = True
         super().__init__()
 
-        self.core_model = core.ShallowMLP2(
+        self.core_model = core.BasicMLP(
             data_dim=data_dim,
             hidden_dim=hidden_dim,
             dropout=dropout
@@ -196,6 +223,47 @@ class ReplicatorTransformer(nn.Module):
         }
 
         return construct(cls, kwargs, override), override
+    
+
+class ReplicatorPopulationTransformer(nn.Module):
+    def __init__(self, data_dim, embed_dim, enrich_blocks, fitness_blocks, num_heads, fcn_dim_factor, attn_dropout, fcn_dropout, learnable_skip):
+        self.USES_CONDENSED = True
+        self.USES_ODEINT = True
+        super().__init__()
+
+        if enrich_blocks > 0:
+            self.enrich_model = core.Transformer(
+                embed_dim=embed_dim,
+                num_blocks=enrich_blocks,
+                num_heads=num_heads,
+                fcn_dim_factor=fcn_dim_factor,
+                attn_dropout=attn_dropout, 
+                fcn_dropout=fcn_dropout,
+                learnable_skip=learnable_skip,
+            )
+        else:
+            self.enrich_model = None
+
+        self.fitness_model = patt.PopulationTransformer(
+            embed_dim=embed_dim,
+            num_blocks=fitness_blocks,
+            num_heads=num_heads,
+            fcn_dim_factor=fcn_dim_factor,
+            attn_dropout=attn_dropout,
+            fcn_dropout=fcn_dropout,            
+            learnable_skip=learnable_skip,
+        )
+
+        self.replicator_model = repwrap.Replicator_CustomFitness_IdEmbed(
+             fitness_fn=self.fitness_model,
+            data_dim=data_dim,
+            embed_dim=embed_dim,
+            enrich_fn=self.enrich_model, 
+            learnable_skip=learnable_skip
+        )
+
+    def forward(self, t, x, ids):
+        return self.replicator_model(t, x, ids)
     
 
 class ReplicatorWeightedAttention_NoXEncode(nn.Module):

@@ -11,9 +11,9 @@ import torch.nn as nn
 def get_model_classes():
     models = {
         'cNODE1': models_cNODE.cNODE1,
-        'cNODE1+1-proper': models_cNODE.glv1NODE,
-        'cNODE1+1-colFrozen': models_cNODE.glv2NODE,
-        'cNODE1+1-noFreeze': models_cNODE.envNODE,
+        # 'cNODE1+1-proper': models_cNODE.glv1NODE,
+        # 'cNODE1+1-colFrozen': models_cNODE.glv2NODE,
+        # 'cNODE1+1-noFreeze': models_cNODE.envNODE,
         'cNODE2': models_cNODE.cNODE2,
         'cNODE2Improved': models_cNODE.cNODE2_NonLinear_Biased,
 
@@ -21,8 +21,8 @@ def get_model_classes():
         # Don't include vanilla "identity" since it doesn't need training. Tested separately in the benchmarks.
         # The embedded versions of both wrappers have some modeling power on their own, so wrapping the identity gives us a benchmark of that. 
         # We don't need to test the non-embedded wrappers with identity, since both are equivalent to the pure identity.
-        'EmbeddedSimplexIdentity': models_simplex.EmbeddedSimplexIdentity,
-        'EmbeddedReplicatorIdentity': models_replicator.EmbeddedReplicatorIdentity,
+        'SimplexEmbeddedIdentity': models_simplex.SimplexEmbeddedIdentity,
+        'ReplicatorEmbeddedEncodedIdentity': models_replicator.ReplicatorEmbeddedEncodedIdentity,
 
         # learned constant vector
         'Constant': models_core.LearnedConstantVector,
@@ -35,14 +35,14 @@ def get_model_classes():
         'ReplicatorLinear': models_replicator.ReplicatorLinear,
 
         # shallow MLPs
-        'ShallowMLP': models_core.ShallowMLP,
-        'SimplexShallowMLP': models_simplex.SimplexShallowMLP,
-        'ReplicatorShallowMLP': models_replicator.ReplicatorShallowMLP,
+        'SLP': models_core.SLP,
+        'SimplexSLP': models_simplex.SimplexSLP,
+        'ReplicatorSLP': models_replicator.ReplicatorSLP,
 
         # slightly-less-shallow MLPs
-        'ShallowMLP2': models_core.ShallowMLP2,
-        'SimplexShallowMLP2': models_simplex.SimplexShallowMLP2,
-        'ReplicatorShallowMLP2': models_replicator.ReplicatorShallowMLP2,
+        'BasicMLP': models_core.BasicMLP,
+        'SimplexBasicMLP': models_simplex.SimplexBasicMLP,
+        'ReplicatorBasicMLP': models_replicator.ReplicatorBasicMLP,
 
         # Residual MLPs
         'ResidualMLP': models_core.ResidualMLP,
@@ -55,7 +55,7 @@ def get_model_classes():
         'ReplicatorTransformer': models_replicator.ReplicatorTransformer,
 
         # Population-Weighted Attention models
-        'ReplicatorPopTransformer': models_replicator.ReplicatorPopTransformer,
+        'ReplicatorPopTransformer': models_replicator.ReplicatorPopulationTransformer,
         'SimplexPopTransformer': models_simplex.SimplexPopTransformer,
 
         # Should include old versions of custom models for comparison? transformSoftmax, canODE-FitMat, canODE-attendFit

@@ -6,7 +6,7 @@ import model_populationAttention as patt
 import model_skipgates as skips
 
 
-class EmbeddedSimplexIdentity(nn.Module):
+class SimplexEmbeddedIdentity(nn.Module):
     def __init__(self, data_dim, embed_dim, learnable_skip):
         self.USES_CONDENSED = True
         super().__init__()
@@ -49,14 +49,13 @@ class SimplexLinear(nn.Module):
         return self.simplex_model(x)
     
 
-class SimplexShallowMLP(nn.Module):
-    def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
+class SimplexSLP(nn.Module):
+    def __init__(self, data_dim, hidden_dim, learnable_skip):
         super().__init__()
 
-        self.core_model = core.ShallowMLP(
+        self.core_model = core.SLP(
             data_dim=data_dim,
-            hidden_dim=hidden_dim,
-            dropout=dropout
+            hidden_dim=hidden_dim
         )
         self.simplex_model = simpwrap.SimplexModel(self.core_model, learnable_skip)
     
@@ -73,11 +72,11 @@ class SimplexShallowMLP(nn.Module):
         return construct(cls, kwargs, override), override
     
 
-class SimplexShallowMLP2(nn.Module):
+class SimplexBasicMLP(nn.Module):
     def __init__(self, data_dim, hidden_dim, learnable_skip, dropout):
         super().__init__()
 
-        self.core_model = core.ShallowMLP2(
+        self.core_model = core.BasicMLP(
             data_dim=data_dim,
             hidden_dim=hidden_dim,
             dropout=dropout

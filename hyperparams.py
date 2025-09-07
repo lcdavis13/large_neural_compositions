@@ -5,34 +5,35 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder = HyperparameterComposer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
     hpbuilder.add_param("model_name", 
+                        # 'SimplexLinear',
                         # "junk", 
-                        # 'cNODE1', 
+                        'cNODE1', 
                         # 'cNODE1+1-proper',
                         # 'cNODE1+1-colFrozen',
                         # 'cNODE1+1-noFreeze',
                         # 'cNODE2',
                         # 'cNODE2Improved',
-                        # 'EmbeddedSimplexIdentity',
-                        # 'EmbeddedReplicatorIdentity',
+                        # 'SimplexEmbeddedIdentity',
+                        # 'ReplicatorEmbeddedEncodedIdentity',
                         # 'Constant',
                         # 'SimplexConstant',
                         # 'ReplicatorConstant',
                         # 'Linear',
                         # 'SimplexLinear',
                         # 'ReplicatorLinear',
-                        # 'ShallowMLP',
-                        # 'SimplexShallowMLP',
-                        # 'ReplicatorShallowMLP',
-                        # 'ShallowMLP2',
-                        # 'SimplexShallowMLP2',
-                        # 'ReplicatorShallowMLP2',
+                        # 'SLP',
+                        # 'SimplexSLP',
+                        # 'ReplicatorSLP',
+                        # 'BasicMLP',
+                        # 'SimplexBasicMLP',
+                        'ReplicatorBasicMLP',
                         # 'ResidualMLP',
                         # 'SimplexResidualMLP',
                         # 'ReplicatorResidualMLP',
                         # 'SimplexTransformer',
                         'ReplicatorTransformer',
-                        'SimplexPopTransformer',
-                        'ReplicatorPopTransformer',
+                        # 'SimplexPopTransformer',
+                        # 'ReplicatorPopTransformer',
                         help="model(s) to run")
 
     # data params
@@ -56,7 +57,8 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         "random-1-gLV",
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
-                        800,  # 1k HP search
+                        3000, 
+                        # 800,  # 1k HP search
                         # 80000,  # 100k HP search
                         # 1000,
                         # 3162,
@@ -71,11 +73,11 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # -1,
                         0,  
                         category=datacat, help="which fold to run, -1 for all")
-    hpbuilder.add_param("data_validation_samples", 100,
+    hpbuilder.add_param("data_validation_samples", 1000,
                         category=datacat, help="Number of samples to use for validation. If <= 0, uses K-Fold crossvalidation (see other arguments). If positive, K-Fold will not be used, and instead the first data_validation_samples samples will be used for validation and the following data_subset samples will be used for training.")
     hpbuilder.add_param("minibatch_examples", 
-                        250, 
-                        # 100, 
+                        # 250, 
+                        100, 
                         help="minibatch size",
                         category=datacat)
     hpbuilder.add_flag("eval_benchmarks", True,
@@ -107,6 +109,8 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     
     # experiment params
     hpbuilder.add_param("epochs",
+                        25, 
+                        # 50, 
                         # 182,  # 1k HP search
                         # 7,  # 100k HP search
                         # 300, # extra epochs for randomized timesteps
@@ -114,7 +118,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 6, 20, 64, 200, 
                         # 12.0, 
                         # 64.0, 
-                        25.0, 
+                        # 25.0, 
                         # 300, 
                         # 200, 
                         help="maximum number of epochs")
@@ -170,8 +174,9 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 0.00003993407529,  # randomized timesteps
                         # 0.1, 
                         # 0.00160707665, 
-                        # 0.001,
-                        0.01, 
+                        0.001,
+                        # 0.0001,
+                        # 0.01, 
                         # 1.0, 0.32, 0.1, 0.032, 
                         # 1.0, 0.1, 0.01, 0.001, 
                         # 0.0001, 0.00001, 0.000001,
@@ -187,6 +192,8 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 2.034777678,  # 1k HP search
                         # 0.8170174678,  # 100k HP search
                         help="weight decay")
+    hpbuilder.add_flag("wd_during_warmup", False,
+                       help="whether or not to use weight decay during the LR warmup. Default false.")
     hpbuilder.add_param("noise", 
                         0.0,
                         # 0.01,
@@ -204,10 +211,19 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         "t_shortlinear.csv",
                         help="ODE integration timesteps file")
     hpbuilder.add_param("number_converged_timesteps", 
-                        # 1, 
+                        1, 
                         # 29, 
-                        15, 
+                        # 15, 
                         help="number of timesteps in the timesteps file that were after convergence to a stable fixed point. If > 1, multiple timesteps will be used for training, encouraging the model to learn a stable fixed point.")
+    hpbuilder.add_param("supervise_derivative", 
+                    #    False, 
+                       True,
+                       help="whether or not to use an L2 loss penalty for non-zero derivatives in the output state of ODE-based systems (no effect on non-ODE models)")
+    hpbuilder.add_param("derivative_loss_log10_scale", 
+                        7,
+                        8,
+                        9,
+                        help="log10 scale factor for the derivative loss")
     hpbuilder.add_param("interpolate", False, 
                         help="whether or not to use supervised interpolation steps")
     hpbuilder.add_param("interpolate_noise", False,
@@ -220,18 +236,18 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 26,
                         help="Number of 'environment' species added to envNode. If 0, the model becomes cNODE1.")
     hpbuilder.add_param("env_scale", 
-                        # 0.00001,
-                        # 0.0001,
-                        # 0.001,
-                        # 0.01,
+                        # 0.00001, 
+                        # 0.0001, 
+                        # 0.001, 
+                        # 0.01, 
+                        # 1.0, 
                         1.0/72.0, 
-                        # 0.1,
-                        # 1.0,
-                        # 10.0,
-                        # 72.0,
-                        # 100.0,
+                        # 0.1, 
+                        # 1.0, 
+                        # 10.0, 
+                        # 100.0, 
                         help="Initial abundance value of 'environment' species in glvNode/envNode. A reasonable default is 1/mean_richness. However, for some unfathomable reason, glv1NODE seems to function better with approximately mean_richness instead of the inverse.")
-    hpbuilder.add_param("hidden_dim", 512, 
+    hpbuilder.add_param("hidden_dim", 1024, 
                         help="hidden dimension for MLP-based models")
     hpbuilder.add_param("embed_dim", 12,
                         help="dimension of embedding for embedding-based models")

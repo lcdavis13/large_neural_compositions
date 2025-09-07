@@ -57,7 +57,7 @@ class DirectToZero(torch.optim.lr_scheduler.LRScheduler):
 
     def get_lr(self):
         return [group['lr'] for group in self.optimizer.param_groups]
-
+    
 
 
 class LRScheduler:
@@ -68,9 +68,9 @@ class LRScheduler:
         self.has_stepped = False
         self.initial_lrs = initial_lr
         
-        # For OneCycleLR and ExponentialLR (I suspect it is any scheduler that uses get_lr() to perform the update step), we need to undo the first LR step that for some reason occurs before the first batch.
-        if not isinstance(scheduler, ReduceLROnPlateau):
-            scheduler.optimizer.param_groups[0]['lr'] = initial_lr  # TODO: Figure out how to fix this without messing up models that have multiple LR values in different param_groups.
+        # # For OneCycleLR and ExponentialLR (I suspect it is any scheduler that uses get_lr() to perform the update step), we need to undo the first LR step that for some reason occurs before the first batch.
+        # if not isinstance(scheduler, ReduceLROnPlateau):
+        #     scheduler.optimizer.param_groups[0]['lr'] = initial_lr  # TODO: Figure out how to fix this without messing up models that have multiple LR values in different param_groups.
         
         if update_interval:
             self.update_interval = update_interval
@@ -102,6 +102,59 @@ class LRScheduler:
         if not self.has_stepped:# and isinstance(self.scheduler, ReduceLROnPlateau):
             return self.initial_lrs
         return self.scheduler.optimizer.param_groups[0]['lr']
+    
+
+class WDScheduler:
+    def __init__(self, scheduler, update_interval=None):
+        self.scheduler = scheduler
+
+        if update_interval:
+            self.update_interval = update_interval
+        else:
+            self.update_interval = 'batch'
+
+    def batch_step(self):
+        if self.update_interval == 'batch':
+            self.scheduler.step()
+
+    def epoch_step(self):
+        if self.update_interval == 'epoch':
+            self.scheduler.step()
+
+    def step(self):
+        self.scheduler.step()
+
+    def get_wd(self):
+        return self.scheduler.get_wd()
+    
+    def get_last_wd(self):
+        return self.scheduler.optimizer.param_groups[0]['weight_decay']
+
+class WDConstant:
+    def __init__(self, optimizer, wd):
+        self.optimizer = optimizer
+        self.wd = wd
+
+    def step(self):
+        for param_group in self.optimizer.param_groups:
+            param_group['weight_decay'] = self.wd
+
+
+class WDZeroWarmup:
+    def __init__(self, optimizer, wd, update_steps, warmup_proportion=0.1):
+        self.optimizer = optimizer
+        self.wd = wd
+        self.update_steps = update_steps
+        self.warmup_proportion = warmup_proportion
+
+    def step(self):
+        # zero during warmup, wd after warmup
+        if self.update_steps < self.warmup_proportion * self.update_steps:
+            for param_group in self.optimizer.param_groups:
+                param_group['weight_decay'] = 0.0
+        else:
+            for param_group in self.optimizer.param_groups:
+                param_group['weight_decay'] = self.wd
 
 
 # Example usage
