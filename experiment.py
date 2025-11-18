@@ -656,87 +656,58 @@ def train_model(data_train, data_valid, data_test,
     # purpose was to find the truly optimal epoch across folds, but averaging the epoch across folds might be better for avoiding overfitting anyway.
     # return val_opt, valscore_opt, trn_opt, trnscore_opt, last_opt, training_curve, test_score
 
+def fit_and_crossvalidate(
+    fit_and_evaluate_fn,
+    data_folded,
+    data_test,
+    score_fns,
+    whichfold,
+    filepath_out_fold,
+    filepath_out_expt,
+    out_rowinfo_dict,
+    required_scores=None,
+    verbosity=1,
+):
+    """
+    High-level cross-validation helper:
+      - for each fold: run fit_and_evaluate_fn to obtain fold_stats_dict & other_stats_dict
+      - then delegate to crossvalidate_from_fold_stats for aggregation/logging
 
-def crossvalidate(fit_and_evaluate_fn, data_folded, data_test, score_fns, whichfold, filepath_out_fold, filepath_out_expt, out_rowinfo_dict, required_scores=None, verbosity=1):
+    This is used by benchmark-style runs (identity, linear regression, etc).
     """
-    Run cross-validation on the given data folds. This is fully agnostic to the model, training regime, etc.
-    
-    fit_and_evaluate_fn: function to fit and evaluate the model.
-        - Accepts data_train, data_valid, data_test, info_dict, and verbosity as arguments. Other args should be passed using lambdas in the calling context.
-        - Returns a tuple of dictionaries: fold_stats_dict, other_stats_dict.
-            - fold_stats_dict: statistics that should be averaged across folds (e.g. loss, score, epochs).
-    format_name: optional suffix for the output file names. Use this if there are different possible result formats returned from fit_and_evaluate_fn.
-        - e.g. directly fitted models (linear regression etc) might report fewer statistics than trained models.
-    out_keys_dict: dictionary of keys to be output in the results. This is used to ensure that the same keys are used across all folds.
-    """
-    
-    
+
     fold_stat_dicts = []
     other_stat_dicts = []
-    fold_valid = []
-    valid_folds = 0
 
     for fold_num, data_fold in enumerate(data_folded):
         if whichfold >= 0:
             fold_num = whichfold
-        
+
         data_train = data_fold[0]
         data_valid = data_fold[1]
 
-        fold_stats_dict, other_stats_dict = fit_and_evaluate_fn(data_train=data_train, data_valid=data_valid, data_test=data_test, 
-                                                                fold_num=fold_num, score_fns=score_fns, verbosity=verbosity-1)
-        
+        fold_stats_dict, other_stats_dict = fit_and_evaluate_fn(
+            data_train=data_train,
+            data_valid=data_valid,
+            data_test=data_test,
+            fold_num=fold_num,
+            score_fns=score_fns,
+            verbosity=verbosity - 1,
+        )
+
         fold_stat_dicts.append(fold_stats_dict)
         other_stat_dicts.append(other_stats_dict)
 
-        # check validity of all values in fold_stats_dict
-        valid = True
-        if required_scores is not None:
-            for k in required_scores:
-                v = fold_stats_dict.get(k)
-                if not isinstance(v, (int, float)):
-                    print(f"WARNING: Fold {fold_num}, key '{k}': invalid type ({type(v).__name__})")
-                    valid = False
-                elif not math.isfinite(v):
-                    print(f"WARNING: Fold {fold_num}, key '{k}': non-finite value ({v})")
-                    valid = False
-        fold_valid.append(valid)
-        if valid:
-            valid_folds += 1
-        else:
-            print(f"WARNING: Fold {fold_num} is invalid. Not including in mean and stddev.")
+    mean_dict, std_dict, _ = crossvalidate_from_fold_stats(
+        fold_stat_dicts=fold_stat_dicts,
+        other_stat_dicts=other_stat_dicts,
+        filepath_out_fold=filepath_out_fold,
+        filepath_out_expt=filepath_out_expt,
+        out_rowinfo_dict=out_rowinfo_dict,
+        required_scores=required_scores,
+        verbosity=verbosity,
+    )
 
-        
-        stream.stream_results(filepath_out_fold, verbosity-1 > 0, verbosity-1 > 0, verbosity-1 > -1,
-                              "fold_num", fold_num, 
-                              "fold_valid", valid,
-                              *unrolldict(out_rowinfo_dict),
-                              *unrolldict(fold_stats_dict),
-                              *unrolldict(other_stats_dict),
-                              prefix="\n========================================FOLD=========================================\n",
-                              suffix="\n=====================================================================================\n")
-
-    # compute stats across folds (excluding folds with invalid values for any required keys, and excluding individual invalid values in non-required keys)
-    mean_dict = {}
-    std_dict = {}
-    for key in fold_stat_dicts[0].keys():
-        valid_values = [d[key] for d, valid in zip(fold_stat_dicts, fold_valid) if valid]
-        valid_values = [v for v in valid_values if v is not None]  # Remove None values. The above filter removes entire folds based on certain required keys, but this filters on an element-by-element basis in case there are Nones in a non-required key.
-        mean_key = f"mean_{key}"
-        std_key = f"std_{key}"
-        mean_dict[mean_key] = np.nanmean(valid_values)
-        std_dict[std_key] = np.nanstd(valid_values)
-        
-    stream.stream_results(filepath_out_expt, verbosity > 0, verbosity > 0, verbosity > -1,
-                            *unrolldict(out_rowinfo_dict),
-                            "valid_folds", valid_folds,
-                            *unrolldict(mean_dict),
-                            *unrolldict(std_dict),
-                            prefix="\n=====================================EXPERIMENT======================================\n",
-                            suffix="\n=====================================================================================\n")
-    
-    
-    # return val_loss_optims, val_score_optims, trn_loss_optims, trn_score_optims, final_optims, val_loss_curves, test_scores
     return mean_dict, std_dict, fold_stat_dicts, other_stat_dicts
 
 
@@ -903,7 +874,7 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot
     if dp.eval_benchmarks:
         lambda_identity = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.evaluate_identity_function(
                     data_train, data_valid, data_test, fold_num, score_fns, hp, verbosity)
-        mean_id_scores, _, _, _ = crossvalidate(
+        mean_id_scores, _, _, _ = fit_and_crossvalidate(
                     fit_and_evaluate_fn=lambda_identity, 
                     data_folded=data_folded, data_test=testdata, 
                     score_fns=score_fns,
@@ -923,7 +894,7 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot
                 # models_fitted.fit_and_evaluate_linear_regression(data_train, data_valid, data_test, fold_num, score_fn, data_dim, verbosity=0)
         lambda_linreg = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.fit_and_evaluate_lr_or_mp(
                     data_train, data_valid, data_test, fold_num, score_fns, dense_columns, hp, verbosity=verbosity)
-        mean_lin_scores, _, _, _ = crossvalidate(
+        mean_lin_scores, _, _, _ = fit_and_crossvalidate(
                     fit_and_evaluate_fn=lambda_linreg, 
                     data_folded=data_folded, data_test=testdata, 
                     score_fns=score_fns,
@@ -939,7 +910,7 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot
                         "config_configid": cp.config_configid, 
                         "dataset_configid": dp.data_configid
                     },
-                    required_scores=["train_loss", "train_mse"]
+                    required_scores=["train_dataloss", "train_mse"]
                 )
         print(mean_id_scores)
         print(mean_lin_scores)
@@ -1704,7 +1675,7 @@ def setup_jobs(cp, dp, hp,
         filepath_out_fold=filepath_out_fold,
         filepath_out_expt=filepath_out_expt,
         out_rowinfo_dict=out_rowinfo_dict,
-        required_scores=["val_loss", "trn_loss", "val_score", "trn_score"],
+        required_scores=["val_loss", "trn_loss", "val_dataloss", "trn_dataloss"],
         verbosity=verbosity,
     )
     return bundle
@@ -1728,76 +1699,138 @@ def run_job_epoch(bundle: ExperimentBundle):
 def finish_jobs(bundle: ExperimentBundle):
     """
     After all jobs in this ExperimentBundle are finished, compute cross-fold
-    statistics and write folds + experiment results, mirroring crossvalidate().
+    statistics and write folds + experiment results, using the same CV logic
+    as crossvalidate().
     """
     assert bundle.all_jobs_finished(), "finish_jobs called before all jobs are finished"
 
+    # Collect per-fold stats from TrainingJob instances
     fold_stat_dicts = []
     other_stat_dicts = []
-    fold_valid = []
-    valid_folds = 0
-
-    # 1) Collect per-fold stats from jobs
-    for fold_num, job in enumerate(bundle.jobs):
+    for job in bundle.jobs:
         fold_stats_dict, other_stats_dict = job.get_fold_stats()
         fold_stat_dicts.append(fold_stats_dict)
         other_stat_dicts.append(other_stats_dict)
 
-        # fold validity check (same as crossvalidate)
+    mean_dict, std_dict, valid_folds = crossvalidate_from_fold_stats(
+        fold_stat_dicts=fold_stat_dicts,
+        other_stat_dicts=other_stat_dicts,
+        filepath_out_fold=bundle.filepath_out_fold,
+        filepath_out_expt=bundle.filepath_out_expt,
+        out_rowinfo_dict=bundle.out_rowinfo_dict,
+        required_scores=bundle.required_scores,
+        verbosity=bundle.verbosity,
+    )
+
+    return mean_dict, std_dict, fold_stat_dicts, other_stat_dicts
+
+
+
+def crossvalidate_from_fold_stats(
+    fold_stat_dicts,
+    other_stat_dicts,
+    filepath_out_fold,
+    filepath_out_expt,
+    out_rowinfo_dict,
+    required_scores=None,
+    verbosity=1,
+):
+    """
+    Core cross-validation logic:
+      - validate each fold (using required_scores)
+      - log per-fold results
+      - compute mean/std across valid folds
+      - log experiment-level summary
+
+    This is the single source of truth for CV behavior.
+
+    Callers:
+      - crossvalidate(...), which *produces* fold_stat_dicts by running
+        fit_and_evaluate_fn on each fold
+      - finish_jobs(...), which *produces* fold_stat_dicts from TrainingJob
+        instances.
+    """
+
+    fold_valid = []
+    valid_folds = 0
+
+    # 1) validate and log each fold
+    for fold_num, (fold_stats_dict, other_stats_dict) in enumerate(
+        zip(fold_stat_dicts, other_stat_dicts)
+    ):
         valid = True
-        if bundle.required_scores is not None:
-            for k in bundle.required_scores:
+        if required_scores is not None:
+            for k in required_scores:
                 v = fold_stats_dict.get(k)
                 if not isinstance(v, (int, float)):
-                    print(f"WARNING: Fold {fold_num}, key '{k}': invalid type ({type(v).__name__})")
+                    print(
+                        f"WARNING: Fold {fold_num}, key '{k}': invalid type ({type(v).__name__})"
+                    )
                     valid = False
                 elif not math.isfinite(v):
-                    print(f"WARNING: Fold {fold_num}, key '{k}': non-finite value ({v})")
+                    print(
+                        f"WARNING: Fold {fold_num}, key '{k}': non-finite value ({v})"
+                    )
                     valid = False
+
         fold_valid.append(valid)
         if valid:
             valid_folds += 1
         else:
-            print(f"WARNING: Fold {fold_num} is invalid. Not including in mean and stddev.")
+            print(
+                f"WARNING: Fold {fold_num} is invalid. Not including in mean and stddev."
+            )
 
-        # Per-fold logging (same format as crossvalidate)
         stream.stream_results(
-            bundle.filepath_out_fold,
-            bundle.verbosity - 1 > 0,
-            bundle.verbosity - 1 > 0,
-            bundle.verbosity - 1 > -1,
-            "fold_num", fold_num,
-            "fold_valid", valid,
-            *unrolldict(bundle.out_rowinfo_dict),
+            filepath_out_fold,
+            verbosity - 1 > 0,
+            verbosity - 1 > 0,
+            verbosity - 1 > -1,
+            "fold_num",
+            fold_num,
+            "fold_valid",
+            valid,
+            *unrolldict(out_rowinfo_dict),
             *unrolldict(fold_stats_dict),
             *unrolldict(other_stats_dict),
             prefix="\n========================================FOLD=========================================\n",
             suffix="\n=====================================================================================\n",
         )
 
-    # 2) Compute stats across folds (unchanged from crossvalidate)
+    # 2) compute mean/std across valid folds
     mean_dict = {}
     std_dict = {}
-    for key in fold_stat_dicts[0].keys():
-        valid_values = [d[key] for d, valid in zip(fold_stat_dicts, fold_valid) if valid]
-        valid_values = [v for v in valid_values if v is not None]
-        mean_key = f"mean_{key}"
-        std_key = f"std_{key}"
-        mean_dict[mean_key] = np.nanmean(valid_values)
-        std_dict[std_key] = np.nanstd(valid_values)
 
-    # 3) Experiment-level summary log (same style as crossvalidate)
+    if valid_folds == 0:
+        print(
+            "WARNING: No valid folds for this experiment; all mean/std metrics will be NaN."
+        )
+        if fold_stat_dicts:
+            for key in fold_stat_dicts[0].keys():
+                mean_dict[f"mean_{key}"] = float("nan")
+                std_dict[f"std_{key}"] = float("nan")
+    else:
+        for key in fold_stat_dicts[0].keys():
+            valid_values = [
+                d[key] for d, ok in zip(fold_stat_dicts, fold_valid) if ok
+            ]
+            valid_values = [v for v in valid_values if v is not None]
+            mean_dict[f"mean_{key}"] = np.nanmean(valid_values)
+            std_dict[f"std_{key}"] = np.nanstd(valid_values)
+
+    # 3) log experiment-level summary
     stream.stream_results(
-        bundle.filepath_out_expt,
-        bundle.verbosity > 0,
-        bundle.verbosity > 0,
-        bundle.verbosity > -1,
-        *unrolldict(bundle.out_rowinfo_dict),
-        "valid_folds", valid_folds,
+        filepath_out_expt,
+        verbosity > 0,
+        verbosity > 0,
+        verbosity > -1,
+        *unrolldict(out_rowinfo_dict),
+        "valid_folds",
+        valid_folds,
         *unrolldict(mean_dict),
         *unrolldict(std_dict),
         prefix="\n=====================================EXPERIMENT======================================\n",
         suffix="\n=====================================================================================\n",
     )
 
-    return mean_dict, std_dict, fold_stat_dicts, other_stat_dicts
+    return mean_dict, std_dict, valid_folds

@@ -116,9 +116,10 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     
     # experiment params
     hpbuilder.add_param("epochs",
+                        2,
                         # 25, 
                         # 50,
-                        80,
+                        # 80,
                         # 200, 
                         # 182,  # 1k HP search
                         # 7,  # 100k HP search

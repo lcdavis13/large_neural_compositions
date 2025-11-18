@@ -3,13 +3,16 @@ import torch
 
 def get_loss_functions():
     # specify loss function
-    loss_fn = loss_l1
     # loss_fn = loss_bc_plus_derivativeL2
     # loss_fn = aitchison_loss
     # loss_fn = lyapunov_aitchison_loss
 
+    data_loss_fn = loss_l1
+    total_loss_fn = loss_l1
+
     score_fns = {
-        "loss": loss_fn,
+        "loss": total_loss_fn,
+        "dataloss": data_loss_fn, 
         "aitchison": aitchison_loss,
         # "lyapunov": lyapunov_penalty_aitchison,
         "BCD_L1": loss_l1,
@@ -17,7 +20,7 @@ def get_loss_functions():
         "simplex_distance": distribution_error,
     }
 
-    return loss_fn, score_fns
+    return total_loss_fn, score_fns
 
 
 def _final_state(x):
