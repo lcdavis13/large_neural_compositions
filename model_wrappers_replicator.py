@@ -7,6 +7,29 @@ import model_hofbauer as hof
 import model_alr as alr
 
 
+# Because lambda functions (or any non-module) don't work with torchdiffeq.odeint_adjoint
+# in the current version, we define a "lambda module" for passing extra arguments to the
+# ODE function.
+class ODELambda(nn.Module):
+    def __init__(self, base_func):
+        super().__init__()
+        self.base_func = base_func      # e.g. your ODEFunc_...
+        self._extra_args = ()
+        self._extra_kwargs = {}
+
+    def set_context(self, *args, **kwargs):
+        """
+        Store any extra arguments/kwargs needed for this forward pass.
+        These will be passed to base_func(t, x, *args, **kwargs).
+        """
+        self._extra_args = args
+        self._extra_kwargs = kwargs
+
+    def forward(self, t, x):
+        # t, x come from odeint; everything else comes from stored context
+        return self.base_func(t, x, *self._extra_args, **self._extra_kwargs)
+
+
 # -------------------------------------------------------------------------
 # ODE function classes
 # -------------------------------------------------------------------------
@@ -33,8 +56,8 @@ class ODEFunc_Replicator_CustomFitness(nn.Module):
 
         # Replicator dynamics
         xT_fx = torch.sum(x * fitness, dim=-1, keepdim=True)  # B x 1
-        diff = fitness - xT_fx  # B x N (or N+1)
-        dxdt = x * diff  # B x N (or N+1)
+        diff = fitness - xT_fx                                # B x N (or N+1)
+        dxdt = x * diff                                       # B x N (or N+1)
 
         # zero gate to start with zero derivative (identity function) before training
         dxdt = self.gate(dxdt)  # B x N (or N+1)
@@ -72,8 +95,8 @@ class ODEFunc_Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
 
         # Replicator dynamics
         xT_fx = torch.sum(x * fitness, dim=-1, keepdim=True)  # B x 1
-        diff = fitness - xT_fx  # B x N (or N+1)
-        dxdt = x * diff  # B x N (or N+1)
+        diff = fitness - xT_fx                                # B x N (or N+1)
+        dxdt = x * diff                                       # B x N (or N+1)
 
         # zero gate to start with zero derivative (identity function) before training
         dxdt = self.gate(dxdt)
@@ -104,8 +127,8 @@ class ODEFunc_Replicator_CustomFitness_IdEmbed(nn.Module):
 
         # Replicator dynamics
         xT_fx = torch.sum(x * fitness, dim=-1, keepdim=True)  # B x 1
-        diff = fitness - xT_fx  # B x N (or N+1)
-        dxdt = x * diff  # B x N (or N+1)
+        diff = fitness - xT_fx                                # B x N (or N+1)
+        dxdt = x * diff                                       # B x N (or N+1)
 
         # zero gate to start with zero derivative (identity function) before training
         dxdt = self.gate(dxdt)
@@ -218,6 +241,9 @@ class Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
             use_hofbauer=use_hofbauer,
         )
 
+        # Persistent lambda-module wrapper
+        self.ode_lambda = ODELambda(self.ode_func)
+
     def forward(self, t, x, ids):
         """
         x: B x N composition
@@ -235,25 +261,25 @@ class Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
 
             # biomass embedding: simple choice is a zero vector; could be learned instead
             biomass_embed = embeddings.new_zeros(embeddings[..., :1, :].shape)  # B x 1 x embed_dim
-            embeddings_ext = torch.cat([embeddings, biomass_embed], dim=1)  # B x (N+1) x embed_dim
+            embeddings_ext = torch.cat([embeddings, biomass_embed], dim=1)      # B x (N+1) x embed_dim
 
             # ODE integration in Hofbauer space
+            self.ode_lambda.set_context(embeddings_ext)
             y_ext = odeint(
-                lambda t_, x_: self.ode_func(t_, x_, embeddings_ext),
+                self.ode_lambda,
                 x0,
                 t,
-                adjoint_params=(embeddings_ext,),
             )
 
             # Step 4: collapse back to N-dimensional composition
             y = hof.hofbauer_collapse_state(y_ext)
         else:
             # ODE in standard N-dimensional replicator space
+            self.ode_lambda.set_context(embeddings)
             y = odeint(
-                lambda t_, x_: self.ode_func(t_, x_, embeddings),
+                self.ode_lambda,
                 x,
                 t,
-                adjoint_params=(embeddings,),
             )
 
         return y
@@ -293,6 +319,9 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
             use_hofbauer=use_hofbauer,
         )
 
+        # Persistent lambda-module wrapper
+        self.ode_lambda = ODELambda(self.ode_func)
+
     def forward(self, t, x, ids):
         """
         x: B x N composition
@@ -310,29 +339,28 @@ class Replicator_CustomFitness_IdEmbed(nn.Module):
 
             # biomass embedding: zero vector (could be made learnable if desired)
             biomass_embed = embeddings.new_zeros(embeddings[..., :1, :].shape)  # B x 1 x embed_dim
-            embeddings_ext = torch.cat([embeddings, biomass_embed], dim=1)  # B x (N+1) x embed_dim
+            embeddings_ext = torch.cat([embeddings, biomass_embed], dim=1)      # B x (N+1) x embed_dim
 
             # Integrate in Hofbauer space
+            self.ode_lambda.set_context(embeddings_ext)
             y_ext = odeint(
-                lambda t_, x_: self.ode_func(t_, x_, embeddings_ext),
+                self.ode_lambda,
                 x0,
                 t,
-                adjoint_params=(embeddings_ext,),
             )
 
             # Step 4: collapse back to N-dimensional composition
             y = hof.hofbauer_collapse_state(y_ext)
         else:
             # Standard N-dimensional space
+            self.ode_lambda.set_context(embeddings)
             y = odeint(
-                lambda t_, x_: self.ode_func(t_, x_, embeddings),
+                self.ode_lambda,
                 x,
                 t,
-                adjoint_params=(embeddings,),
             )
 
         return y
-
 
 
 # -------------------------------------------------------------------------
@@ -370,8 +398,8 @@ class ODEFunc_ALRReplicator_CustomFitness(nn.Module):
         # Replicator in ALR:
         # dz_i/dt = f_i(x) - f_ref(x) = f_i(x) - 0, where ref is biomass = last component
         dzdt = fitness[..., :-1]       # B x N
-        dzdt = dzdt * zero_mask  # for x-space replicator dynamics, dzdt is naturally zero off-support. But in ALR space where zeros don't exist and replaced by small numbers, that isn't true and we must enforce it.
-
+        # enforce zero off-support
+        dzdt = dzdt * zero_mask
 
         # zero gate to start with zero derivative (identity) before training
         dzdt = self.gate(dzdt)
@@ -387,7 +415,7 @@ class ODEFunc_ALRReplicator_CustomFitness_IdEmbed_XEncode(nn.Module):
     - convert z -> x_ext (Hofbauer),
     - encode x_ext, add embeddings,
     - run core fitness fn + decoder to get fitness on x_ext,
-    - apply Hofbauer mask,
+    - apply Hofbauer mask implicitly via ALR reference,
     - evolve z via dz_i = f_i - f_ref.
     """
     def __init__(self, fitness_fn, embed_dim, use_logx, learnable_skip: bool):
@@ -419,7 +447,8 @@ class ODEFunc_ALRReplicator_CustomFitness_IdEmbed_XEncode(nn.Module):
 
         # ALR replicator dynamics
         dzdt = fitness[..., :-1]    # B x N
-        dzdt = dzdt * zero_mask  # for x-space replicator dynamics, dzdt is naturally zero off-support. But in ALR space where zeros don't exist and replaced by small numbers, that isn't true and we must enforce it.
+        # enforce zero off-support
+        dzdt = dzdt * zero_mask
 
         # zero gate
         dzdt = self.gate(dzdt)
@@ -457,7 +486,8 @@ class ODEFunc_ALRReplicator_CustomFitness_IdEmbed(nn.Module):
 
         # ALR replicator dynamics
         dzdt = fitness[..., :-1]     # B x N
-        dzdt = dzdt * zero_mask  # for x-space replicator dynamics, dzdt is naturally zero off-support. But in ALR space where zeros don't exist and replaced by small numbers, that isn't true and we must enforce it.
+        # enforce zero off-support
+        dzdt = dzdt * zero_mask
 
         # zero gate
         dzdt = self.gate(dzdt)
@@ -506,6 +536,9 @@ class ALR_Replicator_CustomFitness(nn.Module):
             learnable_skip=learnable_skip,
         )
 
+        # Lambda-module wrapper for passing zero_mask
+        self.ode_lambda = ODELambda(self.ode_func)
+
     def forward(self, t, x):
         """
         x: B x N composition (sum_i x_i = 1)
@@ -518,12 +551,12 @@ class ALR_Replicator_CustomFitness(nn.Module):
         z0, zero_mask = alr.hofbauer_state_to_alr(x0_ext)  # B x N
 
         # Step 3: integrate in ALR space
-        odefunc = lambda t_, z_: self.ode_func(t_, z_, zero_mask)
-        z_traj = odeint(odefunc, z0, t)  # T x B x N
+        self.ode_lambda.set_context(zero_mask)
+        z_traj = odeint(self.ode_lambda, z0, t)  # T x B x N
 
         # Step 4: map ALR traj back to N-dim composition
         y = alr.alr_to_hofbauer_state(z_traj, zero_mask)  # T x B x (N+1)
-        x_final = hof.hofbauer_collapse_state(y)  # T x B x N
+        x_final = hof.hofbauer_collapse_state(y)          # T x B x N
 
         return x_final
 
@@ -561,6 +594,9 @@ class ALR_Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
             learnable_skip=learnable_skip,
         )
 
+        # Lambda-module wrapper for embeddings_ext + zero_mask
+        self.ode_lambda = ODELambda(self.ode_func)
+
     def forward(self, t, x, ids):
         """
         x: B x N composition
@@ -583,16 +619,16 @@ class ALR_Replicator_CustomFitness_IdEmbed_XEncode(nn.Module):
         z0, zero_mask = alr.hofbauer_state_to_alr(x0_ext)  # B x N
 
         # Step 3: integrate in ALR space with fixed embeddings_ext
+        self.ode_lambda.set_context(embeddings_ext, zero_mask)
         z_traj = odeint(
-            lambda t_, z_: self.ode_func(t_, z_, embeddings_ext, zero_mask),
+            self.ode_lambda,
             z0,
             t,
-            adjoint_params=(embeddings_ext,),
         )  # T x B x N
 
         # Step 4: map ALR traj back to N-dim composition
         y = alr.alr_to_hofbauer_state(z_traj, zero_mask)  # T x B x (N+1)
-        x_final = hof.hofbauer_collapse_state(y)  # T x B x N
+        x_final = hof.hofbauer_collapse_state(y)          # T x B x N
 
         return x_final                       # T x B x N
 
@@ -628,6 +664,9 @@ class ALR_Replicator_CustomFitness_IdEmbed(nn.Module):
             learnable_skip=learnable_skip,
         )
 
+        # Lambda-module wrapper for embeddings_ext + zero_mask
+        self.ode_lambda = ODELambda(self.ode_func)
+
     def forward(self, t, x, ids):
         """
         x: B x N composition
@@ -650,15 +689,15 @@ class ALR_Replicator_CustomFitness_IdEmbed(nn.Module):
         z0, zero_mask = alr.hofbauer_state_to_alr(x0_ext)  # B x N
 
         # Step 3: integrate in ALR space with fixed embeddings_ext
+        self.ode_lambda.set_context(embeddings_ext, zero_mask)
         z_traj = odeint(
-            lambda t_, z_: self.ode_func(t_, z_, embeddings_ext, zero_mask),
+            self.ode_lambda,
             z0,
             t,
-            adjoint_params=(embeddings_ext,),
         )  # T x B x N
 
         # Step 4: map ALR traj back to N-dim composition
         y = alr.alr_to_hofbauer_state(z_traj, zero_mask)  # T x B x (N+1)
-        x_final = hof.hofbauer_collapse_state(y)  # T x B x N
+        x_final = hof.hofbauer_collapse_state(y)          # T x B x N
 
         return x_final
