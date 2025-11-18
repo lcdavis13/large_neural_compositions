@@ -97,61 +97,61 @@ class cNODE2_NonLinear_Biased(nn.Module):
 
 # # The following models (all of which are variations of cNODE with an extra dimension added) have been temporarily removed until I add support for returning the derivative
 
-# class ODEFunc_glv1NODE(nn.Module):
-#     def __init__(self, data_dim):
-#         super().__init__()
-#         self.data_dim = data_dim
+class ODEFunc_glv1NODE(nn.Module):
+    def __init__(self, data_dim):
+        super().__init__()
+        self.data_dim = data_dim
 
-#         # Trainable matrix A: (N x (N+1))
-#         self.A = nn.Parameter(torch.zeros(data_dim, data_dim + 1))
+        # Trainable matrix A: (N x (N+1))
+        self.A = nn.Parameter(torch.zeros(data_dim, data_dim + 1))
 
-#         # Non-trainable zero vector: (N+1,)
-#         self.zeros = nn.Parameter(torch.zeros(data_dim + 1), requires_grad=False)
+        # Non-trainable zero vector: (N+1,)
+        self.zeros = nn.Parameter(torch.zeros(data_dim + 1), requires_grad=False)
 
-#     def forward(self, t, x_aug):
-#         # x_aug: (B, N+1)
-#         B = x_aug.shape[0]
+    def forward(self, t, x_aug):
+        # x_aug: (B, N+1)
+        B = x_aug.shape[0]
 
-#         # Build full (N+1 x N+1) matrix: top = A, bottom = r
-#         top = self.A                      # (N x N+1)
-#         bottom = self.zeros.view(1, -1)       # (1 x N+1)
-#         A_tilde = torch.cat([top, bottom], dim=0)  # (N+1 x N+1)
+        # Build full (N+1 x N+1) matrix: top = A, bottom = r
+        top = self.A                      # (N x N+1)
+        bottom = self.zeros.view(1, -1)       # (1 x N+1)
+        A_tilde = torch.cat([top, bottom], dim=0)  # (N+1 x N+1)
 
-#         fx = torch.matmul(x_aug, A_tilde.T)             # (B x N+1)
-#         xT_fx = torch.sum(x_aug * fx, dim=1, keepdim=True)  # (B x 1)
-#         dxdt = x_aug * (fx - xT_fx)                     # (B x N+1)
+        fx = torch.matmul(x_aug, A_tilde.T)             # (B x N+1)
+        xT_fx = torch.sum(x_aug * fx, dim=1, keepdim=True)  # (B x 1)
+        dxdt = x_aug * (fx - xT_fx)                     # (B x N+1)
 
-#         return dxdt
+        return dxdt
 
 
-# class glv1NODE(nn.Module):
-#     def __init__(self, data_dim, env_scale):
-#         super().__init__()
-#         self.USES_ODEINT = True
-#         self.data_dim = data_dim
-#         self.env_scale = env_scale
-#         self.func = ODEFunc_glv1NODE(data_dim)
+class glv1NODE(nn.Module):
+    def __init__(self, data_dim, env_scale):
+        super().__init__()
+        self.USES_ODEINT = True
+        self.data_dim = data_dim
+        self.env_scale = env_scale
+        self.func = ODEFunc_glv1NODE(data_dim)
 
-#     def forward(self, t, x):
-#         # x: (B, N), already on simplex (sum = 1)
+    def forward(self, t, x):
+        # x: (B, N), already on simplex (sum = 1)
 
-#         # Add extra component (any small constant, 1 if we want the terms to have the same scale as in our generative gLV model that starts on simplex) and renormalize
+        # Add extra component (any small constant, 1 if we want the terms to have the same scale as in our generative gLV model that starts on simplex) and renormalize
 
-#         x_extra = torch.full((x.shape[0], 1), fill_value=self.env_scale, device=x.device)
-#         x_aug = torch.cat([x, x_extra], dim=1)  # (B, N+1)
-#         x_aug = x_aug / x_aug.sum(dim=1, keepdim=True)  # Renormalize to simplex
+        x_extra = torch.full((x.shape[0], 1), fill_value=self.env_scale, device=x.device)
+        x_aug = torch.cat([x, x_extra], dim=1)  # (B, N+1)
+        x_aug = x_aug / x_aug.sum(dim=1, keepdim=True)  # Renormalize to simplex
 
-#         # Solve ODE
-#         y_aug, dydt_aug = odeint(self.func, x_aug, t)  # (T, B, N+1)
+        # Solve ODE
+        y_aug, dydt_aug = odeint(self.func, x_aug, t)  # (T, B, N+1)
 
-#         # Remove extra dimension and renormalize remaining components
-#         y = y_aug[..., :self.data_dim]                    # (T, B, N)
-#         y = y / y.sum(dim=-1, keepdim=True)               # Renormalize to simplex
+        # Remove extra dimension and renormalize remaining components
+        y = y_aug[..., :self.data_dim]                    # (T, B, N)
+        y = y / y.sum(dim=-1, keepdim=True)               # Renormalize to simplex
 
-#         dydt = dydt_aug[..., :self.data_dim]               # (T, B, N)
-#         dydt = dydt / dydt.sum(dim=-1, keepdim=True)       # Renormalize to simplex
+        dydt = dydt_aug[..., :self.data_dim]               # (T, B, N)
+        dydt = dydt / dydt.sum(dim=-1, keepdim=True)       # Renormalize to simplex
 
-#         return y, dydt
+        return y, dydt
 
 
 # class ODEFunc_glv2NODE(nn.Module):

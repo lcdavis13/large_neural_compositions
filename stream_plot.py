@@ -454,7 +454,7 @@ def plot_horizontal_line(title, y_value, label, style=None):
         queue = _plot_queues[title]
         queue.put(cmd)
 
-def plot_horizontal_lines(title, line_dict, style=None):
+def plot_horizontal_lines(title, line_dict, exclude_keys=None, style_dict=None):
     """
     Draw multiple horizontal lines in the specified plot.
     Works for both 'inline' and 'window' modes.
@@ -462,10 +462,16 @@ def plot_horizontal_lines(title, line_dict, style=None):
     if get_plot_mode() == 'off':
         return
 
-    if style is None:
-        style = {'linestyle': '--', 'color': 'gray'}
+    if style_dict is None:
+        style_dict = {}
 
     for label, y_value in line_dict.items():
+        if exclude_keys and label in exclude_keys:
+            continue
+        style = style_dict.get(label)
+        if style is None:
+            assigned_color = _get_next_color_for_plot(title)
+            style = {'linestyle': '--', 'color': assigned_color}
         plot_horizontal_line(title, y_value, label, style=style)
 
 

@@ -4,10 +4,10 @@ import torch
 
 # Set a default value if the environment variable is not specified (must be done before importing models)
 # os.environ.setdefault("SOLVER", "torchdiffeq")
-# os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
+os.environ.setdefault("SOLVER", "torchdiffeq_memsafe")
 # os.environ.setdefault("SOLVER", "torchode")
 # os.environ.setdefault("SOLVER", "torchode_memsafe")
-os.environ.setdefault("SOLVER", "trapezoid")
+# os.environ.setdefault("SOLVER", "trapezoid")
 
 import models
 import experiment as expt

@@ -11,6 +11,9 @@ import torch.nn as nn
 def get_model_classes():
     models = {
         'cNODE1': models_cNODE.cNODE1,
+        'cNODE1_vanilla': models_replicator.cNODE1, 
+        'cNODE1_hofbauer': models_replicator.cNODE1_Hofbauer, 
+        'cNODE1_hofbauerALR': models_replicator.cNODE1_HofbauerALR,
         # 'cNODE1+1-proper': models_cNODE.glv1NODE,
         # 'cNODE1+1-colFrozen': models_cNODE.glv2NODE,
         # 'cNODE1+1-noFreeze': models_cNODE.envNODE,

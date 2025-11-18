@@ -61,7 +61,8 @@ def odeint(func, y0, t, non_negative=True):
             dydts.append(f1_pred.clone())
 
     ys = torch.stack(ys, dim=0)        # (time, batch, state)
-    dydts = torch.stack(dydts, dim=0)  # (time, batch, state)
+    return ys
+    # dydts = torch.stack(dydts, dim=0)  # (time, batch, state)
 
-    # (time, 2, batch, state): 0 = y, 1 = dy/dt
-    return torch.stack((ys, dydts), dim=1)
+    # # (time, 2, batch, state): 0 = y, 1 = dy/dt
+    # return torch.stack((ys, dydts), dim=1)

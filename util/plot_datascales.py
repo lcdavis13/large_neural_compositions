@@ -7,6 +7,11 @@ import threading
 from collections import OrderedDict
 from collections import defaultdict
 
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.legend import Legend
+
 # === Configuration ===
 filename = "expt"
 caption_name = "1k"
@@ -27,7 +32,7 @@ CSV_FILE_PATH = f"results/datascale_6-4_256@26_transferredFromFullRank/{filename
 BENCHMARK_CSV_PATH = f"results/datascale_6-4_256@26_transferredFromFullRank/benchmarks.csv"
 # BENCHMARK_CSV_PATH = f"results/datascale_256-123_withoutExtrasFrom1/benchmarks.csv"
 
-PLOT_TITLE = f'Test Error vs Training Examples, Hyperparameters fitted to {caption_name} examples'
+PLOT_TITLE = f'Test Error vs Training Examples (Hyperparameters fitted to {caption_name} examples)'
 X_LABEL = 'Training Examples (log scale)'
 Y_LABEL = 'Test Error (Bray-Curtis, log scale)'
 
@@ -35,15 +40,15 @@ Y_LABEL = 'Test Error (Bray-Curtis, log scale)'
 DRAW_TRAIN_SCORES = False
 
 PLOT_HUE_COLUMN = 'model'
-PLOT_STYLE_COLUMN = 'dataset'
-# PLOT_STYLE_COLUMN = 'score_type'
+# PLOT_STYLE_COLUMN = 'dataset'
+PLOT_STYLE_COLUMN = 'score_type'
 # PLOT_STYLE_COLUMN = None
 # PLOT_SIZE_COLUMN = 'score_type'
 PLOT_SIZE_COLUMN = None
 
 DRAW_LEGEND_HUE = False
-DRAW_LEGEND_STYLE = True
-# DRAW_LEGEND_STYLE = False
+# DRAW_LEGEND_STYLE = True
+DRAW_LEGEND_STYLE = False
 DRAW_LEGEND_SIZE = False
 DRAW_LEGEND = DRAW_LEGEND_HUE or DRAW_LEGEND_STYLE or DRAW_LEGEND_SIZE
 
@@ -73,12 +78,22 @@ DRAW_LEGEND = DRAW_LEGEND_HUE or DRAW_LEGEND_STYLE or DRAW_LEGEND_SIZE
 
 # new logscale version
 Y_LIM = (None, 1.0)
+# X_LIM = (10, None)
 X_LIM = (10, None)
+# MODELS_TO_EXCLUDE = [
+#     "baseline-SLPMultSoftmax",
+#     "baseline-cNODE0",
+#     "baseline-SLPSoftmax",
+#     "cNODE-hourglass",
+# ]
 MODELS_TO_EXCLUDE = [
     "baseline-SLPMultSoftmax",
     "baseline-cNODE0",
     "baseline-SLPSoftmax",
     "cNODE-hourglass",
+    "canODE-attendFit",
+    "baseline-Linear",
+    "baseline-ConstSoftmax",
 ]
 
 HLINE_MODELS = {} #{"identity"} # currently not using this feature because I had trouble getting it to match the line styles of regular lines correctly
@@ -106,12 +121,12 @@ label_dict = OrderedDict([
     ("identity", "Identity"),
     ("LinearRegression-MP", "Linear (Moore-Penrose)"),
     ("cNODE1", "cNODE1"),
-    ("transformSoftmax", "Transformer + MSM"),
-    ("canODE-FitMat", "canODE: fitness matrix"),
-    ("canODE-attendFit", "canODE: attention fitness"),
+    ("transformSoftmax", "Transformer + masked softmax"),
+    ("canODE-FitMat", "canODE: attention-based ODE"),
+    ("canODE-attendFit", "canODE: attention-based ODE"),
     ("baseline-ConstSoftmax", "Const + MSM"),
     ("baseline-Linear", "Linear w/ SGD"),
-    ("baseline-LinearSoftmax", "Linear + MSM"),
+    ("baseline-LinearSoftmax", "Linear + masked softmax"),
     ("baseline-SLPSoftmax", "SLP + MSM"),
     ("baseline-SLPMultSoftmax", "SLP + MSM"),
     ("baseline-cNODE0", "cNODE const fitness"),
@@ -387,7 +402,7 @@ def run_adjust_text():
         # min_arrow_len=100.0, 
         arrowprops=None, 
         expand_axes=True, 
-        ensure_inside_axes=False,
+        ensure_inside_axes=True,
         only_move={'explode': 'y', 'static': 'x+', 'text': 'y', 'pull': 'y'},
         # only_move='y', 
     )
@@ -412,13 +427,6 @@ plt.grid(True)
 #     ]
 #     plt.legend(handles=custom_legend, title='Model')
 
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.legend import Legend
 
 def filter_legend_sections(ax, hue=None, style=None, size=None,
                            show_hue=True, show_style=True, show_size=True):

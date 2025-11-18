@@ -7,7 +7,10 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder.add_param("model_name", 
                         # 'SimplexLinear',
                         # "junk", 
-                        'cNODE1', 
+                        # 'cNODE1', 
+                        'cNODE1_vanilla', 
+                        'cNODE1_hofbauer', 
+                        'cNODE1_hofbauerALR', 
                         # 'cNODE1+1-proper',
                         # 'cNODE1+1-colFrozen',
                         # 'cNODE1+1-noFreeze',
@@ -26,12 +29,12 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 'ReplicatorSLP',
                         # 'BasicMLP',
                         # 'SimplexBasicMLP',
-                        'ReplicatorBasicMLP',
+                        # 'ReplicatorBasicMLP',
                         # 'ResidualMLP',
                         # 'SimplexResidualMLP',
                         # 'ReplicatorResidualMLP',
                         # 'SimplexTransformer',
-                        'ReplicatorTransformer',
+                        # 'ReplicatorTransformer',
                         # 'SimplexPopTransformer',
                         # 'ReplicatorPopTransformer',
                         help="model(s) to run")
@@ -49,7 +52,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     #                     # "5000@7_48_richness170",
     #                     category=datacat, help="dataset to use")
     hpbuilder.add_param("x_dataset", 
-                        "256",
+                        "32",
                         category=datacat, help="dataset to use for inputs")
     hpbuilder.add_param("y_dataset", 
                         # "random-2-old",
@@ -57,8 +60,8 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         "random-1-gLV",
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
-                        3000, 
-                        # 800,  # 1k HP search
+                        # 3000, 
+                        320,  # 1k HP search
                         # 80000,  # 100k HP search
                         # 1000,
                         # 3162,
@@ -109,8 +112,10 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     
     # experiment params
     hpbuilder.add_param("epochs",
-                        25, 
-                        # 50, 
+                        # 25, 
+                        # 50,
+                        80,
+                        # 200, 
                         # 182,  # 1k HP search
                         # 7,  # 100k HP search
                         # 300, # extra epochs for randomized timesteps
@@ -169,12 +174,13 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     
     # Optimizer params
     hpbuilder.add_param("lr", 
+                        0.1, 
                         # 0.003993407529,  # 1k HP search
                         # 0.001223800286,  # 100k HP search
                         # 0.00003993407529,  # randomized timesteps
                         # 0.1, 
                         # 0.00160707665, 
-                        0.001,
+                        # 0.001,
                         # 0.0001,
                         # 0.01, 
                         # 1.0, 0.32, 0.1, 0.032, 
@@ -184,6 +190,11 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 0.32, 0.1, 0.032, 0.01, 0.0032, #0.001, 0.00032, 
                         # 0.032, 0.01, 0.0032, 0.001,   
                         help="learning rate")
+    hpbuilder.add_param("warmup_proportion", 
+                        # 0.1,
+                        # 0.15,
+                        0.2,
+                        help="proportion of total training steps to use for LR warmup phase (remaining steps will be annealing to zero)")
     # hpbuilder.add_param("reptile_lr", 1.0, 
     #                     help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd", 
@@ -221,32 +232,32 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                        help="whether or not to use an L2 loss penalty for non-zero derivatives in the output state of ODE-based systems (no effect on non-ODE models)")
     hpbuilder.add_param("derivative_loss_log10_scale", 
                         7,
-                        8,
-                        9,
+                        # 8,
+                        # 9,
                         help="log10 scale factor for the derivative loss")
     hpbuilder.add_param("interpolate", False, 
                         help="whether or not to use supervised interpolation steps")
     hpbuilder.add_param("interpolate_noise", False,
                         help="whether or not to use independent noise for interpolation")
-    
+    hpbuilder.add_param("aitchison_eps", 
+                        1e-8,
+                        category=datacat,
+                        help="safety constant for Aitchison distance computations to avoid log(0)")
+    hpbuilder.add_param("lyapunov_lambda", 
+                        0.1,
+                        category=datacat,
+                        help="weight of Lyapunov stability loss term for ODE-based models")
+    hpbuilder.add_param("lyapunov_ramp_start_k", 
+                        0.9, 
+                        category=datacat,
+                        help="time (as fraction of total ODE evaluations) to start ramping up Lyapunov loss")
+
+
     # Model architecture params
-    hpbuilder.add_param("env_dim", 
-                        # 0, 
-                        1, 
-                        # 26,
-                        help="Number of 'environment' species added to envNode. If 0, the model becomes cNODE1.")
-    hpbuilder.add_param("env_scale", 
-                        # 0.00001, 
-                        # 0.0001, 
-                        # 0.001, 
-                        # 0.01, 
-                        # 1.0, 
-                        1.0/72.0, 
-                        # 0.1, 
-                        # 1.0, 
-                        # 10.0, 
-                        # 100.0, 
-                        help="Initial abundance value of 'environment' species in glvNode/envNode. A reasonable default is 1/mean_richness. However, for some unfathomable reason, glv1NODE seems to function better with approximately mean_richness instead of the inverse.")
+    hpbuilder.add_param("use_hofbauer", 
+                        True, 
+                        # False, 
+                        help="Whether or not to use the Hofbauer lift to allow the replicator dynamics to reproduce gLV dynamics. For complex fitness models, this is just an inductive bias; but for linear fitness models, this is fully necessary to reproduce gLV dynamics.")
     hpbuilder.add_param("hidden_dim", 1024, 
                         help="hidden dimension for MLP-based models")
     hpbuilder.add_param("embed_dim", 12,
@@ -295,6 +306,13 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 0.75,
                         # 1.0,  
                         help="tradeoff between width and depth for re-parameterization when parameter_target > 0. 0.0 means all width, 1.0 means all depth, and 0.5 is a balanced tradeoff.")
+    hpbuilder.add_flag("plot_linear_benchmark", 
+                        True,
+                        help="whether or not to plot a linear model benchmark")
+    hpbuilder.add_flag("plot_identity_benchmark", 
+                        True,
+                        help="whether or not to plot an identity model benchmark")
+
 
     return hpbuilder, datacat, config_cat
 
