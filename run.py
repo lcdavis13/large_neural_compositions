@@ -75,12 +75,41 @@ def run_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
             benchmark_losses = expt.run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns)
 
-            # loop through possible combinations of generic hyperparams
-            for hp in hpbuilder.parse_and_generate_combinations():
-                override_dict(hp, overrides)
-
-                expt.run_experiment(cp=cp, dp=dp, hp=hp, data_folded=data_folded, testdata=testdata, device=device, model_classes=model_classes, epoch_mngr_constructors=epoch_mngr_constructors, loss_fn=loss_fn, score_fns=score_fns, benchmark_losses=benchmark_losses, dense_columns=dense_columns, sparse_columns=sparse_columns)
-
+            if not cp.roundrobin:
+                expt.run_sequentially(
+                    hpbuilder=hpbuilder,
+                    cp=cp,
+                    dp=dp,
+                    data_folded=data_folded,
+                    testdata=testdata,
+                    device=device,
+                    model_classes=model_classes,
+                    epoch_mngr_constructors=epoch_mngr_constructors,
+                    loss_fn=loss_fn,
+                    score_fns=score_fns,
+                    benchmark_losses=benchmark_losses,
+                    dense_columns=dense_columns,
+                    sparse_columns=sparse_columns,
+                    overrides=overrides,
+                )
+            else:
+                # new round-robin scheduling across hp configs
+                expt.run_roundrobin(
+                    hpbuilder=hpbuilder,
+                    cp=cp,
+                    dp=dp,
+                    data_folded=data_folded,
+                    testdata=testdata,
+                    device=device,
+                    model_classes=model_classes,
+                    epoch_mngr_constructors=epoch_mngr_constructors,
+                    loss_fn=loss_fn,
+                    score_fns=score_fns,
+                    benchmark_losses=benchmark_losses,
+                    dense_columns=dense_columns,
+                    sparse_columns=sparse_columns,
+                    overrides=overrides,
+                )
 
     print("\n\nDONE")
     plotstream.finish_up()

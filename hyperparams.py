@@ -5,12 +5,12 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder = HyperparameterComposer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
     hpbuilder.add_param("model_name", 
-                        # 'SimplexLinear',
+                        'SimplexLinear',
                         # "junk", 
-                        # 'cNODE1', 
+                        'cNODE1', 
                         'cNODE1_vanilla', 
-                        'cNODE1_hofbauer', 
-                        'cNODE1_hofbauerALR', 
+                        # 'cNODE1_hofbauer', 
+                        # 'cNODE1_hofbauerALR', 
                         # 'cNODE1+1-proper',
                         # 'cNODE1+1-colFrozen',
                         # 'cNODE1+1-noFreeze',
@@ -108,6 +108,10 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # False,
                         True,
                         help="wait for plots to be closed by user before exiting",
+                        category=config_cat)
+    hpbuilder.add_flag("roundrobin",
+                        True,
+                        help="Whether or not to use round-robin scheduling across hp configs. If true, we evaluate one epoch/mini-epoch for each model in a cycle.",
                         category=config_cat)
     
     # experiment params

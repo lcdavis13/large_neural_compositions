@@ -770,208 +770,126 @@ class DummyGradScaler:
 
 
 
-def run_experiment(cp, dp, hp, data_folded, testdata, device, model_classes, epoch_mngr_constructors, loss_fn, score_fns, benchmark_losses, dense_columns, sparse_columns, plot_all_scores=True):
-    # things that are needed for reporting an exception, so they go before the try block
-    jobid_substring = int(cp.jobid.split('_')[0])
-    jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
-    filepath_out_expt = f'results/expt/{dp.y_dataset}{jobstring}_experiments.csv'
-    filepath_out_fold = f'results/folds/{dp.y_dataset}{jobstring}_folds.csv'
-    filepath_out_hyperparams = f'results/hp/{dp.y_dataset}{jobstring}_hyperparams.csv'
-    num_params = -1
+def override_dict(target_dict, override_dict):
+    for key in target_dict:
+        if key in override_dict:
+            target_dict[key] = override_dict[key]
 
-    # print(benchmark_losses)
 
-    # if True:
+def run_sequentially(hpbuilder,
+                   cp, dp,
+                   data_folded, testdata,
+                   device, model_classes,
+                   epoch_mngr_constructors,
+                   loss_fn, score_fns,
+                   benchmark_losses,
+                   dense_columns, sparse_columns,
+                   overrides={},
+                   plot_all_scores=True):
+    """
+    Backwards-compatible: iterate over hp configs, and for each one:
+    - setup_jobs
+    - run_job_epoch until all folds are done
+    - finish_jobs (logging + CV stats)
+
+    Uses TrainingJob / ExperimentBundle under the hood, so logic is shared
+    with the round-robin path.
+    """
     try:
-        if plot_all_scores:
-            exclude_keys = []
-            if not hp.plot_linear_benchmark:
-                exclude_keys.append('Linear Regression (Moore-Penrose) - Trn')
-                exclude_keys.append('Linear Regression (Moore-Penrose) - Val')
-            if not hp.plot_identity_benchmark:
-                exclude_keys.append('identity')
+        # loop through generic hyperparams
+        for hp in hpbuilder.parse_and_generate_combinations():
+            override_dict(hp, overrides)
 
-            for score_name in score_fns:
-                plotstream.plot_horizontal_lines(f"{score_name} on dataset {dp.y_dataset}", benchmark_losses[score_name], exclude_keys=exclude_keys)
-        else:
-            plotstream.plot_horizontal_lines(f"loss on dataset {dp.y_dataset}", benchmark_losses)
+            bundle = setup_jobs(
+                cp=cp,
+                dp=dp,
+                hp=hp,
+                data_folded=data_folded,
+                testdata=testdata,
+                device=device,
+                model_classes=model_classes,
+                epoch_mngr_constructors=epoch_mngr_constructors,
+                loss_fn=loss_fn,
+                score_fns=score_fns,
+                benchmark_losses=benchmark_losses,
+                dense_columns=dense_columns,
+                sparse_columns=sparse_columns,
+                plot_all_scores=plot_all_scores,
+                verbosity=2,
+            )
 
-        # computed hyperparams
-        hp.data_dim = dense_columns
-        hp.sparse_data_dim = sparse_columns
-        # hp.WD = hp.lr * hp.wd_factor
-        # hp.attend_dim = hp.attend_dim_per_head * hp.num_heads
-        hp.config_label = f"{hp.model_name}: {hp.config}"
-        hp.model_config = f"{hp.model_name} hp-{cp.config_configid}-{dp.data_configid}-{hp.configid}"
+            # old behavior: run this hp to completion before moving on
+            while not bundle.all_jobs_finished():
+                run_job_epoch(bundle)
 
-        # conditionally adjust epochs to compensate for subset size
-        if hp.subset_increases_epochs:
-            if hp.base_data_subset > 0:
-                hp.adjusted_epochs = int(hp.epochs // (dp.data_subset / hp.base_data_subset))
-            else:            
-                hp.adjusted_epochs = int(hp.epochs // dp.data_fraction)
-            print(f"Adjusted epochs from {hp.epochs} to {hp.adjusted_epochs} to compensate for subset size")
-        else:
-            hp.adjusted_epochs = hp.epochs
+            finish_jobs(bundle)
 
-        # assert hp.attend_dim % hp.num_heads == 0, "attend_dim must be divisible by num_heads"
-        
-        model_class = model_classes[hp.model_name]
-        epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
-        
-        if device.type == "cuda":
-            scaler = torch.cuda.amp.GradScaler()
-        else:
-            scaler = DummyGradScaler()
-
-        # load timesteps from file
-        print(f"Loading time steps from {hp.ode_timesteps_file}")
-        timesteps = pd.read_csv(hp.ode_timesteps_file, header=None).values.flatten()
-        # ode_timemax = 100.0
-        # ode_stepsize = ode_timemax / hp.ode_timesteps
-        # timesteps = torch.arange(0.0, ode_timemax + 0.1*ode_stepsize, ode_stepsize).to(device)
-        
-        # Test construction. If using parameter_target, this will find a model configuration with approximately correct parameter count and return the specific config hyperparameters.
-        print(f"\nModel construction test for: {hp.model_config}")
-        model, config_overrides = models.construct_model_parameterized(model_class, hp.parameter_target, hp.width_depth_tradeoff, hp)
-        if config_overrides:
-            print(f"Model configuration overrides: {config_overrides}")
-            hp.update(config_overrides) 
-            # NOTE: This mutates hp in the calling context. Currently that's fine because we only send hp to this function and then construct a new hp on each step through the loop, but if things change, that could be problematic.
-        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Number of parameters in model: {num_params}")
-        
-        # print hyperparams
-        for key, value in hp.items():
-            print(f"{key}: {value}")
-        
-        # Just for the sake of logging experiments before cross validation...
-        stream.stream_scores(filepath_out_hyperparams, True, True, True,
-                            "model parameters", num_params,
-                            "device", device,
-                            "solver", os.environ["SOLVER"],
-                            *unrolldict(cp),  # unroll the data params dictionary
-                            *unrolldict(dp),  # unroll the data params dictionary
-                            *unrolldict(hp),  # unroll the hyperparams dictionary
-                            prefix="\n=======================================================HYPERPARAMS=======================================================\n",
-                            suffix="\n=========================================================================================================================\n")
-        
-        
-        # train and test the model across multiple folds
-        train_model_lambda = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: train_model(
-            data_train=data_train, data_valid=data_valid, data_test=data_test, 
-            fold_num=fold_num, 
-            cp=cp, dp=dp, hp=hp, 
-            model_class=model_class, epoch_manager_constr=epoch_manager_constr, model_args=hp, 
-            scaler=scaler, device=device, 
-            timesteps=timesteps, loss_fn=loss_fn, score_fns=score_fns,
-            jobstring=jobstring, verbosity=verbosity
-        )
-
-        verbosity = 2
-        out_rowinfo_dict = {
-            "model_name": hp.model_name,
-            "model_config": hp.model_config,
-            "dataname": dp.y_dataset,
-            "data_subset": dp.data_subset,
-            "jobid": jobid_substring,
-        }
-        mean_dict, std_dict, fold_stat_dicts, other_stat_dicts = crossvalidate(fit_and_evaluate_fn=train_model_lambda, 
-                                                                               data_folded=data_folded, data_test=testdata, 
-                                                                               whichfold=dp.whichfold, score_fns=score_fns, 
-                                                                               filepath_out_fold=filepath_out_fold, 
-                                                                               filepath_out_expt=filepath_out_expt, 
-                                                                               out_rowinfo_dict=out_rowinfo_dict,
-                                                                               required_scores=["val_loss", "trn_loss", "val_score", "trn_score"],
-                                                                               verbosity=verbosity)
-        
-
-        
-        # # print all folds
-        # print(f'Val Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_loss_optims)]}\n')
-        # print(f'Val Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(val_score_optims)]}\n')
-        # print(f'Trn Loss optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_loss_optims)]}\n')
-        # print(f'Trn Score optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(trn_score_optims)]}\n')
-        # print(f'Final optimums: \n{[f'Fold {num}: {opt}\n' for num, opt in enumerate(final_optims)]}\n')
-        # print(f'Test scores: \n{[f'Fold {num}: {score}\n' for num, score in enumerate(test_scores)]}\n')
-        
-        # # calculate fold summaries
-        # avg_val_loss_optim = summarize(val_loss_optims)
-        # avg_val_score_optim = summarize(val_score_optims)
-        # avg_trn_loss_optim = summarize(trn_loss_optims)
-        # avg_trn_score_optim = summarize(trn_score_optims)
-        # avg_final_optim = summarize(final_optims)
-
-        # # mean of test_scores, which is a list of either numbers or Nones
-        # avg_test_score = np.nanmean([score for score in test_scores if score is not None])
-        
-        # # print summaries
-        # print(f'Avg Val Loss optimum: {avg_val_loss_optim}')
-        # print(f'Avg Val Score optimum: {avg_val_score_optim}')
-        # print(f'Avg Trn Loss optimum: {avg_trn_loss_optim}')
-        # print(f'Avg Trn Score optimum: {avg_trn_score_optim}')
-        # print(f'Avg Final optimum: {avg_final_optim}')
-        # print(f'Avg Test score: {avg_test_score}')
-        
-        # # find optimal mini-epoch
-        # # training_curves is a list of dictionaries, convert to a dataframe
-        # all_data = [entry for fold in training_curves for entry in fold]
-        # df = pd.DataFrame(all_data)
-        # df_clean = df.dropna(subset=['val_loss'])
-        # # Check if df_clean is not empty
-        # if not df_clean.empty:
-        #     average_metrics = df_clean.groupby('mini_epoch').mean(numeric_only=True).reset_index()
-        #     min_val_loss_epoch = average_metrics.loc[average_metrics['val_loss'].idxmin()]
-        #     best_epoch_metrics = min_val_loss_epoch.to_dict()
-        # else:
-        #     min_val_loss_epoch = None  # or handle the empty case as needed
-        #     best_epoch_metrics = {"epoch": -1, "mini_epoch": -1, "val_loss": -1.0, "trn_loss": -1.0, "val_score": -1.0, "trn_score": -1.0, "time": -1.0}
-        #     test_scores = [-1.0] * len(val_loss_optims)
-        
-        # # write folds to log file
-        # for i in range(len(val_loss_optims)):
-        #     stream.stream_scores(filepath_out_expt, True, True, True,.
-        #                         "optimal early stop val_loss", best_epoch_metrics["val_loss"],
-        #                         "optimal early stop epoch", best_epoch_metrics["epoch"],
-        #                         "optimal early stop mini-epoch", best_epoch_metrics["mini_epoch"],
-        #                         "optimal early stop time", best_epoch_metrics["time"],
-        #                         "optimal early stop trn_loss", best_epoch_metrics["trn_loss"],
-        #                         "test loss", test_scores[i],
-        #                         "model parameters", num_params,
-        #                         "fold", i if dp.whichfold < 0 else dp.whichfold,
-        #                         "device", device,
-        #                         "solver", os.environ["SOLVER"],
-        #                         *unrolldict(benchmark_losses),
-        #                         *unrolldict(cp),  # unroll the data params dictionary
-        #                         *unrolldict(dp),  # unroll the data params dictionary
-        #                         *unrolldict(hp),  # unroll the hyperparams dictionary
-        #                         *unrolloptims(val_loss_optims[i], val_score_optims[i], trn_loss_optims[i],
-        #                                     trn_score_optims[i], final_optims[i]),
-        #                         prefix="\n=======================================================EXPERIMENT========================================================\n",
-        #                         suffix="\n=========================================================================================================================\n")
-        
     except Exception as e:
-        # stream.stream_scores(filepath_out_expt, True, True, True,
-        #                 "mean_val_loss", -1,
-        #                 "mean_val_loss @ epoch", -1,
-        #                 "mean_val_loss @ mini-epoch", -1,
-        #                 "mean_val_loss @ time", -1,
-        #                 "mean_val_loss @ trn_loss", -1,
-        #                 "test loss", -1,
-        #                 "model parameters", num_params,
-        #                 "fold", -1,
-        #                 "device", device,
-        #                 "solver", os.environ["SOLVER"],
-        #                 *unrolldict(benchmark_losses),
-        #                 *unrolldict(cp),  # unroll the data params dictionary
-        #                 *unrolldict(dp),  # unroll the data params dictionary
-        #                 *unrolldict(hp),  # unroll the hyperparams dictionary
-        #                 *unrolloptims(val_loss_optims[0], val_score_optims[0], trn_loss_optims[0],
-        #                             trn_score_optims[0], final_optims[0]),
-        #                 prefix="\n=======================================================EXPERIMENT========================================================\n",
-        #                 suffix="\n=========================================================================================================================\n")
-        print(f"Model {hp.model_name} failed with error:\n{e}")
+        print(f"Experiment with cp={cp.config_configid}, dp={dp.data_configid} failed with error:\n{e}")
         traceback.print_exc()
+
+
+def run_roundrobin(hpbuilder,
+                   cp, dp,
+                   data_folded, testdata,
+                   device, model_classes,
+                   epoch_mngr_constructors,
+                   loss_fn, score_fns,
+                   benchmark_losses,
+                   dense_columns, sparse_columns,
+                   overrides={},
+                   plot_all_scores=True):
+    """
+    Round-robin scheduler across hp configurations.
+
+    For this (cp, dp) pair:
+      - build an ExperimentBundle for *each* hp
+      - repeatedly advance each unfinished bundle by one mini-epoch
+        (via run_job_epoch), interleaving them
+      - finish_jobs for each bundle at the end
+    """
+    try:
+        # 1) Build bundles for each hp config
+        bundles = []
+        for hp in hpbuilder.parse_and_generate_combinations():
+            override_dict(hp, overrides)
+
+            bundle = setup_jobs(
+                cp=cp,
+                dp=dp,
+                hp=hp,
+                data_folded=data_folded,
+                testdata=testdata,
+                device=device,
+                model_classes=model_classes,
+                epoch_mngr_constructors=epoch_mngr_constructors,
+                loss_fn=loss_fn,
+                score_fns=score_fns,
+                benchmark_losses=benchmark_losses,
+                dense_columns=dense_columns,
+                sparse_columns=sparse_columns,
+                plot_all_scores=plot_all_scores,
+                verbosity=2,
+            )
+            bundles.append(bundle)
+
+        # 2) Round-robin stepping: each outer loop advances each unfinished bundle once
+        any_unfinished = True
+        while any_unfinished:
+            any_unfinished = False
+            for bundle in bundles:
+                if not bundle.all_jobs_finished():
+                    run_job_epoch(bundle)
+                    any_unfinished = True
+
+        # 3) Finalize and log results for each hp
+        for bundle in bundles:
+            finish_jobs(bundle)
+
+    except Exception as e:
+        print(f"Round-robin experiment with cp={cp.config_configid}, dp={dp.data_configid} failed with error:\n{e}")
+        traceback.print_exc()
+
 
 
 def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot_all_scores=True):
@@ -1097,3 +1015,789 @@ def process_data_params(dp):
     # # assert(data.check_finite(y))
 
     return data_folded, testdata, dense_columns, sparse_columns
+
+
+
+
+
+# TODO: move this class to a separate file
+
+class TrainingJob:
+    """
+    One training job for a single (cp, dp, hp, fold) configuration.
+
+    Usage:
+        job = TrainingJob(...)
+        while not job.finished:
+            job.step()   # advances by one mini-epoch (same granularity as run_epochs' loop)
+
+    When finished, job.final_dict contains the same info that run_epochs used to return.
+    """
+
+    def __init__(self,
+                 *,
+                 cp,
+                 dp,
+                 hp,
+                 fold_num,
+                 model_class,
+                 epoch_manager_constr,
+                 scaler,
+                 device,
+                 timesteps,
+                 loss_fn,
+                 score_fns,
+                 jobstring,
+                 data_train,
+                 data_valid,
+                 data_test,
+                 plot_all_scores=True,
+                 outputs_per_epoch=10):
+        # Store references
+        self.cp = cp
+        self.dp = dp
+        self.hp = hp
+        self.fold_num = fold_num
+        self.model_class = model_class
+        self.epoch_manager_constr = epoch_manager_constr
+        self.scaler = scaler
+        self.device = device
+        self.timesteps = timesteps
+        self.loss_fn = loss_fn
+        self.score_fns = score_fns
+        self.jobstring = jobstring
+        self.data_train = data_train
+        self.data_valid = data_valid
+        self.data_test = data_test
+        self.plot_all_scores = plot_all_scores
+        self.outputs_per_epoch = outputs_per_epoch
+
+        self.model_name = hp.model_name
+        self.model_config = hp.model_config
+        self.dataname = dp.y_dataset
+
+        # === Replicate train_model's scheduler setup ===
+        epoch_size = hp.mini_epoch_size if hp.mini_epoch_size > 0 else dp.total_train_samples
+        stepsize = dp.minibatch_examples * hp.accumulated_minibatches
+        steps_per_epoch = ceildiv(epoch_size, stepsize)
+        final_epoch_minsamples = (hp.epochs % 1.0) * epoch_size
+        final_epoch_minibatches = ceildiv(final_epoch_minsamples, dp.minibatch_examples)
+        update_steps = (hp.epochs // 1.0) * steps_per_epoch + final_epoch_minibatches
+
+        # Keep update_steps for LR/WD schedulers
+        self.update_steps_target = update_steps
+
+        # LR_start_factor logic from train_model
+        LR_start_factor = 0.0  # warm up (as in your code)
+
+        # Build model & optimizer
+        self.model = construct(self.model_class, hp).to(self.device)
+        self.requires_condensed = getattr(self.model, 'USES_CONDENSED', False)
+
+        start_wd = hp.wd if hp.wd_during_warmup else 0.0
+        self.optimizer = torch.optim.AdamW(self.model.parameters(),
+                                           lr=hp.lr * LR_start_factor,
+                                           weight_decay=start_wd)
+
+        # Epoch manager
+        self.manager = epoch_manager_constr(hp)  # you were passing model_args=hp
+
+        # Schedulers
+        base_scheduler = lr_schedule.DirectToZero(
+            self.optimizer,
+            peak_lr=hp.lr,
+            update_steps=update_steps,
+            warmup_proportion=hp.warmup_proportion
+        )
+        self.scheduler = lr_schedule.LRScheduler(base_scheduler, initial_lr=hp.lr * LR_start_factor)
+
+        if hp.wd_during_warmup:
+            base_wd_scheduler = lr_schedule.WDConstant(self.optimizer, wd=hp.wd)
+        else:
+            base_wd_scheduler = lr_schedule.WDZeroWarmup(
+                self.optimizer,
+                wd=hp.wd,
+                update_steps=update_steps,
+                warmup_proportion=hp.warmup_proportion
+            )
+        self.wd_scheduler = lr_schedule.WDScheduler(base_wd_scheduler)
+
+        print(f"Fold {fold_num + 1}/{dp.kfolds}")
+
+        # === This part is copied from the *top* of run_epochs() ===
+        self.epoch = 0
+        self.train_examples_seen = 0
+        self.update_steps = 0
+
+        # empty scores template
+        self.empty_scores = {key: None for key in score_fns}
+        self.empty_scores["loss"] = None
+
+        self.filepath_out_epoch = f'results/epochs/{self.model_name}_{self.dataname}{jobstring}_epochs.csv'
+        self.filepath_out_test = f'results/tests/{self.dataname}{jobstring}_tests.csv'
+        self.filepath_out_incremental = f'results/incr/{self.model_config}_{self.dataname}{jobstring}_incremental.csv'
+
+        # Optimum trackers
+        self.val_opt = Optimum('val_score', 'min')
+        self.trn_opt = Optimum('trn_score', 'min')
+
+        self.old_lr = self.scheduler.get_last_lr()
+
+        # Initial validation benchmark
+        print("Evaluating initial validation score")
+        self.val_scores = validate_epoch(model=self.model,
+                                         requires_condensed=self.requires_condensed,
+                                         data=self.data_valid,
+                                         t=self.timesteps,
+                                         dp=self.dp,
+                                         cp=self.cp,
+                                         hp=self.hp,
+                                         loss_fn=self.loss_fn,
+                                         score_fns=self.score_fns,
+                                         device=self.device)
+        if self.hp.preeval_training_set:
+            print("Evaluating initial training score")
+            self.trn_scores = validate_epoch(model=self.model,
+                                             requires_condensed=self.requires_condensed,
+                                             data=self.data_train,
+                                             t=self.timesteps,
+                                             dp=self.dp,
+                                             cp=self.cp,
+                                             hp=self.hp,
+                                             loss_fn=self.loss_fn,
+                                             score_fns=self.score_fns,
+                                             device=self.device)
+        else:
+            self.trn_scores = self.empty_scores.copy()
+
+        self.val_and_trn_scores = flatten_dict({"val": self.val_scores, "trn": self.trn_scores})
+
+        if self.device.type == 'cuda':
+            self.gpu_memory_reserved = torch.cuda.memory_reserved(self.device)
+        else:
+            self.gpu_memory_reserved = 0
+        _, self.cpuRam = tracemalloc.get_traced_memory()
+
+        stream.stream_results(
+            self.filepath_out_epoch,
+            True, True, True,
+            "fold", self.fold_num,
+            "epoch", 0,
+            "mini-epoch", 0,
+            "training examples", 0,
+            "update steps", 0,
+            *unrolldict(self.val_and_trn_scores),
+            "Learning Rate", self.old_lr,
+            "Elapsed Time", 0.0,
+            "VRAM (GB)", self.gpu_memory_reserved / (1024 ** 3),
+            "Peak RAM (GB)", self.cpuRam / (1024 ** 3),
+            prefix="================PRE-VALIDATION===============\n",
+            suffix="\n=============================================\n"
+        )
+
+        if plot_all_scores:
+            for score_name in self.score_fns:
+                plotstream.plot_loss(
+                    f"{score_name} on dataset {self.dataname}",
+                    f"{self.model_config} fold {self.fold_num}",
+                    0,
+                    self.trn_scores[score_name],
+                    self.val_scores[score_name],
+                    add_point=False,
+                    y_log=True
+                )
+        else:
+            plotstream.plot_loss(
+                f"Loss on dataset {self.dataname}",
+                f"{self.model_config} fold {self.fold_num}",
+                0,
+                self.trn_scores["loss"],
+                self.val_scores["loss"],
+                add_point=False,
+                y_log=True
+            )
+
+        plotstream.plot(
+            f"stopmetric {self.dataname}",
+            "mini-epoch",
+            "metric",
+            [f"metric {self.model_config} fold {self.fold_num}",
+             f"threshold {self.model_config} fold {self.fold_num}"],
+            self.manager.epoch,
+            [self.manager.get_metric(), self.manager.get_threshold()],
+            add_point=False
+        )
+
+        self.train_examples_seen = 0
+        self.update_steps = 0
+        self.start_time = time.time()
+
+        # Initial dict for Optimum / baseline
+        initial_dict = {
+            "epoch": self.epoch,
+            "mini_epoch": self.manager.epoch,
+            "lr": self.old_lr,
+            "time": self.start_time,
+            "gpu_memory": self.gpu_memory_reserved,
+            "stop_metric": self.manager.get_metric(),
+            "stop_threshold": self.manager.get_threshold()
+        }
+        initial_dict.update(self.val_and_trn_scores)
+
+        self.model_path = f'results/models/{self.model_config}_{self.dataname}_fold{self.fold_num}_job{self.jobstring}.pt'
+        if self.hp.use_best_model:
+            self.val_opt.track_best(initial_dict, model=self.model, model_path=self.model_path)
+        else:
+            self.val_opt.track_best(initial_dict)
+        self.trn_opt.track_best(initial_dict)
+        self.manager.set_baseline(initial_dict)
+
+        # Iterator over training data
+        self.epoch_data_iterator = iter(self.data_train)
+
+        print("Starting training")
+
+        # State flags & containers
+        self.finished = False
+        self.test_scores = self.empty_scores.copy()
+        self.final_dict = None
+
+    def step(self):
+        """
+        Advance training by one mini-epoch (one iteration of the old run_epochs while-loop).
+        """
+        if self.finished:
+            return
+
+        # === This block is 1:1 with one iteration of run_epochs' while True ===
+        trn_loss, self.train_examples_seen, self.update_steps, self.epoch, self.epoch_data_iterator = train_mini_epoch(
+            model=self.model,
+            requires_condensed=self.requires_condensed,
+            epoch_data_iterator=self.epoch_data_iterator,
+            data_train=self.data_train,
+            dp=self.dp,
+            cp=self.cp,
+            hp=self.hp,
+            mini_epoch_size=self.hp.mini_epoch_size,
+            full_epoch_size=self.dp.total_train_samples,
+            minibatch_examples=self.dp.minibatch_examples,
+            accumulated_minibatches=self.hp.accumulated_minibatches,
+            noise=self.hp.noise,
+            interpolate=self.hp.interpolate,
+            interpolate_noise=self.hp.interpolate_noise,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            wd_scheduler=self.wd_scheduler,
+            scaler=self.scaler,
+            t=self.timesteps,
+            outputs_per_mini_epoch=self.outputs_per_epoch,
+            prev_examples=self.train_examples_seen,
+            prev_updates=self.update_steps,
+            fold=self.fold_num,
+            epoch_num=self.epoch,
+            mini_epoch_num=self.manager.epoch,
+            config_label=self.hp.config_label,
+            dataname=self.dataname,
+            loss_fn=self.loss_fn,
+            device=self.device,
+            filepath_out_incremental=self.filepath_out_incremental,
+            lr_plot=f"Learning Rate {self.dataname}",
+            verbosity=self.hp.verbosity - 1 if hasattr(self.hp, "verbosity") else 1,
+            number_converged_timesteps=self.hp.number_converged_timesteps
+        )
+
+        # Validation
+        val_scores = validate_epoch(
+            model=self.model,
+            requires_condensed=self.requires_condensed,
+            data=self.data_valid,
+            t=self.timesteps,
+            dp=self.dp,
+            cp=self.cp,
+            hp=self.hp,
+            loss_fn=self.loss_fn,
+            score_fns=self.score_fns,
+            device=self.device
+        )
+
+        # Train score: either full reeval or just trn_loss
+        if self.hp.reeval_training_set_epoch:
+            trn_scores = validate_epoch(
+                model=self.model,
+                requires_condensed=self.requires_condensed,
+                data=self.data_train,
+                t=self.timesteps,
+                dp=self.dp,
+                cp=self.cp,
+                hp=self.hp,
+                loss_fn=self.loss_fn,
+                score_fns=self.score_fns,
+                device=self.device
+            )
+        else:
+            trn_scores = self.empty_scores.copy()
+            trn_scores["loss"] = trn_loss
+
+        val_and_trn_scores = flatten_dict({"val": val_scores, "trn": trn_scores})
+
+        # LR/WD schedulers
+        self.scheduler.epoch_step()
+        self.wd_scheduler.epoch_step()
+
+        new_lr = self.scheduler.get_last_lr()
+        lr_changed = not np.isclose(new_lr, self.old_lr)
+        add_point = lr_changed and isinstance(self.scheduler.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
+
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+
+        if self.device.type == 'cuda':
+            self.gpu_memory_reserved = torch.cuda.memory_reserved(self.device)
+        else:
+            self.gpu_memory_reserved = 0
+        _, self.cpuRam = tracemalloc.get_traced_memory()
+
+        # Dict for Optimum / manager / logging
+        state_dict = {
+            "epoch": self.epoch,
+            "mini_epoch": self.manager.epoch,
+            "lr": self.old_lr,
+            "time": self.start_time,
+            "gpu_memory": self.gpu_memory_reserved,
+            "stop_metric": self.manager.get_metric(),
+            "stop_threshold": self.manager.get_threshold()
+        }
+        state_dict.update(val_and_trn_scores)
+
+        # Track optima
+        if self.hp.use_best_model:
+            self.val_opt.track_best(state_dict, model=self.model, model_path=self.model_path)
+        else:
+            self.val_opt.track_best(state_dict)
+        self.trn_opt.track_best(state_dict)
+
+        self.old_lr = new_lr
+
+        # Early stopping decision
+        should_stop = self.manager.should_stop(state_dict)
+
+        # Logging
+        stream.stream_results(
+            self.filepath_out_epoch,
+            True, True, True,
+            "fold", self.fold_num,
+            "epoch", self.epoch,
+            "mini-epoch", self.manager.epoch,
+            "training examples", self.train_examples_seen,
+            "update steps", self.update_steps,
+            *unrolldict(val_and_trn_scores),
+            "Learning Rate", self.old_lr,
+            "Elapsed Time", elapsed_time,
+            "VRAM (GB)", self.gpu_memory_reserved / (1024 ** 3),
+            "Peak RAM (GB)", self.cpuRam / (1024 ** 3),
+            prefix="==================VALIDATION=================\n",
+            suffix="\n=============================================\n"
+        )
+
+        # Plots
+        if self.plot_all_scores:
+            for score_name in self.score_fns:
+                plotstream.plot_loss(
+                    f"{score_name} on dataset {self.dataname}",
+                    f"{self.model_config} fold {self.fold_num}",
+                    self.manager.epoch if self.hp.mini_epoch_size <= 0 else self.update_steps,
+                    trn_scores[score_name],
+                    val_scores[score_name],
+                    add_point=add_point,
+                    xlabel='Epoch' if self.hp.mini_epoch_size <= 0 else 'Update Steps',
+                    ylabel=score_name,
+                    y_log=True
+                )
+        else:
+            plotstream.plot_loss(
+                f"Loss on dataset {self.dataname}",
+                f"{self.model_config} fold {self.fold_num}",
+                self.manager.epoch if self.hp.mini_epoch_size <= 0 else self.update_steps,
+                trn_scores["loss"],
+                val_scores["loss"],
+                add_point=add_point,
+                xlabel='Epoch' if self.hp.mini_epoch_size <= 0 else 'Update Steps',
+                ylabel='Bray-Curtis Loss',
+                y_log=True
+            )
+
+        plotstream.plot(
+            f"stopmetric {self.dataname}",
+            "mini-epoch",
+            "metric",
+            [f"metric {self.model_config} fold {self.fold_num}",
+             f"threshold {self.model_config} fold {self.fold_num}"],
+            self.manager.epoch,
+            [self.manager.get_metric(), self.manager.get_threshold()],
+            add_point=False
+        )
+
+        # If we should stop, run the “finalization” part from run_epochs and mark finished
+        if should_stop:
+            print("===Stopping training===")
+            test_scores = self.empty_scores.copy()
+
+            if self.data_test or self.hp.reeval_training_set_final:
+                if self.hp.use_best_model:
+                    self.model.load_state_dict(torch.load(self.model_path, weights_only=True))
+                if self.hp.export_cnode and self.model_name == "cNODE1":
+                    print("Exporting trained cNODE parameters")
+                    weight = self.model.func.fcc1.weight.detach().cpu().numpy()
+                    bias = self.model.func.fcc1.bias
+                    if bias is not None:
+                        bias = bias.detach().cpu().numpy()
+                    else:
+                        bias = np.zeros(weight.shape[0])
+                    f_w = f'results/models/{self.model_config}_{self.dataname}_fold{self.fold_num}_job{self.jobstring}_cnode_weights.csv'
+                    f_b = f'results/models/{self.model_config}_{self.dataname}_fold{self.fold_num}_job{self.jobstring}_cnode_bias.csv'
+                    print(f"Exporting cNODE weights to {f_w} and bias to {f_b}")
+                    pd.DataFrame(weight).to_csv(f_w, index=False, header=False)
+                    pd.DataFrame(bias).to_csv(f_b, index=False, header=False)
+
+                if self.hp.reeval_training_set_final:
+                    print("Re-evaluating final training score")
+                    trn_scores = validate_epoch(
+                        model=self.model,
+                        requires_condensed=self.requires_condensed,
+                        data=self.data_train,
+                        t=self.timesteps,
+                        dp=self.dp,
+                        cp=self.cp,
+                        hp=self.hp,
+                        loss_fn=self.loss_fn,
+                        score_fns=self.score_fns,
+                        device=self.device
+                    )
+                    print(f"Final Training Loss: {trn_scores['loss']}, Final Validation Loss: {val_scores['loss']}")
+
+                if self.data_test:
+                    print("Running test")
+                    test_scores = run_test(
+                        model=self.model,
+                        requires_condensed=self.requires_condensed,
+                        dp=self.dp,
+                        cp=self.cp,
+                        hp=self.hp,
+                        model_name=self.model_name,
+                        model_config=self.model_config,
+                        epoch=self.val_opt.epoch,
+                        mini_epoch=self.val_opt.mini_epoch,
+                        data_test=self.data_test,
+                        t=self.timesteps,
+                        fold=self.fold_num,
+                        loss_fn=self.loss_fn,
+                        score_fns=self.score_fns,
+                        device=self.device,
+                        filepath_out_test=self.filepath_out_test,
+                        gpu_memory_reserved=self.gpu_memory_reserved,
+                        cpuRam=self.cpuRam,
+                        elapsed_time=elapsed_time,
+                        train_score=trn_scores["loss"],
+                        val_score=val_scores["loss"]
+                    )
+
+            all_scores = flatten_dict({"val": val_scores, "trn": trn_scores, "test": test_scores})
+
+            final_dict = {
+                "epoch": self.epoch,
+                "mini_epoch": self.manager.epoch,
+                "lr": self.old_lr,
+                "time": self.start_time,
+                "gpu_memory": self.gpu_memory_reserved,
+                "stop_metric": self.manager.get_metric(),
+                "stop_threshold": self.manager.get_threshold(),
+            }
+            final_dict.update(all_scores)
+
+            self.test_scores = test_scores
+            self.final_dict = final_dict
+            self.finished = True
+
+    def get_fold_stats(self):
+        """
+        Reproduce the fold_stats_dict that train_model used to return:
+        unrolloptims_dict(val_opt, trn_opt) + final_dict.
+        """
+        if not self.finished or self.final_dict is None:
+            raise RuntimeError("TrainingJob.get_fold_stats() called before job finished")
+
+        fold_stats_dict = unrolloptims_dict(self.val_opt, self.trn_opt)
+        fold_stats_dict.update(self.final_dict)
+
+        # you were returning (fold_stats_dict, other_stats_dict)
+        other_stats_dict = {}
+        return fold_stats_dict, other_stats_dict
+
+
+
+from dataclasses import dataclass, field
+
+@dataclass
+class ExperimentBundle:
+    cp: object
+    dp: object
+    hp: object
+    jobs: list  # list[TrainingJob]
+
+    # logging / aggregation metadata
+    filepath_out_fold: str
+    filepath_out_expt: str
+    out_rowinfo_dict: dict
+    required_scores: list[str] = field(default_factory=list)
+    verbosity: int = 1
+
+    def all_jobs_finished(self) -> bool:
+        return all(job.finished for job in self.jobs)
+
+
+
+def setup_jobs(cp, dp, hp,
+               data_folded, testdata,
+               device, model_classes,
+               epoch_mngr_constructors,
+               loss_fn, score_fns,
+               benchmark_losses,
+               dense_columns, sparse_columns,
+               plot_all_scores=True,
+               verbosity=2) -> ExperimentBundle:
+    """
+    Prepare everything for one (cp, dp, hp) experiment:
+    - derived hp fields, model parameter count, hyperparam logging
+    - timesteps loading
+    - creation of one TrainingJob per fold
+
+    Returns an ExperimentBundle holding the jobs and metadata.
+    """
+
+    jobid_substring = int(cp.jobid.split('_')[0])
+    jobstring = f"_job{jobid_substring}" if jobid_substring >= 0 else ""
+
+    # 1) Plot benchmark horizontal lines (same as old run_experiment)
+    if plot_all_scores:
+        exclude_keys = []
+        if not hp.plot_linear_benchmark:
+            exclude_keys.append('Linear Regression (Moore-Penrose) - Trn')
+            exclude_keys.append('Linear Regression (Moore-Penrose) - Val')
+        if not hp.plot_identity_benchmark:
+            exclude_keys.append('identity')
+
+        for score_name in score_fns:
+            plotstream.plot_horizontal_lines(
+                f"{score_name} on dataset {dp.y_dataset}",
+                benchmark_losses[score_name],
+                exclude_keys=exclude_keys,
+            )
+    else:
+        plotstream.plot_horizontal_lines(
+            f"loss on dataset {dp.y_dataset}",
+            benchmark_losses,
+        )
+
+    # 2) Derived hp fields (exactly as before)
+    hp.data_dim = dense_columns
+    hp.sparse_data_dim = sparse_columns
+    hp.config_label = f"{hp.model_name}: {hp.config}"
+    hp.model_config = f"{hp.model_name} hp-{cp.config_configid}-{dp.data_configid}-{hp.configid}"
+
+    if hp.subset_increases_epochs:
+        if hp.base_data_subset > 0:
+            hp.adjusted_epochs = int(hp.epochs // (dp.data_subset / hp.base_data_subset))
+        else:
+            hp.adjusted_epochs = int(hp.epochs // dp.data_fraction)
+        print(f"Adjusted epochs from {hp.epochs} to {hp.adjusted_epochs} to compensate for subset size")
+    else:
+        hp.adjusted_epochs = hp.epochs
+
+    model_class = model_classes[hp.model_name]
+    epoch_manager_constr = epoch_mngr_constructors[hp.epoch_manager]
+
+    # 3) scaler
+    if device.type == "cuda":
+        scaler = torch.cuda.amp.GradScaler()
+    else:
+        scaler = DummyGradScaler()
+
+    # 4) load timesteps
+    print(f"Loading time steps from {hp.ode_timesteps_file}")
+    timesteps = pd.read_csv(hp.ode_timesteps_file, header=None).values.flatten()
+
+    # 5) parameterized model construction to get num_params + overrides
+    print(f"\nModel construction test for: {hp.model_config}")
+    model, config_overrides = models.construct_model_parameterized(
+        model_class, hp.parameter_target, hp.width_depth_tradeoff, hp
+    )
+    if config_overrides:
+        print(f"Model configuration overrides: {config_overrides}")
+        hp.update(config_overrides)
+
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Number of parameters in model: {num_params}")
+
+    # print hyperparams (unchanged)
+    for key, value in hp.items():
+        print(f"{key}: {value}")
+
+    # 6) log hyperparams
+    filepath_out_hyperparams = f'results/hp/{dp.y_dataset}{jobstring}_hyperparams.csv'
+    stream.stream_scores(
+        filepath_out_hyperparams,
+        True, True, True,
+        "model parameters", num_params,
+        "device", device,
+        "solver", os.environ["SOLVER"],
+        *unrolldict(cp),
+        *unrolldict(dp),
+        *unrolldict(hp),
+        prefix="\n=======================================================HYPERPARAMS=======================================================\n",
+        suffix="\n=========================================================================================================================\n"
+    )
+
+    # 7) Create one TrainingJob per fold
+    jobs = []
+    for fold_num, data_fold in enumerate(data_folded):
+        data_train = data_fold[0]
+        data_valid = data_fold[1]
+
+        job = TrainingJob(
+            cp=cp,
+            dp=dp,
+            hp=hp,
+            fold_num=fold_num,
+            model_class=model_class,
+            epoch_manager_constr=epoch_manager_constr,
+            scaler=scaler,
+            device=device,
+            timesteps=timesteps,
+            loss_fn=loss_fn,
+            score_fns=score_fns,
+            jobstring=jobstring,
+            data_train=data_train,
+            data_valid=data_valid,
+            data_test=testdata,
+            plot_all_scores=plot_all_scores,
+            outputs_per_epoch=10,
+        )
+        jobs.append(job)
+
+    # 8) Create bundle with fold/expt paths and rowinfo
+    filepath_out_expt = f'results/expt/{dp.y_dataset}{jobstring}_experiments.csv'
+    filepath_out_fold = f'results/folds/{dp.y_dataset}{jobstring}_folds.csv'
+
+    out_rowinfo_dict = {
+        "model_name": hp.model_name,
+        "model_config": hp.model_config,
+        "dataname": dp.y_dataset,
+        "data_subset": dp.data_subset,
+        "jobid": jobid_substring,
+    }
+
+    bundle = ExperimentBundle(
+        cp=cp,
+        dp=dp,
+        hp=hp,
+        jobs=jobs,
+        filepath_out_fold=filepath_out_fold,
+        filepath_out_expt=filepath_out_expt,
+        out_rowinfo_dict=out_rowinfo_dict,
+        required_scores=["val_loss", "trn_loss", "val_score", "trn_score"],
+        verbosity=verbosity,
+    )
+    return bundle
+
+
+
+def run_job_epoch(bundle: ExperimentBundle):
+    """
+    Advance this experiment by one mini-epoch in exactly one fold/job.
+
+    This is the unit that the external scheduler will call, either:
+    - repeatedly until bundle.all_jobs_finished() (old behavior), or
+    - interleaved across multiple bundles (round-robin across hp).
+    """
+    for job in bundle.jobs:
+        if not job.finished:
+            job.step()
+            break
+
+
+def finish_jobs(bundle: ExperimentBundle):
+    """
+    After all jobs in this ExperimentBundle are finished, compute cross-fold
+    statistics and write folds + experiment results, mirroring crossvalidate().
+    """
+    assert bundle.all_jobs_finished(), "finish_jobs called before all jobs are finished"
+
+    fold_stat_dicts = []
+    other_stat_dicts = []
+    fold_valid = []
+    valid_folds = 0
+
+    # 1) Collect per-fold stats from jobs
+    for fold_num, job in enumerate(bundle.jobs):
+        fold_stats_dict, other_stats_dict = job.get_fold_stats()
+        fold_stat_dicts.append(fold_stats_dict)
+        other_stat_dicts.append(other_stats_dict)
+
+        # fold validity check (same as crossvalidate)
+        valid = True
+        if bundle.required_scores is not None:
+            for k in bundle.required_scores:
+                v = fold_stats_dict.get(k)
+                if not isinstance(v, (int, float)):
+                    print(f"WARNING: Fold {fold_num}, key '{k}': invalid type ({type(v).__name__})")
+                    valid = False
+                elif not math.isfinite(v):
+                    print(f"WARNING: Fold {fold_num}, key '{k}': non-finite value ({v})")
+                    valid = False
+        fold_valid.append(valid)
+        if valid:
+            valid_folds += 1
+        else:
+            print(f"WARNING: Fold {fold_num} is invalid. Not including in mean and stddev.")
+
+        # Per-fold logging (same format as crossvalidate)
+        stream.stream_results(
+            bundle.filepath_out_fold,
+            bundle.verbosity - 1 > 0,
+            bundle.verbosity - 1 > 0,
+            bundle.verbosity - 1 > -1,
+            "fold_num", fold_num,
+            "fold_valid", valid,
+            *unrolldict(bundle.out_rowinfo_dict),
+            *unrolldict(fold_stats_dict),
+            *unrolldict(other_stats_dict),
+            prefix="\n========================================FOLD=========================================\n",
+            suffix="\n=====================================================================================\n",
+        )
+
+    # 2) Compute stats across folds (unchanged from crossvalidate)
+    mean_dict = {}
+    std_dict = {}
+    for key in fold_stat_dicts[0].keys():
+        valid_values = [d[key] for d, valid in zip(fold_stat_dicts, fold_valid) if valid]
+        valid_values = [v for v in valid_values if v is not None]
+        mean_key = f"mean_{key}"
+        std_key = f"std_{key}"
+        mean_dict[mean_key] = np.nanmean(valid_values)
+        std_dict[std_key] = np.nanstd(valid_values)
+
+    # 3) Experiment-level summary log (same style as crossvalidate)
+    stream.stream_results(
+        bundle.filepath_out_expt,
+        bundle.verbosity > 0,
+        bundle.verbosity > 0,
+        bundle.verbosity > -1,
+        *unrolldict(bundle.out_rowinfo_dict),
+        "valid_folds", valid_folds,
+        *unrolldict(mean_dict),
+        *unrolldict(std_dict),
+        prefix="\n=====================================EXPERIMENT======================================\n",
+        suffix="\n=====================================================================================\n",
+    )
+
+    return mean_dict, std_dict, fold_stat_dicts, other_stat_dicts
