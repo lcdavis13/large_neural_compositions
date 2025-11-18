@@ -117,7 +117,7 @@ def run_leakage_check(cli_args=None, hyperparam_csv=None, overrides={}):
             data_folded, testdata, dense_columns, sparse_columns = expt.process_data_params(dp)
 
             # benchmark_losses = expt.test_identity_model(dp, data_folded, device, loss_fn, score_fn, distr_error_fn)
-            expt.crossvalidate(
+            expt.fit_and_crossvalidate(
                 fit_and_evaluate_fn=check_leakage, 
                 data_folded=data_folded, data_test=testdata, 
                 score_fn=score_fn,

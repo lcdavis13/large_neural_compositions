@@ -25,7 +25,7 @@ def run_benchmark_experiments(cli_args=None, hyperparam_csv=None, overrides={}):
 
     hpbuilder, data_param_cat, config_param_cat = hyperparams.construct_hyperparam_composer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
-    loss_fn, score_fns = loss_function.get_loss_functions()
+    _, score_fns = loss_function.get_loss_functions()
 
     # loop through possible combinations of dconfig hyperparams, though if we aren't in CSV mode there should only be one configuration
     for cp in hpbuilder.parse_and_generate_combinations(category=config_param_cat): 
