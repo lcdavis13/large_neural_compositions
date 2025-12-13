@@ -6,6 +6,7 @@ from torch.utils.data import IterableDataset
 import pandas as pd
 import glob
 
+
 DK_BINARY = "binary"
 DK_IDS = "ids-sparse"
 DK_X = "x0"
@@ -13,10 +14,18 @@ DK_XSPARSE = "x0-sparse"
 DK_Y = "y"
 DK_YSPARSE = "y-sparse"
 
+
+import os
+import random
+import numpy as np
+import torch
+from torch.utils.data import IterableDataset
+
+
 class ChunkedCSVDataset(IterableDataset):
     def __init__(self, 
                  data_dir, 
-                 file_types,  # e.g., ['x', 'y']
+                 file_types,  # e.g., {'x': 'x0', 'x_sparse': 'x0-sparse', 'y': 'random-1-gLV_y'}
                  split='train', 
                  batch_size=32,
                  data_validation_samples=0,
@@ -31,48 +40,68 @@ class ChunkedCSVDataset(IterableDataset):
         self.data_validation_samples = data_validation_samples
         self.kfolds = kfolds
         self.current_fold = current_fold
+        self.dirichlet_alpha = 0.0 # No Dirichlet noise by default, can be set externally
+
+        # Which key gets Dirichlet-perturbed x values
+        # Adjust this if your x key is named differently.
+        self.dirichlet_x_keys = ["x0", "x0-sparse"]
+
+        # Use first key as reference for row counts
         self.ref_key = next(iter(self.file_types))
 
+        # Map key -> list of .npy chunk files
         self.chunk_files = self._organize_chunks()
+
+        # Per-chunk row counts (for ref_key) and per-key column counts
         self.chunk_sizes = self._get_chunk_sizes()
         self.total_size = sum(self.chunk_sizes)
 
-        self.dtypes = self._infer_dtypes()
+        # torch dtypes AND associated numpy dtypes (for casting)
+        self.dtypes, self.np_dtypes = self._infer_dtypes()
 
-        self.data_samples = data_train_samples + data_validation_samples if data_train_samples > 0 else self.total_size
+        # How many samples we actually want to use
+        self.data_samples = (
+            data_train_samples + data_validation_samples
+            if data_train_samples > 0 else self.total_size
+        )
 
         if self.data_samples > self.total_size:
-            # warning
-            print(f"Warning: Requested data_samples={self.data_samples} exceeds total dataset size of {self.total_size}.")
+            print(
+                f"Warning: Requested data_samples={self.data_samples} "
+                f"exceeds total dataset size of {self.total_size}."
+            )
             self.data_samples = self.total_size
 
-
+        # Build global index list, then split into train/val or folds
         self._split_indices()
         self._init_epoch()
 
-    def _infer_dtypes(self):
-        dtypes = {}
-        for key, files in self.chunk_files.items():
-            sample_df = pd.read_csv(files[0], header=None, nrows=10)  # Read a small sample
-            inferred_dtype = sample_df.dtypes[0]  # assume all columns have same dtype
-            if np.issubdtype(inferred_dtype, np.integer):
-                dtypes[key] = torch.int64
-            elif np.issubdtype(inferred_dtype, np.floating):
-                dtypes[key] = torch.float32
-            else:
-                raise ValueError(f"Unsupported data type {inferred_dtype} in file type {key}")
-        return dtypes
+    # -----------------------
+    # File discovery
+    # -----------------------
 
     def _is_chunk_file(self, filename, ftype):
+        """
+        Check if filename matches the pattern:
+        <prefix>_<integer>.npy
+
+        where prefix is derived from ftype (last path component).
+        """
         basename = os.path.basename(filename)
-        if not (basename.startswith(ftype.split('/')[-1] + '_') and basename.endswith('.csv')):
+        prefix = ftype.split('/')[-1]
+
+        if not (basename.startswith(prefix + '_') and basename.endswith('.npy')):
             return False
-        suffix = basename[len(ftype.split('/')[-1]) + 1 : -4]
+
+        # strip prefix_ and .npy and ensure numeric suffix
+        suffix = basename[len(prefix) + 1 : -4]
         return suffix.isdigit()
 
-    
-
     def _organize_chunks(self):
+        """
+        Walk data_dir and collect .npy files per key in file_types,
+        sorted by their numeric suffix.
+        """
         chunk_map = {}
         for key, ftype in self.file_types.items():
             files = []
@@ -80,28 +109,81 @@ class ChunkedCSVDataset(IterableDataset):
                 for f in filenames:
                     if self._is_chunk_file(f, ftype):
                         files.append(os.path.join(root, f))
-            files = sorted(files, key=lambda f: int(os.path.basename(f).split('_')[-1].split('.')[0]))
+
+            if not files:
+                raise ValueError(f"No .npy chunk files found for key '{key}' in {self.data_dir}")
+
+            files = sorted(
+                files,
+                key=lambda f: int(os.path.basename(f).split('_')[-1].split('.')[0])
+            )
             chunk_map[key] = files
+
+        # sanity check: all keys should have same number of chunks
+        num_chunks = {key: len(v) for key, v in chunk_map.items()}
+        if len(set(num_chunks.values())) != 1:
+            raise ValueError(f"Inconsistent number of chunks across keys: {num_chunks}")
+
         return chunk_map
 
+    # -----------------------
+    # Dtype inference
+    # -----------------------
 
-    def _get_chunk_sizes(self):
-        ref_type = self.file_types[self.ref_key]
-        sizes = []
-        self.column_counts = {}  # New: store column counts per key
+    def _infer_dtypes(self):
+        """
+        Infer torch and numpy dtypes from the first .npy chunk per key.
+        """
+        torch_dtypes = {}
+        np_dtypes = {}
 
         for key, files in self.chunk_files.items():
-            # Open only the first file per key to inspect
-            df = pd.read_csv(files[0], header=None, nrows=1)
-            self.column_counts[key] = df.shape[1]
+            first_npy = files[0]
+            arr = np.load(first_npy, mmap_mode='r')
+            inferred_dtype = arr.dtype
 
-        # Continue counting rows for the reference type
-        for file in self.chunk_files[self.ref_key]:
-            with open(file, 'r') as f:
-                sizes.append(sum(1 for _ in f))  # No header assumed
+            if np.issubdtype(inferred_dtype, np.integer):
+                torch_dtypes[key] = torch.int64
+                np_dtypes[key] = np.int64
+            elif np.issubdtype(inferred_dtype, np.floating):
+                # normalize to float32 on the torch side
+                torch_dtypes[key] = torch.float32
+                np_dtypes[key] = np.float32
+            else:
+                raise ValueError(
+                    f"Unsupported data type {inferred_dtype} in file type {key}"
+                )
+
+        return torch_dtypes, np_dtypes
+
+    # -----------------------
+    # Sizes & indices
+    # -----------------------
+
+    def _get_chunk_sizes(self):
+        """
+        - Determine column counts per key.
+        - Determine row count per chunk for the reference key.
+        All from .npy files.
+        """
+        self.column_counts = {}
+
+        # column counts per key (from first chunk)
+        for key, files in self.chunk_files.items():
+            first_npy = files[0]
+            arr = np.load(first_npy, mmap_mode='r')
+            if arr.ndim != 2:
+                raise ValueError(f"Expected 2D arrays in {first_npy}, got shape {arr.shape}")
+            self.column_counts[key] = arr.shape[1]
+
+        # row counts for reference key
+        ref_files = self.chunk_files[self.ref_key]
+        sizes = []
+        for file in ref_files:
+            arr = np.load(file, mmap_mode='r')
+            sizes.append(arr.shape[0])
 
         return sizes
-
 
     def _split_indices(self):
         # Collect indices only up to self.data_samples
@@ -129,7 +211,9 @@ class ChunkedCSVDataset(IterableDataset):
             # K-Fold cross-validation
             k = self.kfolds
             if k <= 1:
-                raise ValueError("kfolds must be greater than 1 if data_validation_samples <= 0")
+                raise ValueError(
+                    "kfolds must be greater than 1 if data_validation_samples <= 0"
+                )
 
             fold_size = len(all_indices) // k
             fold_start = self.current_fold * fold_size
@@ -145,30 +229,94 @@ class ChunkedCSVDataset(IterableDataset):
             else:
                 raise ValueError("split must be 'train' or 'val'")
 
-
     def _init_epoch(self):
-        self.chunk_to_indices = {chunk_idx: [] for chunk_idx in range(len(self.chunk_sizes))}
+        self.chunk_to_indices = {
+            chunk_idx: [] for chunk_idx in range(len(self.chunk_sizes))
+        }
         for chunk_idx, row_idx in self.indices:
             self.chunk_to_indices[chunk_idx].append(row_idx)
 
-        self.chunk_order = [c for c in self.chunk_to_indices if self.chunk_to_indices[c]]
-        if self.split == 'train': # TODO: There was some bug that caused a freeze when shuffling validation. We don't want to shuffle validation, but it's still concerning... EDIT: well the bug just resurfaced. Might have been a coincidence that it didn't occur right after making this change. But it's weird because it was the only time it ever got past 2.5 miniepochs, and it made it all the way to 70 something
-            # print(f"Shuffling {len(self.chunk_order)} chunks for training...")
-            random.shuffle(self.chunk_order)
+        self.chunk_order = [
+            c for c in self.chunk_to_indices if self.chunk_to_indices[c]
+        ]
 
+        if self.split == 'train':
+            random.shuffle(self.chunk_order)
             for c in self.chunk_to_indices:
                 random.shuffle(self.chunk_to_indices[c])
 
         self.current_chunk_idx = 0
         self.current_row_pointer = 0
+        # lazily set self.current_chunk_data / self.loaded_chunk_id in __next__
+
+    # -----------------------
+    # Chunk loading (.npy only)
+    # -----------------------
 
     def _load_chunk(self, chunk_idx):
+        """
+        Load one chunk for all keys as numpy arrays from .npy only.
+        """
         chunk_data = {}
         for key, files in self.chunk_files.items():
-            df = pd.read_csv(files[chunk_idx], header=None)
-            chunk_data[key] = df
+            npy_path = files[chunk_idx]
+            arr = np.load(npy_path)
+
+            # ensure dtype matches our desired numpy dtype (may cast from float64->float32)
+            desired_np_dtype = self.np_dtypes[key]
+            if arr.dtype != desired_np_dtype:
+                arr = arr.astype(desired_np_dtype, copy=False)
+
+            if arr.ndim != 2:
+                raise ValueError(f"Expected 2D array in {npy_path}, got shape {arr.shape}")
+
+            chunk_data[key] = arr
+
         return chunk_data
 
+    # -----------------------
+    # Dirichlet helper
+    # -----------------------
+
+    def _apply_dirichlet_to_x_batch(self, batch_np):
+        """
+        Apply symmetric Dirichlet(alpha) to each row of x on its active support.
+
+        - batch_np: (B, D) numpy array (float)
+        - Zeros stay zero.
+        - For each row, we take indices where x != 0, draw Dirichlet over those
+          positions, and write the resulting composition back into those slots.
+        """
+        # print("DEBUG: DIRICHLET VALUE ", self.dirichlet_alpha)
+        if self.dirichlet_alpha <= 0:
+            return batch_np
+
+        # Work on a copy so we never mutate the underlying chunk data
+        x = batch_np.copy()
+        mask = x != 0
+
+        B, D = x.shape
+        for i in range(B):
+            active_idx = np.nonzero(mask[i])[0]
+            k = active_idx.size
+            if k == 0:
+                continue  # all zeros, nothing to do
+
+            alpha_vec = np.full(k, self.dirichlet_alpha, dtype=np.float64)
+            # Dirichlet returns a vector summing to 1
+            sample = np.random.dirichlet(alpha_vec)
+            x[i, active_idx] = sample.astype(x.dtype, copy=False)
+
+        # # Debug: print L1 loss between original and perturbed, per sample
+        # diff = np.abs(x - batch_np)
+        # l1_losses = diff.sum(axis=1).mean()
+        # print("DEBUG: DIRICHLET L1 losses per sample: ", l1_losses)
+
+        return x
+
+    # -----------------------
+    # IterableDataset API
+    # -----------------------
 
     def __iter__(self):
         self._init_epoch()
@@ -185,38 +333,49 @@ class ChunkedCSVDataset(IterableDataset):
                 self.current_row_pointer = 0
                 continue
 
-            # Load chunk if not already loaded
+            # Load chunk if not already loaded / changed
             if not hasattr(self, 'current_chunk_data') or self.loaded_chunk_id != chunk_id:
                 self.current_chunk_data = self._load_chunk(chunk_id)
                 self.loaded_chunk_id = chunk_id
 
-            # Prepare batch data dictionary (list of rows for each key)
-            batch_rows = {key: [] for key in self.current_chunk_data}
+            # Determine batch slice once
+            start = self.current_row_pointer
+            end = min(start + self.batch_size, len(sample_indices))
+            batch_indices = sample_indices[start:end]
+            self.current_row_pointer = end
 
-            ref_key = next(iter(batch_rows))
-            while len(batch_rows[ref_key]) < self.batch_size and self.current_row_pointer < len(sample_indices):
-                row_idx = sample_indices[self.current_row_pointer]
-                for key, df in self.current_chunk_data.items():
-                    batch_rows[key].append(df.iloc[row_idx])
-                self.current_row_pointer += 1
-
-            # In rare case of empty batch (e.g., last chunk), skip
-            if not any(batch_rows.values()):
+            if len(batch_indices) == 0:
                 continue
 
-            # Convert lists of rows to batched tensors
-            batch_tensors = {
-                key: torch.tensor(
-                    np.array([row.values for row in rows]), 
-                    dtype=self.dtypes[key]
-                )
-                for key, rows in batch_rows.items()
-            }
+            batch_indices = np.asarray(batch_indices, dtype=np.int64)
+
+            # Vectorized indexing for all keys
+            batch_tensors = {}
+            for key, arr in self.current_chunk_data.items():
+                batch_np = arr[batch_indices]     # shape (B, D)
+
+                # Apply Dirichlet to x only (float)
+                if (
+                    self.dirichlet_alpha > 0
+                    and key in self.dirichlet_x_keys
+                    and np.issubdtype(batch_np.dtype, np.floating)
+                ):
+                    batch_np = self._apply_dirichlet_to_x_batch(batch_np)
+
+                tensor = torch.from_numpy(batch_np)
+                if tensor.dtype != self.dtypes[key]:
+                    tensor = tensor.to(self.dtypes[key])
+
+                batch_tensors[key] = tensor
 
             return batch_tensors
 
         raise StopIteration
-    
+
+    # -----------------------
+    # Optional: streaming by chunk
+    # -----------------------
+
     def stream_by_chunk(self, device=None):
         for chunk_idx in self.chunk_order:
             row_indices = self.chunk_to_indices[chunk_idx]
@@ -224,56 +383,90 @@ class ChunkedCSVDataset(IterableDataset):
                 continue  # skip empty chunks
 
             chunk_data = self._load_chunk(chunk_idx)
+            row_indices = np.asarray(row_indices, dtype=np.int64)
             filtered_chunk = {}
 
-            for key, df in chunk_data.items():
-                rows = df.iloc[row_indices].values
-                tensor = torch.tensor(rows, dtype=self.dtypes[key])
-                if device:
+            for key, arr in chunk_data.items():
+                rows = arr[row_indices]
+
+                if (
+                    self.dirichlet_alpha > 0
+                    and key in self.dirichlet_x_keys
+                    and np.issubdtype(rows.dtype, np.floating)
+                ):
+                    rows = self._apply_dirichlet_to_x_batch(rows)
+
+                tensor = torch.from_numpy(rows)
+                if tensor.dtype != self.dtypes[key]:
+                    tensor = tensor.to(self.dtypes[key])
+                if device is not None:
                     tensor = tensor.to(device)
                 filtered_chunk[key] = tensor
 
             yield filtered_chunk
 
 
-
-
-
-
 class TestCSVDataset(IterableDataset):
+    """
+    Test dataset that now loads .npy test files only.
+
+    Expects one .npy per key, matching pattern:
+        <data_dir>/**/<ftype>_test.npy
+
+    All arrays must have the same number of rows.
+    """
     def __init__(self, data_dir, file_types, batch_size=64):
         super().__init__()
         self.data_dir = data_dir
         self.file_types = file_types
         self.batch_size = batch_size
 
-        self.dataframes = {}
+        # Load all test arrays
+        self.arrays = {}
         for key, ftype in file_types.items():
-            pattern = os.path.join(self.data_dir, "**", f"{ftype}_test.csv")
+            pattern = os.path.join(self.data_dir, "**", f"{ftype}_test.npy")
             matches = glob.glob(pattern, recursive=True)
             if not matches:
-                raise FileNotFoundError(f"Test file for '{key}' with pattern '{pattern}' not found.")
+                raise FileNotFoundError(
+                    f"Test file for '{key}' with pattern '{pattern}' not found."
+                )
             if len(matches) > 1:
-                raise ValueError(f"Multiple test files found for '{key}': {matches}")
-            self.dataframes[key] = pd.read_csv(matches[0], header=None)
+                raise ValueError(
+                    f"Multiple test files found for '{key}': {matches}"
+                )
 
+            npy_path = matches[0]
+            arr = np.load(npy_path)
 
-        lengths = [len(df) for df in self.dataframes.values()]
+            if arr.ndim == 1:
+                # promote 1D to (N, 1) if needed
+                arr = arr[:, None]
+            elif arr.ndim != 2:
+                raise ValueError(
+                    f"Expected 1D or 2D array in '{npy_path}', got shape {arr.shape}"
+                )
+
+            self.arrays[key] = arr
+
+        # Check row counts match across all keys
+        lengths = [arr.shape[0] for arr in self.arrays.values()]
         if not all(length == lengths[0] for length in lengths):
-            raise ValueError("Test CSV files have mismatched number of rows!")
+            raise ValueError("Test .npy files have mismatched number of rows!")
         self.total_samples = lengths[0]
 
+        # Infer torch dtypes from numpy dtypes
         self.dtypes = {}
-        for key, df in self.dataframes.items():
-            inferred_dtype = df.dtypes[0]
+        for key, arr in self.arrays.items():
+            inferred_dtype = arr.dtype
             if np.issubdtype(inferred_dtype, np.integer):
                 self.dtypes[key] = torch.int64
             elif np.issubdtype(inferred_dtype, np.floating):
+                # normalize to float32 on the torch side
                 self.dtypes[key] = torch.float32
             else:
-                raise ValueError(f"Unsupported data type {inferred_dtype} in test file type {key}")
-
-
+                raise ValueError(
+                    f"Unsupported data type {inferred_dtype} in test file type '{key}'"
+                )
 
     def __iter__(self):
         self.current_idx = 0
@@ -284,26 +477,30 @@ class TestCSVDataset(IterableDataset):
             raise StopIteration
 
         end_idx = min(self.current_idx + self.batch_size, self.total_samples)
+        idx_slice = slice(self.current_idx, end_idx)
 
-        batch = {
-            key: torch.tensor(
-                df.iloc[self.current_idx:end_idx].values,
-                dtype=self.dtypes[key]
-            )
-            for key, df in self.dataframes.items()
-        }
+        batch = {}
+        for key, arr in self.arrays.items():
+            batch_np = arr[idx_slice]  # (B, D)
+            tensor = torch.from_numpy(batch_np)
+            if tensor.dtype != self.dtypes[key]:
+                tensor = tensor.to(self.dtypes[key])
+            batch[key] = tensor
 
         self.current_idx = end_idx
         return batch
-    
+
     def stream_by_chunk(self, device=None):
         """Yields the full test data as one dictionary-style chunk."""
-        chunk = {
-            key: torch.tensor(df.values, dtype=self.dtypes[key])
-            for key, df in self.dataframes.items()
-        }
-        if device:
-            chunk = {k: v.to(device) for k, v in chunk.items()}
+        chunk = {}
+        for key, arr in self.arrays.items():
+            tensor = torch.from_numpy(arr)
+            if tensor.dtype != self.dtypes[key]:
+                tensor = tensor.to(self.dtypes[key])
+            if device is not None:
+                tensor = tensor.to(device)
+            chunk[key] = tensor
+
         yield chunk
 
 
@@ -361,7 +558,7 @@ def load_folded_datasets(
             split='train',
             data_train_samples=data_train_samples,
             data_validation_samples=data_validation_samples,
-            batch_size=batch_size
+            batch_size=batch_size,
         )
 
         val_set = ChunkedCSVDataset(
@@ -370,7 +567,7 @@ def load_folded_datasets(
             split='val',
             data_train_samples=data_train_samples,
             data_validation_samples=data_validation_samples,
-            batch_size=batch_size
+            batch_size=batch_size, 
         )
 
         folds.append((train_set, val_set))
@@ -390,7 +587,7 @@ def load_folded_datasets(
             data_train_samples=data_train_samples,
             kfolds=kfolds,
             current_fold=0,
-            batch_size=batch_size
+            batch_size=batch_size,
         )
 
         first_val_set = ChunkedCSVDataset(
@@ -400,7 +597,7 @@ def load_folded_datasets(
             data_train_samples=data_train_samples,
             kfolds=kfolds,
             current_fold=0,
-            batch_size=batch_size
+            batch_size=batch_size,
         )
 
 
@@ -417,7 +614,7 @@ def load_folded_datasets(
                 data_train_samples=data_train_samples,
                 kfolds=kfolds,
                 current_fold=fold_idx,
-                batch_size=batch_size
+                batch_size=batch_size,
             )
 
             val_set = ChunkedCSVDataset(
@@ -427,7 +624,7 @@ def load_folded_datasets(
                 data_train_samples=data_train_samples,
                 kfolds=kfolds,
                 current_fold=fold_idx,
-                batch_size=batch_size
+                batch_size=batch_size,
             )
 
             folds.append((train_set, val_set))

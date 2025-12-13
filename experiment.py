@@ -17,6 +17,7 @@ from optimum import Optimum, unrolloptims_dict
 import stream_plot as plotstream
 import time
 from dotsy import dicy
+import traceback
 
 
 import tracemalloc
@@ -28,14 +29,15 @@ def eval_model(model, x, timesteps, ids, max_dropped_timesteps=0):
     requires_timesteps = getattr(model, 'USES_ODEINT', False)
     requires_condensed = getattr(model, 'USES_CONDENSED', False)
 
-    # randomly drop some final timesteps if allowed
-    if max_dropped_timesteps > 0 and requires_timesteps:
-        #randomly select number between one and max_dropped_timesteps
-        early_stop = np.random.randint(1, max_dropped_timesteps+1)
-        timesteps = timesteps[:-early_stop]
+    # # randomly drop some final timesteps if allowed
+    # if max_dropped_timesteps > 0 and requires_timesteps:
+    #     #randomly select number between one and max_dropped_timesteps
+    #     early_stop = np.random.randint(1, max_dropped_timesteps+1)
+    #     timesteps = timesteps[:-early_stop]
 
     if requires_timesteps and timesteps is not None:
         # Call models that require the timesteps argument and return dydt in addition to y
+        # print("DEBUG: eval_model calling model with timesteps ", len(timesteps), " steps.")
         if requires_condensed:
             y_steps = model(timesteps, x, ids)
         else:
@@ -86,13 +88,16 @@ def validate_epoch(model, requires_condensed, data, t, dp, cp, hp, loss_fn, scor
 
         with torch.no_grad():
             y_pred = eval_model(model, x, t, ids)
-            y_pred_final = y_pred[-1]
+            ode_fn = None
+            if model.USES_ODEINT:
+                ode_fn = model.replicator_model.ode_func # Dangerous because I haven't constrained the architecture for where to find this, but they should all have the same structure
+        
             # y_pred, dydt = eval_model(model, x, t, ids)[-1]
             # y_pred = y_pred.to(device)
             # dydt = dydt.to(device) if dydt is not None else None
 
             for name, fn in score_fns.items():
-                val = fn(y_pred, y, hp=hp_extended)
+                val = fn(y_pred, y, ode_fn=ode_fn, hp=hp_extended, t=t)
                 totals[name] += val.item() * mb_examples
 
     avg_scores = {name: total / total_samples for name, total in totals.items()}
@@ -121,7 +126,7 @@ def run_test(model, requires_condensed, dp, cp, hp, model_name, model_config, ep
 def is_finite_number(number):
     return torch.all(torch.isfinite(number)) and not torch.any(torch.isnan(number))
 
-def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, dp, cp, hp, mini_epoch_size, full_epoch_size, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, optimizer, scheduler, wd_scheduler, scaler, t,
+def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train, dp, cp, hp, mini_epoch_size, full_epoch_size, minibatch_examples, accumulated_minibatches, noise, optimizer, scheduler, wd_scheduler, scaler, t,
                 outputs_per_mini_epoch, 
                 prev_examples, prev_updates, fold, epoch_num, mini_epoch_num, config_label, dataname, loss_fn, device,
                 filepath_out_incremental, number_converged_timesteps, lr_plot=None, loss_plot=None, lr_loss_plot=None, verbosity=1, supervised_timesteps=1):
@@ -161,7 +166,7 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
             batch = next(epoch_data_iterator)
 
         model_requires_timesteps = getattr(model, 'USES_ODEINT', False)
-        supervise_steps = interpolate and model_requires_timesteps
+        supervise_steps = False
         
         # z, ids, current_index, epoch_num = data.get_batch(data_train, t, minibatch_examples, current_index, total_samples, epoch_num, noise_level_x=noise, noise_level_y=noise, interpolate_noise=interpolate_noise, requires_timesteps=supervise_steps, loop=loop_batches, shuffle=True)
         x, y, x_sparse, y_sparse, ids = batch[chunked_dataset.DK_X], batch[chunked_dataset.DK_Y], batch[chunked_dataset.DK_XSPARSE], batch[chunked_dataset.DK_YSPARSE], batch[chunked_dataset.DK_IDS]
@@ -182,7 +187,6 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
         mb_examples = x.size(0)
         
         y_pred = eval_model(model, x, t, ids, max_dropped_timesteps=0)
-        y_pred_final = y_pred[-1] 
         # y_pred, dydt = eval_model(model, x, t, ids, max_dropped_timesteps=0)[-1] 
         #number_converged_timesteps)
         # if supervise_steps:
@@ -199,7 +203,10 @@ def train_mini_epoch(model, requires_condensed, epoch_data_iterator, data_train,
         # dydt = dydt.to(device) if dydt is not None else None
 
         # print(y_pred.shape, y_true.shape)
-        loss = loss_fn(y_pred, y_true, hp=hp_extended)
+        ode_fn = None
+        if model.USES_ODEINT:
+            ode_fn = model.replicator_model.ode_func # Dangerous because I haven't constrained the architecture for where to find this, but they should all have the same structure
+        loss = loss_fn(y_pred, y_true, ode_fn=ode_fn, hp=hp_extended, t=t)
         actual_loss = loss.item() * mb_examples
         loss = loss / accumulated_minibatches  # Normalize the loss by the number of accumulated minibatches, since loss function can't normalize by this
         
@@ -278,7 +285,7 @@ def weighted_average_parameters(model, paramsA, paramsB, alpha=0.5):
     model.load_state_dict(averaged_params)
 
 
-def run_epochs(model, requires_condensed, optimizer, scheduler, wd_scheduler, manager, dp, cp, hp, minibatch_examples, accumulated_minibatches, noise, interpolate, interpolate_noise, scaler, data_train, data_valid, data_test, t,
+def run_epochs(model, requires_condensed, optimizer, scheduler, wd_scheduler, manager, dp, cp, hp, minibatch_examples, accumulated_minibatches, noise, scaler, data_train, data_valid, data_test, t,
                model_name, model_config, config_label, dataname, fold, loss_fn, score_fns, device, mini_epoch_size, full_epoch_size, outputs_per_epoch,
                preeval_training_set, reeval_train_epoch, reeval_train_final, jobstring, use_best_model, export_cnode, number_converged_timesteps, verbosity=1, plot_all_scores=True):
     # assert(data.check_leakage([(x_train, y_train, x_valid, y_valid)]))
@@ -375,7 +382,7 @@ def run_epochs(model, requires_condensed, optimizer, scheduler, wd_scheduler, ma
     while True:
         trn_loss, train_examples_seen, update_steps, epoch, epoch_data_iterator = train_mini_epoch(
             model=model, requires_condensed=requires_condensed, epoch_data_iterator=epoch_data_iterator, data_train=data_train, dp=dp, cp=cp, hp=hp, mini_epoch_size=mini_epoch_size, full_epoch_size=full_epoch_size, minibatch_examples=minibatch_examples,
-            accumulated_minibatches=accumulated_minibatches, noise=noise, interpolate=interpolate, interpolate_noise=interpolate_noise, optimizer=optimizer, scheduler=scheduler, wd_scheduler=wd_scheduler, scaler=scaler, t=t,
+            accumulated_minibatches=accumulated_minibatches, noise=noise, optimizer=optimizer, scheduler=scheduler, wd_scheduler=wd_scheduler, scaler=scaler, t=t,
             outputs_per_mini_epoch=outputs_per_epoch, prev_examples=train_examples_seen, prev_updates=update_steps, 
             fold=fold, epoch_num=epoch, mini_epoch_num=manager.epoch, config_label=config_label, dataname=dataname, loss_fn=loss_fn, device=device, filepath_out_incremental=filepath_out_incremental,
             lr_plot=f"Learning Rate {dataname}", verbosity=verbosity - 1, number_converged_timesteps=number_converged_timesteps
@@ -580,7 +587,7 @@ def train_model(data_train, data_valid, data_test,
     
     final_dict, val_opt, trn_opt = run_epochs(
         model=model, requires_condensed=requires_condensed, optimizer=optimizer, scheduler=scheduler, wd_scheduler=wd_scheduler, manager=manager, dp=dp, cp=cp, hp=hp, minibatch_examples=dp.minibatch_examples, accumulated_minibatches=hp.accumulated_minibatches,
-        noise=hp.noise, interpolate=hp.interpolate, interpolate_noise=hp.interpolate_noise, scaler=scaler, data_train=data_train, data_valid=data_valid, data_test=data_test,
+        noise=hp.noise, scaler=scaler, data_train=data_train, data_valid=data_valid, data_test=data_test,
         t=timesteps, model_name=hp.model_name, model_config=hp.model_config, config_label=hp.config_label, dataname=dp.y_dataset, fold=fold_num, loss_fn=loss_fn, score_fns=score_fns,
         device=device, mini_epoch_size=hp.mini_epoch_size, full_epoch_size=dp.total_train_samples, 
         outputs_per_epoch=10, verbosity=verbosity - 1,
@@ -912,8 +919,31 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot
                     },
                     required_scores=["train_dataloss", "train_mse"]
                 )
+        
+                # models_fitted.fit_and_evaluate_linear_regression(data_train, data_valid, data_test, fold_num, score_fn, data_dim, verbosity=0)
+        lambda_clr_linreg = lambda data_train, data_valid, data_test, fold_num, score_fns, verbosity: models_fitted.fit_and_evaluate_clr_lr_masked_softmax(
+                    data_train, data_valid, data_test, fold_num, score_fns, dense_columns, hp, verbosity=verbosity)
+        mean_clr_lin_scores, _, _, _ = fit_and_crossvalidate(
+                    fit_and_evaluate_fn=lambda_clr_linreg, 
+                    data_folded=data_folded, data_test=testdata, 
+                    score_fns=score_fns,
+                    whichfold=dp.whichfold, 
+                    filepath_out_expt="results/benchmarks/expt.csv",
+                    filepath_out_fold="results/benchmarks/fold.csv",
+                    out_rowinfo_dict={
+                        "model_name": "CLRLinearRegression-MP", 
+                        "dataset": dp.y_dataset, 
+                        "data_subset": dp.data_subset,
+                        "data_validation_samples": dp.data_validation_samples,
+                        "kfolds": dp.kfolds, 
+                        "config_configid": cp.config_configid, 
+                        "dataset_configid": dp.data_configid
+                    },
+                    required_scores=["train_dataloss", "train_mse"]
+                )
         print(mean_id_scores)
         print(mean_lin_scores)
+        print(mean_clr_lin_scores)
         if plot_all_scores:
             for score_name in score_fns:
                 # plotstream.plot_loss(f"{score_name} on dataset {dataname}", f"{model_config} fold {fold}", 0, trn_scores[score_name], val_scores[score_name], add_point=False, y_log=True)
@@ -921,12 +951,16 @@ def run_benchmarks(cp, dp, data_folded, testdata, score_fns, dense_columns, plot
                         "identity": mean_id_scores[f"mean_valid_{score_name}"],
                         "Linear Regression (Moore-Penrose) - Trn": mean_lin_scores[f"mean_train_{score_name}"],
                         "Linear Regression (Moore-Penrose) - Val": mean_lin_scores[f"mean_valid_{score_name}"],
+                        "CLR-LinReg-Softmax - Trn": mean_clr_lin_scores[f"mean_train_{score_name}"],
+                        "CLR-LinReg-Softmax - Val": mean_clr_lin_scores[f"mean_valid_{score_name}"],
                 }
         else:
             benchmark_losses = {
                         "identity": mean_id_scores["mean_valid_loss"],
                         "Linear Regression (Moore-Penrose) - Trn": mean_lin_scores["mean_train_loss"],
                         "Linear Regression (Moore-Penrose) - Val": mean_lin_scores["mean_valid_loss"],
+                        "CLR-LinReg-Softmax - Trn": mean_clr_lin_scores["mean_train_loss"],
+                        "CLR-LinReg-Softmax - Val": mean_clr_lin_scores["mean_valid_loss"],
                         # "LinReg_test": mean_lin_scores["mean_test_loss"],
                     }
         
@@ -1230,6 +1264,8 @@ class TrainingJob:
 
         # State flags & containers
         self.finished = False
+        self.failed = False 
+        self.error = None 
         self.test_scores = self.empty_scores.copy()
         self.final_dict = None
 
@@ -1254,8 +1290,6 @@ class TrainingJob:
             minibatch_examples=self.dp.minibatch_examples,
             accumulated_minibatches=self.hp.accumulated_minibatches,
             noise=self.hp.noise,
-            interpolate=self.hp.interpolate,
-            interpolate_noise=self.hp.interpolate_noise,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
             wd_scheduler=self.wd_scheduler,
@@ -1276,6 +1310,9 @@ class TrainingJob:
             verbosity=self.hp.verbosity - 1 if hasattr(self.hp, "verbosity") else 1,
             number_converged_timesteps=self.hp.number_converged_timesteps
         )
+
+        # Set Dirichlet noise on training data loader (can't do this earlier because data_folded is shared across jobs)
+        self.data_train.dirichlet_alpha = self.hp.dirichlet_alpha
 
         # Validation
         val_scores = validate_epoch(
@@ -1491,18 +1528,38 @@ class TrainingJob:
 
     def get_fold_stats(self):
         """
-        Reproduce the fold_stats_dict that train_model used to return:
-        unrolloptims_dict(val_opt, trn_opt) + final_dict.
+        Return (fold_stats_dict, other_stats_dict) for this fold.
+
+        If the job failed, we still return a dict with keys present but values
+        mostly None or NaN, so the crossvalidation logic can mark this fold
+        invalid and ignore it in the mean/std.
         """
-        if not self.finished or self.final_dict is None:
+        if not self.finished:
             raise RuntimeError("TrainingJob.get_fold_stats() called before job finished")
 
-        fold_stats_dict = unrolloptims_dict(self.val_opt, self.trn_opt)
-        fold_stats_dict.update(self.final_dict)
+        # Normal successful case
+        if not getattr(self, "failed", False):
+            fold_stats_dict = unrolloptims_dict(self.val_opt, self.trn_opt)
+            fold_stats_dict.update(self.final_dict)
+            other_stats_dict = {}
+            return fold_stats_dict, other_stats_dict
 
-        # you were returning (fold_stats_dict, other_stats_dict)
-        other_stats_dict = {}
+        # Failed case: construct a mostly-empty dict
+        # Start from whatever we have in final_dict, then ensure required keys exist.
+        fold_stats_dict = dict(self.final_dict or {})
+
+        # Optional: include some basic info about the error
+        fold_stats_dict.setdefault("error", str(self.error) if self.error else "Training failed")
+
+        # other_stats_dict can carry richer debug info if you like
+        other_stats_dict = {
+            "failed": True,
+            "error": str(self.error) if self.error else "Training failed",
+        }
+
         return fold_stats_dict, other_stats_dict
+
+
 
 
 
@@ -1596,6 +1653,7 @@ def setup_jobs(cp, dp, hp,
     # 4) load timesteps
     print(f"Loading time steps from {hp.ode_timesteps_file}")
     timesteps = pd.read_csv(hp.ode_timesteps_file, header=None).values.flatten()
+    print(f"Loaded {len(timesteps)} time steps. First 3: {timesteps[:3]}, Last 3: {timesteps[-3:]}")
 
     # 5) parameterized model construction to get num_params + overrides
     print(f"\nModel construction test for: {hp.model_config}")
@@ -1681,19 +1739,49 @@ def setup_jobs(cp, dp, hp,
     return bundle
 
 
-
 def run_job_epoch(bundle: ExperimentBundle):
     """
     Advance this experiment by one mini-epoch in exactly one fold/job.
-
-    This is the unit that the external scheduler will call, either:
-    - repeatedly until bundle.all_jobs_finished() (old behavior), or
-    - interleaved across multiple bundles (round-robin across hp).
+    If a TrainingJob.step raises an exception, mark that job as failed
+    and do NOT raise out of here, so other jobs can continue.
     """
     for job in bundle.jobs:
-        if not job.finished:
+        # Skip anything that is already finished or previously failed
+        if job.finished or getattr(job, "failed", False):
+            continue
+
+        try:
             job.step()
-            break
+        except Exception as e:
+            # Mark the job as failed so we never try to step it again
+            job.failed = True
+            job.finished = True
+            job.error = e
+
+            print(
+                f"ERROR: TrainingJob for model_config={job.model_config}, "
+                f"dataname={job.dataname}, fold={job.fold_num} failed with exception:\n{e}"
+            )
+            traceback.print_exc()
+
+            # Create a minimal final_dict so that get_fold_stats() and
+            # crossvalidation reporting don't crash later.
+            # All metrics will end up as None, so this fold will be marked invalid.
+            if job.final_dict is None:
+                job.final_dict = {
+                    "epoch": None,
+                    "mini_epoch": None,
+                    "lr": None,
+                    "time": None,
+                    "gpu_memory": None,
+                    "stop_metric": None,
+                    "stop_threshold": None,
+                    # you can add more keys or leave them to be filled in get_fold_stats
+                }
+
+        # Only touch one job per call
+        break
+
 
 
 def finish_jobs(bundle: ExperimentBundle):

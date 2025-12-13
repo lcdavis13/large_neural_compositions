@@ -14,6 +14,7 @@ def get_model_classes():
         'cNODE1_vanilla': models_replicator.cNODE1, 
         'cNODE1_hofbauer': models_replicator.cNODE1_Hofbauer, 
         'cNODE1_hofbauerALR': models_replicator.cNODE1_HofbauerALR,
+        'ecNODE1': models_replicator.ecNODE1, 
         # 'cNODE1+1-proper': models_cNODE.glv1NODE,
         # 'cNODE1+1-colFrozen': models_cNODE.glv2NODE,
         # 'cNODE1+1-noFreeze': models_cNODE.envNODE,
@@ -46,6 +47,7 @@ def get_model_classes():
         'BasicMLP': models_core.BasicMLP,
         'SimplexBasicMLP': models_simplex.SimplexBasicMLP,
         'ReplicatorBasicMLP': models_replicator.ReplicatorBasicMLP,
+        'EnergyReplicatorBasicMLP': models_replicator.ReplicatorBasicEnergyMLP,
 
         # Residual MLPs
         'ResidualMLP': models_core.ResidualMLP,

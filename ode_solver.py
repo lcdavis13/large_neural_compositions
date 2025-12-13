@@ -42,7 +42,7 @@ def odeint(func, y0, t, adjoint_params=()):
         # convert t to tensor
         if not isinstance(t, torch.Tensor):
             t = torch.tensor(t, dtype=y0.dtype, device=y0.device)
-        return torchdiffeq_odeint(func, y0, t) #, adjoint_params=adjoint_params)
+        return torchdiffeq_odeint(func, y0, t, method="implicit_adams") #, adjoint_params=adjoint_params)
     
     elif solver == "torchode" or solver == "torchode_memsafe":
         # Attempting to solve a bug where after hundreds of epochs it decides to not track gradients anymore

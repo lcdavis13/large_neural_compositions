@@ -40,5 +40,8 @@ if args.plot_mode != "window":
 if args.plots_wait_for_exit:
     overrides["plots_wait_for_exit"] = args.plots_wait_for_exit
 
+# DEBUG: REMOVE THIS
+args.csv_file = "batch/1kLow/HPResults_cNODE1.csv"
+
 if __name__ == "__main__":
     run.run_experiments(hyperparam_csv=args.csv_file, overrides=overrides) 

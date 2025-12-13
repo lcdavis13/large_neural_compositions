@@ -111,6 +111,7 @@ class cNODE1(nn.Module):
             data_dim=data_dim,
             learnable_skip=False,
             use_hofbauer=False,
+            energy_based=False,
         )
 
     def forward(self, t, x):
@@ -118,7 +119,7 @@ class cNODE1(nn.Module):
 
 
 class cNODE1_Hofbauer(nn.Module):
-    def __init__(self, data_dim):
+    def __init__(self, data_dim):                                                                         
         super().__init__()
         self.USES_ODEINT = True
 
@@ -132,6 +133,7 @@ class cNODE1_Hofbauer(nn.Module):
             data_dim=data_dim,
             learnable_skip=False,
             use_hofbauer=True,
+            energy_based=False,
         )
 
     def forward(self, t, x):
@@ -152,6 +154,68 @@ class cNODE1_HofbauerALR(nn.Module):
             fitness_fn_ctor=ctor,
             data_dim=data_dim,
             learnable_skip=False,
+            energy_based=False,
+        )
+
+    def forward(self, t, x):
+        return self.replicator_model(t, x)
+
+
+class cNODE1_HofbauerALR_LNorm(nn.Module):
+    def __init__(self, data_dim):
+        super().__init__()
+        self.USES_ODEINT = True
+
+        def ctor(dim):
+            fcc = nn.Linear(dim, dim, bias=False)
+            nn.init.zeros_(fcc.weight)
+            return fcc
+
+        self.replicator_model = repwrap.ALR_Replicator_CustomFitness(
+            fitness_fn_ctor=ctor,
+            data_dim=data_dim,
+            learnable_skip=False,
+            energy_based=False,
+        )
+
+    def forward(self, t, x):
+        return self.replicator_model(t, x)
+
+
+class ecNODE1(nn.Module):  # energy-based cNODE: constrained to output a global "fitness potential field" instead of a full fitness vector
+    def __init__(self, data_dim):
+        super().__init__()
+        self.USES_ODEINT = True
+
+        self.replicator_model = repwrap.Replicator_CustomFitness(
+            fitness_fn_ctor=nn.Identity, 
+            data_dim=data_dim,
+            learnable_skip=False,
+            use_hofbauer=False,
+            energy_based=True,
+        )
+
+    def forward(self, t, x):
+        return self.replicator_model(t, x)
+
+
+class ReplicatorBasicEnergyMLP(nn.Module):  # energy-based cNODE: constrained to output a global "fitness potential field" instead of a full fitness vector
+    def __init__(self, data_dim, hidden_dim, dropout, learnable_skip):
+        super().__init__()
+        self.USES_ODEINT = True
+
+        ctor = lambda dim: core.BasicMLP(
+            data_dim=dim,
+            hidden_dim=hidden_dim,
+            dropout=dropout
+        )
+
+        self.replicator_model = repwrap.Replicator_CustomFitness(
+            fitness_fn_ctor=ctor, 
+            data_dim=data_dim,
+            learnable_skip=learnable_skip,
+            use_hofbauer=False,
+            energy_based=True,
         )
 
     def forward(self, t, x):

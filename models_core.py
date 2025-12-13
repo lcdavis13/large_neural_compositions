@@ -58,11 +58,11 @@ class SLP(nn.Module):
 
 class BasicMLP(nn.Module):
     """A simple two-hidden-layer MLP with GELU activation and dropout."""
-    def __init__(self, data_dim: int, hidden_dim: int, dropout: float):
+    def __init__(self, data_dim: int, hidden_dim: int, dropout: float, energy_based: bool = False):
         super().__init__()
         self.fc1 = lin.LinearKH(data_dim, hidden_dim)
         self.fc2 = lin.LinearKH(hidden_dim, hidden_dim)
-        self.fc3 = lin.LinearKH(hidden_dim, data_dim)
+        self.fc3 = lin.LinearKH(hidden_dim, data_dim if not energy_based else 1)
         self.gelu = nn.GELU()
         self.dropout = nn.Dropout(dropout)
 

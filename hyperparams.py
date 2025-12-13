@@ -5,12 +5,14 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     hpbuilder = HyperparameterComposer(hyperparam_csv=hyperparam_csv, cli_args=cli_args)
 
     hpbuilder.add_param("model_name", 
-                        'SimplexLinear',
+                        # 'SimplexLinear',
                         # "junk", 
-                        'cNODE1', 
+                        # 'cNODE1', 
                         'cNODE1_vanilla', 
                         # 'cNODE1_hofbauer', 
                         # 'cNODE1_hofbauerALR', 
+                        # 'ecNODE1', 
+                        # 'EnergyReplicatorBasicMLP',
                         # 'cNODE1+1-proper',
                         # 'cNODE1+1-colFrozen',
                         # 'cNODE1+1-noFreeze',
@@ -52,18 +54,18 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     #                     # "5000@7_48_richness170",
     #                     category=datacat, help="dataset to use")
     hpbuilder.add_param("x_dataset", 
-                        "32",
+                        "256",
                         category=datacat, help="dataset to use for inputs")
     hpbuilder.add_param("y_dataset", 
                         # "random-2-old",
                         # "random-0-gLV",
-                        "random-1-gLV",
+                        "random-0-gLV",
                         category=datacat, help="dataset to use for supervising outputs")
     hpbuilder.add_param("data_subset", 
                         # 3000, 
-                        320,  # 1k HP search
+                        # 800, 1k HP search
                         # 80000,  # 100k HP search
-                        # 1000,
+                        1000,
                         # 3162,
                         # 10000, 
                         # 100, 
@@ -116,12 +118,12 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     
     # experiment params
     hpbuilder.add_param("epochs",
-                        2,
+                        # 2,
                         # 25, 
                         # 50,
                         # 80,
                         # 200, 
-                        # 182,  # 1k HP search
+                        182,  # 1k HP search
                         # 7,  # 100k HP search
                         # 300, # extra epochs for randomized timesteps
                         # 2.0,  
@@ -179,8 +181,8 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     
     # Optimizer params
     hpbuilder.add_param("lr", 
-                        0.1, 
-                        # 0.003993407529,  # 1k HP search
+                        # 0.1, 
+                        0.003993407529,  # 1k HP search
                         # 0.001223800286,  # 100k HP search
                         # 0.00003993407529,  # randomized timesteps
                         # 0.1, 
@@ -203,9 +205,9 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
     # hpbuilder.add_param("reptile_lr", 1.0, 
     #                     help="reptile outer-loop learning rate")
     hpbuilder.add_param("wd", 
-                        0.0, 
+                        # 0.0, 
                         # 0.0822,  
-                        # 2.034777678,  # 1k HP search
+                        2.034777678,  # 1k HP search
                         # 0.8170174678,  # 100k HP search
                         help="weight decay")
     hpbuilder.add_flag("wd_during_warmup", False,
@@ -240,22 +242,90 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         # 8,
                         # 9,
                         help="log10 scale factor for the derivative loss")
-    hpbuilder.add_param("interpolate", False, 
-                        help="whether or not to use supervised interpolation steps")
-    hpbuilder.add_param("interpolate_noise", False,
-                        help="whether or not to use independent noise for interpolation")
     hpbuilder.add_param("aitchison_eps", 
                         1e-8,
                         category=datacat,
                         help="safety constant for Aitchison distance computations to avoid log(0)")
-    hpbuilder.add_param("lyapunov_lambda", 
+    hpbuilder.add_param("stationarity_lambda", 
+                        # 0.0,
+                        3.0,
+                        #  category=datacat,
+                         help="weight of stationarity loss term for ODE-based models")
+    hpbuilder.add_param("stationarity_ramp_start", 
+                        0.85, 
+                        # category=datacat,
+                        help="time (as fraction of total ODE evolution time) to start ramping up stationarity loss from 0 to 1")
+    hpbuilder.add_param("deceleration_lambda", 
+                        # 0.0,
+                        100.0,
+                        #  category=datacat,
+                         help="weight of deceleration loss term for ODE-based models")
+    hpbuilder.add_param("deceleration_ramp_start", 
+                        0.66,
+                        # category=datacat,
+                        help="time (as fraction of total ODE evolution time) to start ramping up deceleration loss from 0 to 1")
+    # hpbuilder.add_param("lyapunov_lambda", 
+    #                     0.0,
+    #                     category=datacat,
+    #                     help="weight of Lyapunov stability loss term for ODE-based models")
+    # hpbuilder.add_param("lyapunov_ramp_start_k", 
+    #                     0.9, 
+    #                     category=datacat,
+    #                     help="time (as fraction of total ODE evaluations) to start ramping up Lyapunov loss")
+    hpbuilder.add_param("kinetic_energy_lambda",
                         0.1,
-                        category=datacat,
-                        help="weight of Lyapunov stability loss term for ODE-based models")
-    hpbuilder.add_param("lyapunov_ramp_start_k", 
-                        0.9, 
-                        category=datacat,
-                        help="time (as fraction of total ODE evaluations) to start ramping up Lyapunov loss")
+                        #  category=datacat,
+                         help="weight of kinetic energy loss term for ODE-based models")
+    hpbuilder.add_param("jacobian_lambda",
+                        0.1,
+                        #  category=datacat,
+                         help="weight of Jacobian norm loss term for ODE-based models")
+    hpbuilder.add_param("dirichlet_alpha", 
+                        # 1.0,
+                        -1.0, 
+                        # category=datacat,
+                        help="alpha parameter for Dirichlet noise added to training compositions. If <= 0, no noise is added.")
+    hpbuilder.add_param("earlystop_fraction",
+                        0.5,
+                        help="time (as fraction of total ODE evaluation indices) to use for early stopping loss computation",
+                        category=datacat)
+    
+    hpbuilder.add_param("stabilityloss_weight", 
+                        0.0, 
+                        1.0,
+                        help="multiplier on ALL stability penalties for ODE-based models")
+
+    
+    hpbuilder.add_param("contractionloss_weight", 
+                        100.0, 
+                        help="scalar multiplier for contraction penalty")
+    hpbuilder.add_param("contractionloss_margin", 
+                        0.0, 
+                        help="target negativity margin for Rayleigh quotient")
+    hpbuilder.add_param("contractionloss_eps", 
+                        1e-8, 
+                        help="epsilon for direction normalization")
+    hpbuilder.add_param("contractionloss_support_eps", 
+                        0.0, 
+                        help="threshold for determining attractor support")
+    hpbuilder.add_param("contractionloss_min_dir_norm", 
+                        1e-6, 
+                        help="minimum norm for tangent direction used in contraction")
+    hpbuilder.add_param("contractionloss_y_eps", 
+                        1e-12, 
+                        help="epsilon for dividing by y in Aitchison metric application")
+    
+    hpbuilder.add_param("stationarityloss_weight", 
+                        1.0, 
+                        help="multiplier on Aitchison stationarity penalty")
+    hpbuilder.add_param("stationarityloss_support_eps", 
+                        0.0, 
+                        help="support threshold for defining face at attractor")
+    hpbuilder.add_param("stationarityloss_y_eps", 
+                        1e-12, 
+                        help="epsilon for dividing by y in Aitchison metric")
+
+
 
 
     # Model architecture params
@@ -263,7 +333,7 @@ def construct_hyperparam_composer(hyperparam_csv=None, cli_args=None):
                         True, 
                         # False, 
                         help="Whether or not to use the Hofbauer lift to allow the replicator dynamics to reproduce gLV dynamics. For complex fitness models, this is just an inductive bias; but for linear fitness models, this is fully necessary to reproduce gLV dynamics.")
-    hpbuilder.add_param("hidden_dim", 1024, 
+    hpbuilder.add_param("hidden_dim", 64, 
                         help="hidden dimension for MLP-based models")
     hpbuilder.add_param("embed_dim", 12,
                         help="dimension of embedding for embedding-based models")
